@@ -15,6 +15,7 @@ PORTFOLIO_YAML = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'p
 TMPL_DIR       = os.path.join(os.path.dirname(__file__), '..', 'src', 'tailor', 'templates')
 BASE_RESUME    = os.path.join(os.path.dirname(__file__), '..', 'assets', 'Resume-2025.docx')
 
+# synonym normalizer (truthful)
 SYNONYMS = {
     "js": "javascript", "reactjs": "react", "ts": "typescript",
     "ml": "machine learning", "cv": "computer vision", "postgres": "postgresql",
@@ -23,6 +24,8 @@ SYNONYMS = {
 }
 def normalize_keyword(w: str):
     return SYNONYMS.get((w or "").strip().lower(), (w or "").strip().lower())
+
+SOFT_CANON = {"communication","collaboration","teamwork","leadership","ownership","mentorship"}
 
 def allowed_vocab(profile: dict, portfolio: dict):
     skills = {s.lower() for s in profile.get("skills", [])}
@@ -36,13 +39,21 @@ def allowed_vocab(profile: dict, portfolio: dict):
     expanded = {normalize_keyword(w) for w in (skills | tags | titles)}
     return expanded | skills | tags | titles
 
-def harvest_job_keywords(job: dict, allowed: set, top_n=14):
-    jtoks = {normalize_keyword(w) for w in (tokens(job.get("title","")) | tokens(job.get("description","")))}
-    counts = {}
+def harvest_job_keywords(job: dict, allowed: set):
+    # collect JD tokens
+    jtoks_raw = tokens(job.get("title","")) | tokens(job.get("description",""))
+    jtoks = [normalize_keyword(w) for w in jtoks_raw]
+    # frequency, limited to what you claim
+    freq = {}
     for w in jtoks:
         if w in allowed:
-            counts[w] = counts.get(w, 0) + 1
-    return [w for (w, _) in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:top_n]]
+            freq[w] = freq.get(w, 0) + 1
+    # split hard vs soft
+    hard, soft = [], []
+    for w, _ in sorted(freq.items(), key=lambda kv: (-kv[1], kv[0])):
+        (soft if w in SOFT_CANON else hard).append(w)
+    # cap lengths a bit
+    return hard[:16], soft[:6]
 
 def portfolio_targets(portfolio: dict):
     targets = {"Side Projects": [], "Projects": [], "Work Experience": []}
@@ -91,36 +102,38 @@ def main(top: int):
         safe_company = safe_name(j.get('company',''))
         safe_title   = safe_name(j.get('title',''))
 
-        ats_keywords = harvest_job_keywords(j, vocab, top_n=14)
+        # JD keywords (split)
+        hard_kws, soft_kws = harvest_job_keywords(j, vocab)
 
-        # Cover (append ATS section)
+        # COVER (append ATS alignment)
         cover_fname = f"{safe_company}_{safe_title}.md"[:150]
         cover = render_cover(j, PROFILE_YAML, TMPL_DIR)
-        if ats_keywords:
-            cover += "\n\n---\n**Keyword Alignment (ATS-safe):** " + ", ".join(ats_keywords) + "\n"
+        if hard_kws or soft_kws:
+            cover += "\n\n---\n**Keyword Alignment (ATS-safe):** "
+            cover += ", ".join(hard_kws + soft_kws) + "\n"
         with open(os.path.join(OUTBOX_MD, cover_fname), 'w') as f: f.write(cover)
         j['cover_file'] = cover_fname
         j['cover_path'] = f"outbox/{cover_fname}"
         drafted_covers += 1
 
-        # Resume — open base, tailor in place, capture change log
+        # RESUME — open base, tailor in place with uniqueness + context
         out_docx = os.path.join(RESUMES_MD, f"{safe_company}_{safe_title}.docx"[:150])
         doc = Document(BASE_RESUME)
         targets = portfolio_targets(portfolio)
-        changes = tailor_docx_in_place(doc, targets, ats_keywords, prioritized_skills=ats_keywords)
+        changes = tailor_docx_in_place(doc, targets, jd_keywords_hard=hard_kws, jd_keywords_soft=soft_kws)
         doc.save(out_docx)
         j['resume_docx'] = f"resumes/{os.path.basename(out_docx)}"
 
-        # Write changes.json for this job
-        exchg = {
+        # write explain payload
+        explain = {
             "company": j.get("company",""),
             "title": j.get("title",""),
-            "ats_keywords": ats_keywords,
+            "ats_keywords": hard_kws + soft_kws,
             "changes": changes
         }
         changes_fname = f"{safe_company}_{safe_title}.json"[:150]
         with open(os.path.join(CHANGES_DIR, changes_fname), 'w') as f:
-            json.dump(exchg, f, indent=2)
+            json.dump(explain, f, indent=2)
         j['changes_path'] = f"changes/{changes_fname}"
 
         drafted_resumes += 1
