@@ -2,6 +2,62 @@ from bs4 import BeautifulSoup
 from .utils import get_text
 from src.core.schema import Job
 
+import json
+from datetime import datetime, timezone
+
+def _parse_date_iso(s: str) -> str | None:
+    """Return ISO date (YYYY-MM-DD) if s looks like a date; else None."""
+    if not s:
+        return None
+    # Try full ISO with time first
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return dt.date().isoformat()
+    except Exception:
+        pass
+    # Try simple YYYY-MM-DD
+    try:
+        return datetime.strptime(s[:10], "%Y-%m-%d").date().isoformat()
+    except Exception:
+        return None
+
+def _extract_posted_from_jsonld(jsoup: BeautifulSoup) -> str | None:
+    # Look for JSON-LD blocks and pull "datePosted"
+    for tag in jsoup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(tag.get_text(strip=True))
+        except Exception:
+            continue
+        # Could be an array or an object
+        items = data if isinstance(data, list) else [data]
+        for it in items:
+            if isinstance(it, dict) and "datePosted" in it:
+                iso = _parse_date_iso(str(it.get("datePosted", "")))
+                if iso:
+                    return iso
+    return None
+
+def _extract_posted_from_dom(jsoup: BeautifulSoup) -> str | None:
+    # Common DOM hints for dates on GH pages
+    # <time datetime="2025-02-01"> ... or similar meta
+    time_el = jsoup.find("time")
+    if time_el and time_el.get("datetime"):
+        iso = _parse_date_iso(time_el.get("datetime"))
+        if iso:
+            return iso
+    # meta/itemprop
+    meta = jsoup.find(attrs={"itemprop": "datePosted"})
+    if meta:
+        if meta.get("content"):
+            iso = _parse_date_iso(meta.get("content"))
+            if iso:
+                return iso
+        text = meta.get_text(strip=True)
+        iso = _parse_date_iso(text)
+        if iso:
+            return iso
+    return None
+
 def crawl_greenhouse(slug: str):
     board_url = f"https://boards.greenhouse.io/{slug}"
     html = get_text(board_url)
@@ -51,6 +107,8 @@ def crawl_greenhouse(slug: str):
         # Pull details from job page
         page_location = ''
         desc_text = ''
+        posted_iso = None
+
         job_html = get_text(full)
         if job_html:
             jsoup = BeautifulSoup(job_html, 'html.parser')
@@ -68,15 +126,23 @@ def crawl_greenhouse(slug: str):
                 tag.decompose()
             desc_text = ' '.join(main.get_text(separator=' ', strip=True).split())
 
+            # Posted date (best-effort)
+            posted_iso = _extract_posted_from_jsonld(jsoup) or _extract_posted_from_dom(jsoup)
+
         location = page_location or list_location
 
-        jobs.append(Job(
+        j = Job(
             title=title,
             company=slug,
             location=location,
             url=full,
             description=desc_text,
             source='greenhouse'
-        ).to_dict())
+        ).to_dict()
+
+        if posted_iso:
+            j['posted_at'] = posted_iso
+
+        jobs.append(j)
 
     return jobs
