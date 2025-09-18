@@ -1,5 +1,4 @@
 import os, sys, json, re, yaml
-# --- Make src/ importable when run from Actions or locally ---
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.tailor.render import render_cover
@@ -10,24 +9,17 @@ DATA_JSONL = os.path.join(os.path.dirname(__file__), '..', 'data', 'scores.jsonl
 DATA_JSON  = os.path.join(os.path.dirname(__file__), '..', 'docs', 'data', 'scores.json')
 OUTBOX_MD  = os.path.join(os.path.dirname(__file__), '..', 'docs', 'outbox')
 RESUMES_MD = os.path.join(os.path.dirname(__file__), '..', 'docs', 'resumes')
+CHANGES_DIR= os.path.join(os.path.dirname(__file__), '..', 'docs', 'changes')
 PROFILE_YAML   = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'profile.yaml')
 PORTFOLIO_YAML = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'portfolio.yaml')
 TMPL_DIR       = os.path.join(os.path.dirname(__file__), '..', 'src', 'tailor', 'templates')
 BASE_RESUME    = os.path.join(os.path.dirname(__file__), '..', 'assets', 'Resume-2025.docx')
 
 SYNONYMS = {
-    "js": "javascript",
-    "reactjs": "react",
-    "ts": "typescript",
-    "ml": "machine learning",
-    "cv": "computer vision",
-    "postgres": "postgresql",
-    "gh actions": "github actions",
-    "gh-actions": "github actions",
-    "ci/cd": "ci",
-    "llm": "machine learning",
-    "rest": "rest api",
-    "etl": "data pipeline",
+    "js": "javascript", "reactjs": "react", "ts": "typescript",
+    "ml": "machine learning", "cv": "computer vision", "postgres": "postgresql",
+    "gh actions": "github actions", "gh-actions": "github actions", "ci/cd": "ci",
+    "llm": "machine learning", "rest": "rest api", "etl": "data pipeline",
 }
 def normalize_keyword(w: str):
     return SYNONYMS.get((w or "").strip().lower(), (w or "").strip().lower())
@@ -53,7 +45,6 @@ def harvest_job_keywords(job: dict, allowed: set, top_n=14):
     return [w for (w, _) in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:top_n]]
 
 def portfolio_targets(portfolio: dict):
-    # texts we consider relevant, grouped by section label used in your resume
     targets = {"Side Projects": [], "Projects": [], "Work Experience": []}
     for p in portfolio.get("projects", []) or []:
         for b in p.get("bullets", []) or []:
@@ -62,7 +53,6 @@ def portfolio_targets(portfolio: dict):
     for w in portfolio.get("work_experience", []) or []:
         for b in w.get("bullets", []) or []:
             targets["Work Experience"].append(b.get("text",""))
-    # de-dup
     for k, arr in list(targets.items()):
         seen = set(); uniq=[]
         for t in arr:
@@ -93,6 +83,7 @@ def main(top: int):
 
     os.makedirs(OUTBOX_MD, exist_ok=True)
     os.makedirs(RESUMES_MD, exist_ok=True)
+    os.makedirs(CHANGES_DIR, exist_ok=True)
 
     drafted_covers = drafted_resumes = 0
 
@@ -100,10 +91,9 @@ def main(top: int):
         safe_company = safe_name(j.get('company',''))
         safe_title   = safe_name(j.get('title',''))
 
-        # ATS keywords (whitelisted to what you claim)
         ats_keywords = harvest_job_keywords(j, vocab, top_n=14)
 
-        # COVER (same template; tiny ATS section appended)
+        # Cover (append ATS section)
         cover_fname = f"{safe_company}_{safe_title}.md"[:150]
         cover = render_cover(j, PROFILE_YAML, TMPL_DIR)
         if ats_keywords:
@@ -113,18 +103,26 @@ def main(top: int):
         j['cover_path'] = f"outbox/{cover_fname}"
         drafted_covers += 1
 
-        # RESUME — open your original file and edit in place (no new structure)
+        # Resume — open base, tailor in place, capture change log
         out_docx = os.path.join(RESUMES_MD, f"{safe_company}_{safe_title}.docx"[:150])
         doc = Document(BASE_RESUME)
-
         targets = portfolio_targets(portfolio)
-        prioritized_skills = ats_keywords  # only reorder if present in your skills line
-
-        # surgical tailoring (no new paragraphs/sections)
-        tailor_docx_in_place(doc, targets, ats_keywords, prioritized_skills)
+        changes = tailor_docx_in_place(doc, targets, ats_keywords, prioritized_skills=ats_keywords)
         doc.save(out_docx)
-
         j['resume_docx'] = f"resumes/{os.path.basename(out_docx)}"
+
+        # Write changes.json for this job
+        exchg = {
+            "company": j.get("company",""),
+            "title": j.get("title",""),
+            "ats_keywords": ats_keywords,
+            "changes": changes
+        }
+        changes_fname = f"{safe_company}_{safe_title}.json"[:150]
+        with open(os.path.join(CHANGES_DIR, changes_fname), 'w') as f:
+            json.dump(exchg, f, indent=2)
+        j['changes_path'] = f"changes/{changes_fname}"
+
         drafted_resumes += 1
 
     with open(DATA_JSON, 'w') as f: json.dump(jobs, f, indent=2)
