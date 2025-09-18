@@ -12,6 +12,8 @@ permissions:
 
 env:
   PYTHONPATH: ${{ github.workspace }}
+  # flip this to 0 to disable LLM even if the key exists
+  USE_LLM: "1"
 
 jobs:
   build:
@@ -25,7 +27,12 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - run: python scripts/draft_email.py --top ${{ github.event.inputs.top }}
+      - name: Draft covers / resumes
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          USE_LLM: ${{ env.USE_LLM }}
+        run: |
+          python scripts/draft_email.py --top ${{ github.event.inputs.top }}
 
       - name: Commit cover drafts and resumes
         run: |
