@@ -1,29 +1,56 @@
-name: "Stro Gene"
-email: "diamond0976@gmail.com"
-phone: ""
-github: ""
+name: "Alberto Roca"
+email: "alberto.roca@live.longwood.edu"
+phone: "(434)315-4194"
+github: "https://github.com/AlbertoRoca96"
 
+# Roles you want this to prioritize (used for scoring/title match)
 target_titles:
   - software
   - engineer
+  - software engineer
   - machine
   - learning
+  - machine learning
   - ml
   - data
+  - data engineer
+  - data scientist
+  - full stack
 
+# Skills/keywords used for fit scoring (keep concise, lowercase)
 skills:
   - python
   - pytorch
-  - c++
-  - javascript
-  - react
-  - sql
-  - linux
   - opencv
+  - javascript
+  - typescript
+  - react
+  - react native
+  - expo
   - flask
+  - sql
+  - postgresql
+  - plpgsql
+  - powerbi
+  - linux
+  - github actions
+  - playwright
+  - hugging face
+  - pwa
+  - service worker
+  - resnet
+  - computer vision
+  - c
+  - c++
+  - java
+  - html
+  - css
 
+# Tokens that MUST appear in a posting or it gets score 0 (usually leave empty)
 must_haves: []
 
+# Locations you accept (scoring boosts matches or "remote")
 locations:
   - Remote
   - Virginia
+  - Farmville, VA
