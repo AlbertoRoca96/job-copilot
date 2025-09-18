@@ -7,6 +7,19 @@ from docx.text.run import Run
 
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{1,}")
 
+class ChangeLog:
+    """Collects human-readable diffs to show on the dashboard."""
+    def __init__(self):
+        self.items = []  # each: {section, before, after, reason}
+
+    def add(self, section: str, before: str, after: str, reason: str):
+        self.items.append({
+            "section": section,
+            "before": before.strip(),
+            "after": after.strip(),
+            "reason": reason
+        })
+
 def tokens(text: str) -> Set[str]:
     return set(WORD_RE.findall((text or "").lower()))
 
@@ -14,10 +27,6 @@ def normalize_ws(s: str) -> str:
     return re.sub(r"\s+", " ", s or "").strip()
 
 def find_section_ranges(doc: Document, section_titles: List[str]) -> Dict[str, Tuple[int,int]]:
-    """
-    Return {lowercased_title: (start_idx, end_idx_exclusive)} for paragraphs whose text
-    equals a section heading (case-insensitive, trimmed). If not found, omit.
-    """
     wants = [normalize_ws(t).lower() for t in section_titles]
     hits = {}
     for i, p in enumerate(doc.paragraphs):
@@ -51,9 +60,6 @@ def best_match_idx(source_lines: List[str], target_text: str) -> int:
     return i if scores[i] >= 0.58 else -1
 
 def reorder_skills_line_text(text: str, prioritized: List[str]) -> str:
-    """
-    Keep your comma-separated skills format, move prioritized terms forward IF they already exist.
-    """
     items = [normalize_ws(x) for x in re.split(r",\s*", text) if x.strip()]
     if not items:
         return text
@@ -69,7 +75,6 @@ def reorder_skills_line_text(text: str, prioritized: List[str]) -> str:
     return ", ".join(ordered)
 
 def copy_format(from_run: Run, to_run: Run):
-    """Copy basic character formatting so the appended text looks identical."""
     try:
         to_run.font.name = from_run.font.name
         to_run.font.size = from_run.font.size
@@ -77,25 +82,14 @@ def copy_format(from_run: Run, to_run: Run):
         to_run.font.italic = from_run.font.italic
         to_run.font.underline = from_run.font.underline
     except Exception:
-        pass  # be tolerant across different docs
+        pass
 
 def append_parenthetical_run(p: Paragraph, suffix: str):
-    """
-    Append e.g. ' (react, postgresql).' as a new run, copying formatting from the last existing run.
-    Does NOT alter existing runs (so hyperlinks and emphasis remain).
-    """
     if not suffix:
         return
-    # Respect sentence final '.'
     full = p.text.rstrip()
-    add = suffix
-    if full.endswith("."):
-        add = " " + suffix[:-1] + "." if suffix.endswith(")") else " " + suffix + "."
-        # but we won't modify the old period—just append with our own punctuation
-    else:
-        add = " " + suffix
+    add = " " + suffix if not full.endswith(".") else " " + (suffix[:-1] + "." if suffix.endswith(")") else suffix + ".")
     r = p.add_run(add)
-    # copy formatting from last run if available
     last = None
     for run in p.runs[::-1]:
         if normalize_ws(run.text):
@@ -104,25 +98,21 @@ def append_parenthetical_run(p: Paragraph, suffix: str):
     if last:
         copy_format(last, r)
 
-def inject_keywords_parenthetical(paragraph: Paragraph, kws: List[str]):
-    """
-    Add up to 2 missing keywords in a small parenthetical at the end of the paragraph,
-    preserving all original formatting/hyperlinks.
-    """
-    present = tokens(paragraph.text)
+def inject_keywords_parenthetical(paragraph: Paragraph, kws: List[str]) -> str:
+    """Append up to 2 missing keywords; return the AFTER text (for logging)."""
+    before = paragraph.text
+    present = tokens(before)
     missing = [k for k in kws if k.lower() not in present]
     if not missing:
-        return
+        return before
     label = ", ".join(missing[:2])
     append_parenthetical_run(paragraph, f"({label})")
+    return paragraph.text
 
 def rewrite_bullets_in_section(paragraphs, start: int, end: int,
                                target_bullets: List[str], ats_keywords: List[str],
+                               logger: ChangeLog, section_label: str,
                                max_rewrites=3):
-    """
-    Inside [start,end), locate bullet paragraphs and append a tiny ATS parenthetical
-    to up to max_rewrites bullets that best match your curated portfolio bullets.
-    """
     bullet_idxs = [i for i in range(start, end) if paragraph_is_bullet(paragraphs[i])]
     bullet_texts = [normalize_ws(paragraphs[i].text) for i in bullet_idxs]
     rewrites = 0
@@ -133,43 +123,49 @@ def rewrite_bullets_in_section(paragraphs, start: int, end: int,
         if j == -1:
             continue
         para_idx = bullet_idxs[j]
-        inject_keywords_parenthetical(paragraphs[para_idx], ats_keywords)
-        rewrites += 1
+        before = paragraphs[para_idx].text
+        after = inject_keywords_parenthetical(paragraphs[para_idx], ats_keywords)
+        if after != before:
+            logger.add(section_label, before, after,
+                       reason=f"Added ATS keywords seen in JD (limited to your allowed vocab).")
+            rewrites += 1
 
-def rewrite_skills(paragraphs, start: int, end: int, prioritized_keywords: List[str]):
-    """
-    Reorder the FIRST non-bullet, comma-separated paragraph under 'Technical Skills'
-    **only if it is a single run** (safe). If multiple runs exist (styled chunks),
-    leave the line intact and append a ' (Priority: ...)' parenthetical as a separate run.
-    """
+def rewrite_skills(paragraphs, start: int, end: int,
+                   prioritized_keywords: List[str], logger: ChangeLog):
+    """Reorder single-run skills line; else append '(Priority: ...)' as a run."""
     for i in range(start, end):
         p = paragraphs[i]
         t = normalize_ws(p.text)
-        if not t or paragraph_is_bullet(p):
-            continue
-        if "," not in t or len(t) >= 500:
+        if not t or paragraph_is_bullet(p) or "," not in t or len(t) >= 500:
             continue
 
         if len(p.runs) == 1:
-            # safe: rewrite the single run text
-            new_text = reorder_skills_line_text(p.runs[0].text, prioritized_keywords)
-            p.runs[0].text = new_text
+            before = p.runs[0].text
+            after = reorder_skills_line_text(before, prioritized_keywords)
+            if after != before:
+                p.runs[0].text = after
+                logger.add("Technical Skills", before, after,
+                           reason="Reordered to surface JD keywords already present in your skills.")
         else:
-            # preserve styling: append a parenthetical instead of rewriting runs
             chosen = [k for k in prioritized_keywords if k.lower() in tokens(t)]
             if chosen:
+                before = p.text
                 append_parenthetical_run(p, f"(Priority: {', '.join(chosen[:6])})")
-        return  # only touch the first candidate line
+                after = p.text
+                if after != before:
+                    logger.add("Technical Skills", before, after,
+                               reason="Annotated priorities (complex formatting preserved).")
+        return  # only touch first candidate line
 
 def tailor_docx_in_place(doc: Document,
                          portfolio_bullets: Dict[str, List[str]],
                          ats_keywords: List[str],
                          prioritized_skills: List[str]):
     """
-    No new paragraphs/sections. We only:
-      - append tiny ATS parentheticals to up to 3 bullets in Projects/Work Experience
-      - reorder (or parenthetical-annotate) the first line under 'Technical Skills'
+    Returns a list of change log items describing the minimal edits.
     """
+    logger = ChangeLog()
+
     ranges = find_section_ranges(doc, [
         "Education",
         "Side Projects", "Projects",
@@ -186,15 +182,20 @@ def tailor_docx_in_place(doc: Document,
             s, e = ranges[sec]
             source = (portfolio_bullets.get("Side Projects", []) +
                       portfolio_bullets.get("Projects", []))
-            rewrite_bullets_in_section(pars, s, e, source, ats_keywords, max_rewrites=3)
+            rewrite_bullets_in_section(pars, s, e, source, ats_keywords, logger,
+                                       section_label="Side Projects" if sec == "side projects" else "Projects",
+                                       max_rewrites=3)
 
     # Work Experience
     if "work experience" in ranges:
         s, e = ranges["work experience"]
         rewrite_bullets_in_section(pars, s, e, portfolio_bullets.get("Work Experience", []),
-                                   ats_keywords, max_rewrites=3)
+                                   ats_keywords, logger, section_label="Work Experience",
+                                   max_rewrites=3)
 
     # Technical Skills
     if "technical skills" in ranges:
         s, e = ranges["technical skills"]
-        rewrite_skills(pars, s, e, prioritized_skills)
+        rewrite_skills(pars, s, e, prioritized_skills, logger)
+
+    return logger.items
