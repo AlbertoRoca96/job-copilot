@@ -4,7 +4,7 @@ import os, yaml
 def _norm_set(xs):
     return set(str(x).strip().lower() for x in xs)
 
-def _load_yaml(path):
+def _load_yaml(path, origin):
     if not os.path.exists(path): return []
     with open(path, "r") as f:
         raw = yaml.safe_load(f) or []
@@ -16,6 +16,7 @@ def _load_yaml(path):
             "bullet_cues": _norm_set(p.get("bullet_cues", [])),
             "requires_any": _norm_set(p.get("requires_any", [])),
             "clause": str(p.get("clause","")).strip(),
+            "origin": origin,
         })
     return items
 
@@ -44,8 +45,8 @@ _DEFAULTS = [
 
 def load_policies():
     here = os.path.dirname(__file__)
-    base = _load_yaml(os.path.join(here, "policies.yaml"))
-    runtime = _load_yaml(os.path.join(here, "policies.runtime.yaml"))
+    base = _load_yaml(os.path.join(here, "policies.yaml"), origin="base")
+    runtime = _load_yaml(os.path.join(here, "policies.runtime.yaml"), origin="runtime")
     if not base:
         # normalize defaults
         base = []
@@ -56,8 +57,8 @@ def load_policies():
                 "bullet_cues": _norm_set(p["bullet_cues"]),
                 "requires_any": _norm_set(p["requires_any"]),
                 "clause": p["clause"],
+                "origin": "default",
             })
-    # merge (runtime last so it can add more)
     merged = [p for p in base if p.get("clause")]
     for p in runtime:
         if p.get("clause"):
