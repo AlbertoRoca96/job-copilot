@@ -3,7 +3,6 @@
   "title": "Software Engineer, Product Engineering",
   "ats_keywords": [
     "c++",
-    "communication",
     "computer vision",
     "data",
     "engineer",
@@ -15,38 +14,40 @@
     "software",
     "support",
     "typescript",
-    "web"
+    "web",
+    "workflows",
+    "communication"
   ],
   "changes": [
     {
       "section": "Side Projects",
       "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  (c++, communication.",
-      "reason": "Added ATS keywords seen in JD (limited to your allowed vocab)."
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  (typescript.",
+      "reason": "Inserted targeted JD keyword: typescript"
     },
     {
       "section": "Side Projects",
       "before": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex",
-      "after": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex (c++, communication)",
-      "reason": "Added ATS keywords seen in JD (limited to your allowed vocab)."
+      "after": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex (computer vision)",
+      "reason": "Inserted targeted JD keyword: computer vision"
     },
     {
       "section": "Side Projects",
-      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  (c++, communication.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  (c++, communication. (communication, computer vision.",
-      "reason": "Added ATS keywords seen in JD (limited to your allowed vocab)."
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  (typescript.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  (typescript. (react.",
+      "reason": "Inserted targeted JD keyword: react"
     },
     {
       "section": "Work Experience",
       "before": "\u2013 Diagnosed and repaired software and hardware issues (Windows and Macintosh)",
-      "after": "\u2013 Diagnosed and repaired software and hardware issues (Windows and Macintosh) (c++, communication)",
-      "reason": "Added ATS keywords seen in JD (limited to your allowed vocab)."
+      "after": "\u2013 Diagnosed and repaired software and hardware issues (Windows and Macintosh) (workflows)",
+      "reason": "Inserted targeted JD keyword: workflows"
     },
     {
       "section": "Work Experience",
       "before": "\u2013 Used AutoCAD for basic drafting and 3D modeling of engineering plans",
-      "after": "\u2013 Used AutoCAD for basic drafting and 3D modeling of engineering plans (c++, communication)",
-      "reason": "Added ATS keywords seen in JD (limited to your allowed vocab)."
+      "after": "\u2013 Used AutoCAD for basic drafting and 3D modeling of engineering plans (web)",
+      "reason": "Inserted targeted JD keyword: web"
     }
   ]
 }
