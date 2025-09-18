@@ -1,66 +1,52 @@
 # src/tailor/policies.py
 import os, yaml
 
+HERE = os.path.dirname(__file__)
+BASE_YML = os.path.join(HERE, "policies.yaml")
+RUNTIME_YML = os.path.join(HERE, "policies.runtime.yaml")
+
 def _norm_set(xs):
-    return set(str(x).strip().lower() for x in xs)
+    return set(str(x).strip().lower() for x in (xs or []))
 
-def _load_yaml(path, origin):
-    if not os.path.exists(path): return []
-    with open(path, "r") as f:
-        raw = yaml.safe_load(f) or []
-    items = []
-    for p in raw:
-        items.append({
-            "id": str(p.get("id","")).strip() or "policy",
-            "jd_cues": _norm_set(p.get("jd_cues", [])),
-            "bullet_cues": _norm_set(p.get("bullet_cues", [])),
-            "requires_any": _norm_set(p.get("requires_any", [])),
-            "clause": str(p.get("clause","")).strip(),
-            "origin": origin,
-        })
-    return items
+def _read_yaml(path):
+    try:
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                return yaml.safe_load(f) or []
+    except Exception:
+        pass
+    return []
 
-_DEFAULTS = [
-    {"id":"ml_modeling","jd_cues":{"model","training","evaluation","deploy","inference"},
-     "bullet_cues":{"model","vision","resnet","pytorch","classification","inference"},
-     "requires_any":{"python","pytorch"},
-     "clause":"shipped ML models with Python/PyTorch and iterative evaluation loops"},
-    {"id":"search_ranking_rag","jd_cues":{"search","retrieval","ranking","rag"},
-     "bullet_cues":{"search","retrieve","index","dataset","vector","embedding"},
-     "requires_any":{"python"},
-     "clause":"experimented with retrieval/ranking and dataset curation for relevance"},
-    {"id":"data_pipelines","jd_cues":{"pipeline","dataset","data","annotation"},
-     "bullet_cues":{"pipeline","cron","github","actions","scrape","supabase","sql","postgres"},
-     "requires_any":{"github actions","sql","postgresql"},
-     "clause":"built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres)"},
-    {"id":"mlops_infra","jd_cues":{"mlops","observability","ci","monitor","deployment"},
-     "bullet_cues":{"github","actions","ci","cron","monitor","deploy"},
-     "requires_any":{"github actions"},
-     "clause":"added CI/monitoring hooks for model/data jobs"},
-    {"id":"product_collab","jd_cues":{"product","features","impact","cross-functional","collaborate"},
-     "bullet_cues":{"app","pwa","react","ui","prototype","space"},
-     "requires_any":{"react","react native"},
-     "clause":"partnered on user-facing features with quick prototypes (React/React Native)"},
-]
+def _coerce(p):
+    return {
+        "id": str(p.get("id","")).strip() or "policy",
+        "jd_cues": _norm_set(p.get("jd_cues", [])),
+        "bullet_cues": _norm_set(p.get("bullet_cues", [])),
+        "requires_any": _norm_set(p.get("requires_any", [])),
+        "clause": str(p.get("clause","")).strip(),
+        # tag whether this came from LLM so we can boost it later if needed
+        "_source": p.get("_source", "base"),
+    }
 
 def load_policies():
-    here = os.path.dirname(__file__)
-    base = _load_yaml(os.path.join(here, "policies.yaml"), origin="base")
-    runtime = _load_yaml(os.path.join(here, "policies.runtime.yaml"), origin="runtime")
-    if not base:
-        # normalize defaults
-        base = []
-        for p in _DEFAULTS:
-            base.append({
-                "id": p["id"],
-                "jd_cues": _norm_set(p["jd_cues"]),
-                "bullet_cues": _norm_set(p["bullet_cues"]),
-                "requires_any": _norm_set(p["requires_any"]),
-                "clause": p["clause"],
-                "origin": "default",
-            })
-    merged = [p for p in base if p.get("clause")]
-    for p in runtime:
-        if p.get("clause"):
+    """
+    Merge runtime (LLM) policies first, then base file.
+    Deduplicate by lowercase clause; keep the first occurrence (LLM wins).
+    Return a list of normalized dicts.
+    """
+    base = [_coerce(p | {"_source": "base"}) for p in _read_yaml(BASE_YML)]
+    runtime = [_coerce(p | {"_source": "runtime"}) for p in _read_yaml(RUNTIME_YML)]
+
+    merged = []
+    seen_clauses = set()
+    # runtime first (preferred), then base
+    for src in (runtime, base):
+        for p in src:
+            clause = p["clause"].lower()
+            if not clause or clause in seen_clauses:
+                continue
+            seen_clauses.add(clause)
             merged.append(p)
+    # tiny log for debugging in CI
+    print(f"policies: loaded {len(runtime)} runtime + {len(base)} base -> {len(merged)} active")
     return merged
