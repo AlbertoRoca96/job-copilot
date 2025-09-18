@@ -1,4 +1,7 @@
 # Entry-level / new-grad SWE focus (Greenhouse + Lever)
+# Add/remove companies freely. Slugs should match:
+#   Greenhouse => https://boards.greenhouse.io/<slug>
+#   Lever      => https://jobs.lever.co/<slug>
 
 # ---- Greenhouse boards ----
 - type: greenhouse
@@ -41,6 +44,62 @@
   include_keywords: ["software","engineer","developer","new grad","entry","junior","sde"]
   exclude_keywords: ["senior","staff","principal","lead","manager","director"]
 
+# New adds (Greenhouse)
+- type: greenhouse
+  slug: databricks
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde","ml","data"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+- type: greenhouse
+  slug: asana
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde","backend","frontend"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+- type: greenhouse
+  slug: mongodb
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde","database","backend"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+- type: greenhouse
+  slug: airbnb
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde","infrastructure","ml"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+- type: greenhouse
+  slug: roblox
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde","graphics","realtime"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+- type: greenhouse
+  slug: plaid
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde","backend"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+- type: greenhouse
+  slug: openai
+  include_keywords: ["software","engineer","developer","ml","machine learning","inference","infrastructure"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+- type: greenhouse
+  slug: anthropic
+  include_keywords: ["software","engineer","developer","ml","machine learning","inference","platform"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+- type: greenhouse
+  slug: github
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde","platform","actions"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+- type: greenhouse
+  slug: vercel
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde","frontend","react"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+- type: greenhouse
+  slug: discord
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde","realtime"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
 # ---- Lever boards ----
 - type: lever
   slug: zapier
@@ -54,10 +113,26 @@
 
 - type: lever
   slug: loom
-  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde"]
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde","video","frontend"]
   exclude_keywords: ["senior","staff","principal","lead","manager","director"]
 
 - type: lever
   slug: khanacademy
-  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde"]
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde","education"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+# New adds (Lever)
+- type: lever
+  slug: linear
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde","frontend","typescript"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+- type: lever
+  slug: angelcitydata
+  include_keywords: ["software","engineer","developer","data","ml","python"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+- type: lever
+  slug: praxislabs
+  include_keywords: ["software","engineer","developer","full stack","react","node","typescript"]
   exclude_keywords: ["senior","staff","principal","lead","manager","director"]
