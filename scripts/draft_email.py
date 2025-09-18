@@ -1,8 +1,9 @@
-import os, sys, json, re, yaml, hashlib, textwrap
+# scripts/draft_email.py
+import os, sys, json, re, yaml, hashlib
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.tailor.render import render_cover
-from src.tailor.resume import tokens, tailor_docx_in_place
+from src.tailor.resume import tailor_docx_in_place
 from docx import Document
 
 # LLM (optional)
@@ -23,6 +24,7 @@ PORTFOLIO_YAML = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'p
 TMPL_DIR       = os.path.join(os.path.dirname(__file__), '..', 'src', 'tailor', 'templates')
 BASE_RESUME    = os.path.join(os.path.dirname(__file__), '..', 'assets', 'Resume-2025.docx')
 RUNTIME_POL    = os.path.join(os.path.dirname(__file__), '..', 'src', 'tailor', 'policies.runtime.yaml')
+BANLIST_JSON   = os.path.join(DATA_DIR, 'banlist.json')
 
 SYNONYMS = {
   "js":"javascript","reactjs":"react","ts":"typescript","ml":"machine learning",
@@ -31,6 +33,10 @@ SYNONYMS = {
   "etl":"data pipeline"
 }
 def norm(w): return SYNONYMS.get((w or "").strip().lower(), (w or "").strip().lower())
+
+def tokens(text: str):
+    WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{1,}")
+    return set(WORD_RE.findall((text or "").lower()))
 
 def allowed_vocab(profile: dict, portfolio: dict):
     skills = {s.lower() for s in (profile.get("skills") or [])}
@@ -44,11 +50,6 @@ def allowed_vocab(profile: dict, portfolio: dict):
     expanded = {norm(w) for w in (skills | tags | titles)}
     return sorted(expanded | skills | tags | titles)
 
-def tokens(text: str):
-    import re
-    WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{1,}")
-    return set(WORD_RE.findall((text or "").lower()))
-
 def jd_keywords(job: dict, allowed: set, cap=24):
     jtoks = [norm(w) for w in (tokens(job.get("title","")) | tokens(job.get("description","")))]
     freq = {}
@@ -56,6 +57,16 @@ def jd_keywords(job: dict, allowed: set, cap=24):
         if w in allowed:
             freq[w] = freq.get(w, 0) + 1
     return [w for w,_ in sorted(freq.items(), key=lambda kv: (-kv[1], kv[0]))[:cap]]
+
+def top_jd_terms_from_text(text: str, allowed: set, cap=24):
+    # Pull frequent terms/phrases from JD that also exist in allowed vocab
+    words = list(tokens(text))
+    counts = {}
+    for w in words:
+        w = norm(w)
+        if w in allowed:
+            counts[w] = counts.get(w, 0) + 1
+    return [w for w,_ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:cap]]
 
 def portfolio_targets(portfolio: dict):
     targets = {"Side Projects": [], "Projects": [], "Work Experience": []}
@@ -83,41 +94,31 @@ def safe_name(s: str) -> str:
     return ''.join(c for c in (s or '') if c.isalnum() or c in ('-', '_')).strip()
 
 # -------- JD live fetch + artifact helpers --------
-
 def fetch_jd_plaintext(job_url: str, timeout=20) -> str:
-    if not job_url:
-        return ""
+    if not job_url: return ""
     try:
-        r = requests.get(job_url, timeout=timeout, headers={
-            "User-Agent": "Mozilla/5.0 job-copilot-bot"
-        })
+        r = requests.get(job_url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0 job-copilot-bot"})
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
         main = soup.select_one(".content, .opening, .job, .application, article, main, #content")
-        if not main:
-            main = soup
-        for tag in main(["script","style","noscript","nav","header","footer","form"]):
-            tag.decompose()
-        text = " ".join(main.get_text(separator=" ", strip=True).split())
-        return text
+        if not main: main = soup
+        for tag in main(["script","style","noscript","nav","header","footer","form"]): tag.decompose()
+        return " ".join(main.get_text(separator=" ", strip=True).split())
     except Exception:
         return ""
 
 def pick_jd_text(job_obj: dict) -> str:
     desc = (job_obj.get("description") or "").strip()
-    if len(desc) >= 800:
-        return desc
+    if len(desc) >= 800: return desc
     live = fetch_jd_plaintext(job_obj.get("url",""))
     return live if len(live) > len(desc) else desc
 
 def write_jd_artifacts(slug: str, jd_text: str, out_dir: str):
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"{slug}.jd.txt")
-    with open(path, "w") as f:
-        f.write(jd_text)
+    with open(path, "w") as f: f.write(jd_text)
     sha = hashlib.sha1(jd_text.encode("utf-8")).hexdigest()[:10]
     print(f"JD[{slug}]: {len(jd_text)} chars (sha1 {sha}) -> docs/changes/{slug}.jd.txt")
-
 # --------------------------------------------------
 
 def main(top: int):
@@ -127,7 +128,7 @@ def main(top: int):
     else:
         portfolio = {"projects": [], "work_experience": [], "workshops": []}
 
-    vocab = set(allowed_vocab(profile, portfolio))
+    allowed = set(allowed_vocab(profile, portfolio))
 
     jobs = []
     if os.path.exists(DATA_JSON):
@@ -145,16 +146,20 @@ def main(top: int):
     os.makedirs(CHANGES_DIR, exist_ok=True)
     os.makedirs(DATA_DIR, exist_ok=True)
 
+    # global banlist across runs
+    try:
+        with open(BANLIST_JSON, 'r') as bf: banlist = json.load(bf)
+        if not isinstance(banlist, list): banlist = []
+    except Exception:
+        banlist = []
+    banset = {x.strip().lower() for x in banlist}  # for quick membership
+
     drafted_covers = drafted_resumes = 0
 
     use_llm = os.getenv("USE_LLM","0") == "1" and bool(os.getenv("OPENAI_API_KEY"))
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
-    llm_summary = {
-        "used": bool(use_llm),
-        "model": model if use_llm else None,
-        "jobs": []
-    }
+    llm_summary = {"used": bool(use_llm), "model": model if use_llm else None, "jobs": []}
     print(f"LLM: {'using model ' + model if use_llm else 'disabled or missing OPENAI_API_KEY (fallback to deterministic)'}")
 
     def jd_sha(s: str) -> str:
@@ -165,25 +170,35 @@ def main(top: int):
         safe_title   = safe_name(j.get('title',''))
         slug = f"{safe_company}_{safe_title}"[:150]
 
-        # ---- Use real JD text (live fetch when needed) ----
         jd_text = pick_jd_text(j) or (j.get("description") or "")
         tmp_job = dict(j); tmp_job["description"] = jd_text
-        jd_kws = jd_keywords(tmp_job, vocab)
+        jd_kws = jd_keywords(tmp_job, allowed)
+        jd_terms = top_jd_terms_from_text(jd_text, allowed, cap=24)
         write_jd_artifacts(slug=slug, jd_text=jd_text[:20000], out_dir=CHANGES_DIR)
         jd_hash = jd_sha(jd_text)
 
-        # Optional: get per-job policies from LLM
+        # Optional: LLM suggestions with banlist & JD terms
         job_llm_count = 0
         if use_llm:
             llm_items = suggest_policies(
                 os.getenv("OPENAI_API_KEY"),
                 j.get("title",""),
                 jd_text,
-                list(vocab),
+                list(allowed),
+                jd_terms,
+                list(banset),
             )
+            # seed missing cues, filter against session ban
+            cleaned = []
             for it in llm_items:
+                clause = (it.get("clause") or "").strip().lower()
+                if not clause or clause in banset:   # no repeats across jobs
+                    continue
                 if not it.get("jd_cues"):
                     it["jd_cues"] = jd_kws[:8]
+                cleaned.append(it)
+                banset.add(clause)  # reserve clause now
+            llm_items = cleaned
             with open(RUNTIME_POL, "w") as rf:
                 yaml.safe_dump(llm_items, rf)
             job_llm_count = len(llm_items)
@@ -205,7 +220,6 @@ def main(top: int):
         out_docx_name = f"{slug}_{jd_hash}.docx"
         out_docx = os.path.join(RESUMES_MD, out_docx_name)
         doc = Document(BASE_RESUME)
-        # Embed provenance into docx properties
         try:
             cp = doc.core_properties
             cp.comments = f"job-copilot:{slug}:{jd_hash}"
@@ -213,16 +227,17 @@ def main(top: int):
             cp.keywords = ", ".join(jd_kws[:12])
         except Exception:
             pass
+
         targets = portfolio_targets(portfolio)
         changes = tailor_docx_in_place(
             doc,
             targets,
             jd_keywords=jd_kws,
-            allowed_vocab_list=sorted(vocab),
+            allowed_vocab_list=sorted(allowed),
         )
         doc.save(out_docx)
         j['resume_docx'] = f"resumes/{out_docx_name}"
-        j['resume_docx_hash'] = jd_hash  # used for cache-busting on the dashboard
+        j['resume_docx_hash'] = jd_hash
 
         explain = {
             "company": j.get("company",""),
@@ -239,10 +254,10 @@ def main(top: int):
         llm_summary["jobs"].append({"slug": slug, "runtime_policy_count": job_llm_count})
         drafted_covers += 1; drafted_resumes += 1
 
-    # Save updated jobs (with paths + hash)
+    # Save updated jobs + banlist
     with open(DATA_JSON, 'w') as f: json.dump(jobs, f, indent=2)
-    with open(os.path.join(DATA_DIR, "llm_info.json"), "w") as f:
-        json.dump(llm_summary, f, indent=2)
+    with open(os.path.join(DATA_DIR, "llm_info.json"), "w") as f: json.dump(llm_summary, f, indent=2)
+    with open(BANLIST_JSON, 'w') as bf: json.dump(sorted(list(banset)), bf, indent=2)
 
     print(f"Drafted {drafted_covers} cover letters -> {OUTBOX_MD}")
     print(f"Drafted {drafted_resumes} tailored resumes -> {RESUMES_MD}")
