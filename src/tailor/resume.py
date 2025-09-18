@@ -5,6 +5,8 @@ from docx import Document
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 
+from .policies import load_policies  # <— load YAML each run
+
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{1,}")
 
 class ChangeLog:
@@ -68,86 +70,38 @@ def copy_format(from_run: Run, to_run: Run):
     except Exception:
         pass
 
-def append_parenthetical_run(p: Paragraph, suffix: str):
-    if not suffix:
+def append_clause(p: Paragraph, clause: str):
+    if not clause:
         return
-    # append as its own run, keep existing punctuation
-    add = " " + suffix if not p.text.rstrip().endswith(".") else " " + (suffix[:-1] + "." if suffix.endswith(")") else suffix + ".")
+    sep = "; " if p.text.strip().endswith((")", "]", "”", "\"", ".", "…")) else " — "
+    add = f"{sep}{clause}."
     r = p.add_run(add)
-    # copy formatting from last non-empty run
-    last = None
-    for run in p.runs[::-1]:
-        if normalize_ws(run.text):
-            last = run
-            break
+    last = next((run for run in reversed(p.runs) if normalize_ws(run.text)), None)
     if last:
         copy_format(last, r)
 
-# ------------ Context mapping for smart placement ------------
-# Minimal, extensible map: a keyword is preferred when the sentence mentions one of these context cues
-KEY_CONTEXT = {
-    "pytorch": {"torch", "resnet", "model", "training", "inference", "cv", "vision", "ml", "ai"},
-    "tensorflow": {"keras", "tensor", "model", "training"},
-    "computer vision": {"opencv", "vision", "image", "detec", "classif"},
-    "rag": {"retrieval", "vector", "embedding", "search", "knowledge", "chunk"},
-    "postgresql": {"sql", "postgres", "database", "supabase"},
-    "sql": {"sql", "query", "database", "postgres"},
-    "react": {"react", "frontend", "ui", "component"},
-    "react native": {"react native", "expo", "mobile"},
-    "typescript": {"typescript", "ts", "react", "frontend", "expo"},
-    "javascript": {"javascript", "js", "frontend", "react"},
-    "github actions": {"ci", "pipeline", "workflow", "cron", "automation"},
-    "playwright": {"scrape", "browser", "automation", "e2e", "test"},
-    "flask": {"api", "server", "backend"},
-    "docker": {"container", "image", "compose"},
-    "linux": {"linux", "bash", "shell"},
-    "rest api": {"rest", "api", "endpoint"},
-}
-
-SOFT_KEYWORDS_DEFAULT = {"communication", "collaboration", "teamwork", "leadership", "ownership"}
-
-def pick_keyword_for_sentence(sentence: str,
-                              candidates: List[str],
-                              used: Set[str],
-                              soft_pool: Set[str]) -> str | None:
-    """
-    Pick ONE keyword that:
-      - hasn't been used yet globally
-      - matches the sentence context if possible
-      - prefers hard (non-soft) keywords
-      - only uses a soft keyword if no suitable hard keyword exists (and only once globally)
-    """
+def choose_policy_for_sentence(sentence: str, jd_vocab: Set[str], allowed_vocab: Set[str], policies) -> str | None:
     stoks = tokens(sentence)
-    # 1) hard candidates not used yet
-    hard = [k for k in candidates if k not in used and k.lower() not in soft_pool]
-    soft = [k for k in candidates if k not in used and k.lower() in soft_pool]
-
-    def score(k: str) -> int:
-        cues = KEY_CONTEXT.get(k.lower(), set())
-        return len(stoks & cues)
-
-    # prefer context-matching hard keywords
-    hard_sorted = sorted(hard, key=lambda k: (score(k), k), reverse=True)
-    if hard_sorted and (score(hard_sorted[0]) > 0 or hard_sorted):
-        return hard_sorted[0]
-
-    # otherwise a single soft keyword if none placed yet anywhere
-    if soft:
-        return soft[0]
+    for pol in policies:
+        if not (jd_vocab & pol["jd_cues"]):
+            continue
+        if not (stoks & pol["bullet_cues"]):
+            continue
+        req = pol.get("requires_any") or set()
+        if req and not (allowed_vocab & req):
+            continue
+        return pol["clause"]
     return None
 
 def rewrite_bullets_in_section(paragraphs,
                                start: int, end: int,
                                target_bullets: List[str],
-                               candidate_keywords: List[str],
-                               used_keywords: Set[str],
-                               soft_pool: Set[str],
+                               jd_vocab: Set[str],
+                               allowed_vocab: Set[str],
+                               policies,
                                logger: ChangeLog,
                                section_label: str,
                                max_rewrites=3):
-    """
-    Append ONE suitable keyword per rewritten bullet; no duplicates across the whole document.
-    """
     bullet_idxs = [i for i in range(start, end) if paragraph_is_bullet(paragraphs[i])]
     bullet_texts = [normalize_ws(paragraphs[i].text) for i in bullet_idxs]
     rewrites = 0
@@ -160,26 +114,17 @@ def rewrite_bullets_in_section(paragraphs,
         para_idx = bullet_idxs[j]
         p = paragraphs[para_idx]
         before = p.text
-
-        kw = pick_keyword_for_sentence(before, candidate_keywords, used_keywords, soft_pool)
-        if not kw:
+        clause = choose_policy_for_sentence(before, jd_vocab, allowed_vocab, policies)
+        if not clause:
             continue
-
-        # make sure we only add one keyword to this bullet
-        append_parenthetical_run(p, f"({kw})")
-        used_keywords.add(kw.lower())
-        logger.add(section_label, before, p.text, reason=f"Inserted targeted JD keyword: {kw}")
+        # keep bullets concise; skip if already very long
+        if len(before) > 350:
+            continue
+        append_clause(p, clause)
+        logger.add(section_label, before, p.text, reason=f"Aligned to JD via policy clause: “{clause}”")
         rewrites += 1
 
-def reorder_skills_or_annotate(paragraphs, start: int, end: int,
-                               prioritized: List[str],
-                               used_keywords: Set[str],
-                               logger: ChangeLog):
-    """
-    If the skills line is single-run comma text, reorder existing items to surface prioritized terms
-    (only if they already exist). Otherwise, append a small '(Priority: ...)' note listing up to 6
-    prioritized terms that exist on that line (no duplicates vs. already used keywords).
-    """
+def reorder_or_annotate_skills(paragraphs, start: int, end: int, prioritized: List[str], logger: ChangeLog):
     def reorder_line_text(text: str, prio: List[str]) -> str:
         items = [normalize_ws(x) for x in re.split(r",\s*", text) if x.strip()]
         if not items:
@@ -200,10 +145,7 @@ def reorder_skills_or_annotate(paragraphs, start: int, end: int,
         t = normalize_ws(p.text)
         if not t or paragraph_is_bullet(p) or "," not in t or len(t) >= 500:
             continue
-
-        existing = tokens(t)
-        prio_present = [k for k in prioritized if k.lower() in existing and k.lower() not in used_keywords]
-
+        prio_present = [k for k in prioritized if k.lower() in tokens(t)]
         if len(p.runs) == 1:
             before = p.runs[0].text
             after = reorder_line_text(before, prio_present)
@@ -213,63 +155,54 @@ def reorder_skills_or_annotate(paragraphs, start: int, end: int,
                            reason="Reordered to surface JD-matching skills already present.")
         else:
             if prio_present:
-                show = ", ".join(prio_present[:6])
                 before = p.text
-                append_parenthetical_run(p, f"(Priority: {show})")
-                after = p.text
-                logger.add("Technical Skills", before, after,
+                r = p.add_run(f" (Priority: {', '.join(prio_present[:6])})")
+                last = next((run for run in reversed(p.runs) if normalize_ws(run.text)), None)
+                if last: copy_format(last, r)
+                logger.add("Technical Skills", before, p.text,
                            reason="Annotated priorities without altering styling.")
-        # mark reordered ones as 'used' to avoid repeating in bullets
-        for k in prio_present[:6]:
-            used_keywords.add(k.lower())
-        return  # only touch first candidate line
+        return  # only the first candidate line
 
 def tailor_docx_in_place(doc: Document,
                          portfolio_bullets: Dict[str, List[str]],
-                         jd_keywords_hard: List[str],
-                         jd_keywords_soft: List[str]):
+                         jd_keywords: List[str],
+                         allowed_vocab_list: List[str]):
     """
-    Returns: list of change-log items.
-    Guarantees: each keyword is used at most once across the document; bullets get <=1 keyword each.
+    Adaptive per-job tailoring:
+      - Build JD vocab from this specific posting.
+      - Load policies (YAML) and apply at most one clause per chosen bullet.
+      - Keep edits surgical; preserve formatting and layout.
     """
     logger = ChangeLog()
-    used: Set[str] = set()  # global uniqueness
+    policies = load_policies()
+    jd_vocab = set(k.lower() for k in jd_keywords)
+    allowed_vocab = set(k.lower() for k in allowed_vocab_list)
 
     ranges = find_section_ranges(doc, [
-        "Education",
-        "Side Projects", "Projects",
-        "Work Experience",
-        "Technical Skills",
-        "Workshops",
-        "References",
+        "Education","Side Projects","Projects","Work Experience",
+        "Technical Skills","Workshops","References",
     ])
     pars = doc.paragraphs
 
-    # 1) Technical Skills — reorder/annotate first, and mark used ones
+    # Skills (order/annotate)
     if "technical skills" in ranges:
         s, e = ranges["technical skills"]
-        reorder_skills_or_annotate(pars, s, e, jd_keywords_hard + jd_keywords_soft, used, logger)
+        reorder_or_annotate_skills(pars, s, e, list(jd_vocab), logger)
 
-    # Build pools
-    soft_pool = set(k.lower() for k in jd_keywords_soft)
-    candidates = jd_keywords_hard + jd_keywords_soft
-
-    # 2) Projects / Side Projects
+    # Projects / Side Projects
     for sec in ("side projects", "projects"):
         if sec in ranges:
             s, e = ranges[sec]
-            source = (portfolio_bullets.get("Side Projects", []) +
-                      portfolio_bullets.get("Projects", []))
-            rewrite_bullets_in_section(pars, s, e, source, candidates, used, soft_pool,
-                                       logger, section_label="Side Projects" if sec == "side projects" else "Projects",
+            src = (portfolio_bullets.get("Side Projects", []) + portfolio_bullets.get("Projects", []))
+            rewrite_bullets_in_section(pars, s, e, src, jd_vocab, allowed_vocab, policies,
+                                       logger, "Side Projects" if sec=="side projects" else "Projects",
                                        max_rewrites=3)
 
-    # 3) Work Experience
+    # Work Experience
     if "work experience" in ranges:
         s, e = ranges["work experience"]
         rewrite_bullets_in_section(pars, s, e, portfolio_bullets.get("Work Experience", []),
-                                   candidates, used, soft_pool, logger,
-                                   section_label="Work Experience",
-                                   max_rewrites=3)
+                                   jd_vocab, allowed_vocab, policies, logger,
+                                   "Work Experience", max_rewrites=3)
 
     return logger.items
