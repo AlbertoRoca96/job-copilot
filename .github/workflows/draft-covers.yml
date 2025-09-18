@@ -10,6 +10,9 @@ on:
 permissions:
   contents: write
 
+env:
+  PYTHONPATH: ${{ github.workspace }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
