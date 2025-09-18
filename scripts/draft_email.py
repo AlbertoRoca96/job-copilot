@@ -1,12 +1,10 @@
-import os, sys, json, argparse, re, yaml
+import os, sys, json, re, yaml
 # --- Make src/ importable when run from Actions or locally ---
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.tailor.render import render_cover
 from src.tailor.resume import tokens, tailor_docx_in_place
 from docx import Document
-from docx.shared import Pt
-from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 DATA_JSONL = os.path.join(os.path.dirname(__file__), '..', 'data', 'scores.jsonl')
 DATA_JSON  = os.path.join(os.path.dirname(__file__), '..', 'docs', 'data', 'scores.json')
@@ -16,8 +14,6 @@ PROFILE_YAML   = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'p
 PORTFOLIO_YAML = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'portfolio.yaml')
 TMPL_DIR       = os.path.join(os.path.dirname(__file__), '..', 'src', 'tailor', 'templates')
 BASE_RESUME    = os.path.join(os.path.dirname(__file__), '..', 'assets', 'Resume-2025.docx')
-
-WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{1,}")
 
 SYNONYMS = {
     "js": "javascript",
@@ -57,10 +53,7 @@ def harvest_job_keywords(job: dict, allowed: set, top_n=14):
     return [w for (w, _) in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:top_n]]
 
 def portfolio_targets(portfolio: dict):
-    """
-    Build target bullet texts we will try to map to existing bullets inside your resume,
-    grouped by section heading in your resume.
-    """
+    # texts we consider relevant, grouped by section label used in your resume
     targets = {"Side Projects": [], "Projects": [], "Work Experience": []}
     for p in portfolio.get("projects", []) or []:
         for b in p.get("bullets", []) or []:
@@ -69,13 +62,13 @@ def portfolio_targets(portfolio: dict):
     for w in portfolio.get("work_experience", []) or []:
         for b in w.get("bullets", []) or []:
             targets["Work Experience"].append(b.get("text",""))
-    # de-dup while preserving order
-    for k in list(targets.keys()):
+    # de-dup
+    for k, arr in list(targets.items()):
         seen = set(); uniq=[]
-        for t in targets[k]:
-            nt = t.strip()
+        for t in arr:
+            nt = (t or "").strip()
             if nt and nt not in seen:
-                seen.add(nt); uniq.append(nt)
+                uniq.append(nt); seen.add(nt)
         targets[k] = uniq
     return targets
 
@@ -83,13 +76,10 @@ def safe_name(s: str) -> str:
     return ''.join(c for c in (s or '') if c.isalnum() or c in ('-', '_')).strip()
 
 def main(top: int):
-    # load configs
     with open(PROFILE_YAML, 'r') as f: profile = yaml.safe_load(f)
     with open(PORTFOLIO_YAML, 'r') as f: portfolio = yaml.safe_load(f)
-
     vocab = allowed_vocab(profile, portfolio)
 
-    # load jobs
     jobs = []
     if os.path.exists(DATA_JSON):
         with open(DATA_JSON) as f: jobs = json.load(f)
@@ -110,38 +100,33 @@ def main(top: int):
         safe_company = safe_name(j.get('company',''))
         safe_title   = safe_name(j.get('title',''))
 
-        # ATS keywords (whitelisted by your vocab)
+        # ATS keywords (whitelisted to what you claim)
         ats_keywords = harvest_job_keywords(j, vocab, top_n=14)
 
-        # COVER (unchanged template, but append ATS alignment for scanners)
+        # COVER (same template; tiny ATS section appended)
         cover_fname = f"{safe_company}_{safe_title}.md"[:150]
-        cover_body = render_cover(j, PROFILE_YAML, TMPL_DIR)
+        cover = render_cover(j, PROFILE_YAML, TMPL_DIR)
         if ats_keywords:
-            cover_body += "\n\n---\n**Keyword Alignment (ATS-safe):** " + ", ".join(ats_keywords) + "\n"
-        with open(os.path.join(OUTBOX_MD, cover_fname), 'w') as f: f.write(cover_body)
+            cover += "\n\n---\n**Keyword Alignment (ATS-safe):** " + ", ".join(ats_keywords) + "\n"
+        with open(os.path.join(OUTBOX_MD, cover_fname), 'w') as f: f.write(cover)
         j['cover_file'] = cover_fname
         j['cover_path'] = f"outbox/{cover_fname}"
         drafted_covers += 1
 
-        # RESUME (tailor in-place from your base docx; keeps structure/styles)
+        # RESUME — open your original file and edit in place (no new structure)
         out_docx = os.path.join(RESUMES_MD, f"{safe_company}_{safe_title}.docx"[:150])
         doc = Document(BASE_RESUME)
 
-        # Build target bullets by section from portfolio
         targets = portfolio_targets(portfolio)
+        prioritized_skills = ats_keywords  # only reorder if present in your skills line
 
-        # Prioritized skills = ATS keywords to move forward on your skills line
-        prioritized_skills = ats_keywords
-
-        # Surgical tailoring
+        # surgical tailoring (no new paragraphs/sections)
         tailor_docx_in_place(doc, targets, ats_keywords, prioritized_skills)
-
         doc.save(out_docx)
 
         j['resume_docx'] = f"resumes/{os.path.basename(out_docx)}"
         drafted_resumes += 1
 
-    # write back for dashboard
     with open(DATA_JSON, 'w') as f: json.dump(jobs, f, indent=2)
 
     print(f"Drafted {drafted_covers} cover letters -> {OUTBOX_MD}")
