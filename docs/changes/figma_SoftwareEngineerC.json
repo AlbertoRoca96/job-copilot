@@ -22,8 +22,8 @@
     {
       "section": "Projects",
       "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; contributed to documentation for maintainable code and architectural decisions.",
-      "reason": "Aligned to JD via clause: \u201ccontributed to documentation for maintainable code and architectural decisions\u201d"
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; developed documentation for apis to support product teams.",
+      "reason": "Aligned to JD via clause: \u201cdeveloped documentation for apis to support product teams\u201d"
     },
     {
       "section": "Projects",
@@ -33,10 +33,10 @@
     },
     {
       "section": "Projects",
-      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; contributed to documentation for maintainable code and architectural decisions.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; contributed to documentation for maintainable code and architectural decisions.; built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).",
-      "reason": "Aligned to JD via clause: \u201cbuilt reliable data/annotation pipelines (GitHub Actions + SQL/Postgres)\u201d"
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; developed documentation for apis to support product teams.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; developed documentation for apis to support product teams.; contributed to workflows for cross-functional project execution.",
+      "reason": "Aligned to JD via clause: \u201ccontributed to workflows for cross-functional project execution\u201d"
     }
   ],
-  "jd_hash": "ab127897"
+  "jd_hash": "747389db"
 }
