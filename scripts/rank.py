@@ -1,4 +1,6 @@
 import os, sys, json, yaml
+from datetime import datetime, timedelta
+
 # --- Make src/ importable when run from Actions or locally ---
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -29,25 +31,60 @@ def compute_parts(job, profile):
 
     return round(skill_overlap, 4), round(title_similarity, 4), round(loc_boost, 4)
 
+def _within_recency(job, profile) -> bool:
+    """Return True if job passes the recency gate defined in profile.search_policy."""
+    pol = (profile or {}).get("search_policy", {}) or {}
+    days = int(pol.get("recency_days", 0) or 0)
+    require = bool(pol.get("require_posted_date", False))
+
+    if days <= 0:
+        return True  # no recency filter requested
+
+    posted = (job or {}).get("posted_at")
+    if not posted:
+        return not require  # keep when date missing unless require_posted_date=true
+
+    # Expect posted as YYYY-MM-DD
+    try:
+        pdate = datetime.strptime(str(posted)[:10], "%Y-%m-%d").date()
+    except Exception:
+        return not require
+
+    cutoff = (datetime.utcnow().date() - timedelta(days=days))
+    return pdate >= cutoff
+
 def main():
     if not os.path.exists(DATA):
         print('No jobs.jsonl found; run scripts/crawl.py first.')
         return
     with open(PROFILE, 'r') as f:
-        profile = yaml.safe_load(f)
+        profile = yaml.safe_load(f) or {}
 
-    out = []
+    # Load all jobs
+    raw = []
     with open(DATA) as f:
         for line in f:
-            j = json.loads(line)
-            # compute parts just for transparency
-            so, ts, lb = compute_parts(j, profile)
-            j['skill_overlap'] = so
-            j['title_similarity'] = ts
-            j['loc_boost'] = lb
-            # compute final score using the normal function
-            j['score'] = score_job(j, profile)
-            out.append(j)
+            try:
+                raw.append(json.loads(line))
+            except Exception:
+                continue
+
+    # Apply recency filter (if configured)
+    filtered = [j for j in raw if _within_recency(j, profile)]
+    dropped = len(raw) - len(filtered)
+    if dropped > 0:
+        print(f"Recency filter dropped {dropped} / {len(raw)} jobs per profile.search_policy")
+
+    out = []
+    for j in filtered:
+        # compute parts just for transparency
+        so, ts, lb = compute_parts(j, profile)
+        j['skill_overlap'] = so
+        j['title_similarity'] = ts
+        j['loc_boost'] = lb
+        # compute final score using the normal function
+        j['score'] = score_job(j, profile)
+        out.append(j)
 
     out.sort(key=lambda x: x['score'], reverse=True)
 
