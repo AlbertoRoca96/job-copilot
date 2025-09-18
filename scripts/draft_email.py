@@ -1,9 +1,11 @@
-import os, json, argparse
+import os, sys, json, argparse
+# --- Make src/ importable when run from Actions or locally ---
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from src.tailor.render import render_cover
 
 DATA = os.path.join(os.path.dirname(__file__), '..', 'data', 'scores.jsonl')
 OUTDIR_MD = os.path.join(os.path.dirname(__file__), '..', 'docs', 'outbox')
-
 PROFILE = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'profile.yaml')
 TMPL_DIR = os.path.join(os.path.dirname(__file__), '..', 'src', 'tailor', 'templates')
 
@@ -27,7 +29,6 @@ def main(top: int):
     print(f"Drafted {min(top, len(jobs))} cover letters -> {OUTDIR_MD}")
 
 if __name__ == '__main__':
-    import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument('--top', type=int, default=5)
     args = ap.parse_args()
