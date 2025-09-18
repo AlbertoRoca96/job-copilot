@@ -5,7 +5,7 @@ from docx import Document
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 
-from .policies import load_policies  # <— load YAML each run
+from .policies import load_policies  # loads base + runtime YAML
 
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{1,}")
 
@@ -101,6 +101,7 @@ def rewrite_bullets_in_section(paragraphs,
                                policies,
                                logger: ChangeLog,
                                section_label: str,
+                               used_clauses: Set[str],
                                max_rewrites=3):
     bullet_idxs = [i for i in range(start, end) if paragraph_is_bullet(paragraphs[i])]
     bullet_texts = [normalize_ws(paragraphs[i].text) for i in bullet_idxs]
@@ -117,10 +118,14 @@ def rewrite_bullets_in_section(paragraphs,
         clause = choose_policy_for_sentence(before, jd_vocab, allowed_vocab, policies)
         if not clause:
             continue
+        # no duplicates across the whole doc
+        if clause.lower() in used_clauses:
+            continue
         # keep bullets concise; skip if already very long
         if len(before) > 350:
             continue
         append_clause(p, clause)
+        used_clauses.add(clause.lower())
         logger.add(section_label, before, p.text, reason=f"Aligned to JD via policy clause: “{clause}”")
         rewrites += 1
 
@@ -170,13 +175,15 @@ def tailor_docx_in_place(doc: Document,
     """
     Adaptive per-job tailoring:
       - Build JD vocab from this specific posting.
-      - Load policies (YAML) and apply at most one clause per chosen bullet.
+      - Load policies (base + runtime) and apply at most one clause per chosen bullet.
       - Keep edits surgical; preserve formatting and layout.
+      - De-duplicate clauses across the entire document.
     """
     logger = ChangeLog()
     policies = load_policies()
     jd_vocab = set(k.lower() for k in jd_keywords)
     allowed_vocab = set(k.lower() for k in allowed_vocab_list)
+    used_clauses: Set[str] = set()
 
     ranges = find_section_ranges(doc, [
         "Education","Side Projects","Projects","Work Experience",
@@ -196,13 +203,13 @@ def tailor_docx_in_place(doc: Document,
             src = (portfolio_bullets.get("Side Projects", []) + portfolio_bullets.get("Projects", []))
             rewrite_bullets_in_section(pars, s, e, src, jd_vocab, allowed_vocab, policies,
                                        logger, "Side Projects" if sec=="side projects" else "Projects",
-                                       max_rewrites=3)
+                                       used_clauses, max_rewrites=3)
 
     # Work Experience
     if "work experience" in ranges:
         s, e = ranges["work experience"]
         rewrite_bullets_in_section(pars, s, e, portfolio_bullets.get("Work Experience", []),
                                    jd_vocab, allowed_vocab, policies, logger,
-                                   "Work Experience", max_rewrites=3)
+                                   "Work Experience", used_clauses, max_rewrites=3)
 
     return logger.items
