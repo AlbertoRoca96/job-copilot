@@ -32,26 +32,40 @@
   requires_any: ["react", "react native"]
   clause: "partnered on user-facing features with quick prototypes (React/React Native)"
 
-- id: tensorflow
-  jd_cues: ["tensorflow", "keras"]
-  bullet_cues: ["model", "training", "inference"]
-  requires_any: ["python"]
-  clause: "ported experiments to TensorFlow where appropriate"
+# --- new concrete policies for C++ / browser perf / multiplayer / TS ---
 
-- id: sklearn_xgboost
-  jd_cues: ["scikit", "sklearn", "xgboost"]
-  bullet_cues: ["classification", "regression", "feature"]
-  requires_any: ["python"]
-  clause: "ran baselines with scikit-learn/XGBoost for fast iteration"
-
-- id: nlp
-  jd_cues: ["nlp", "language", "token", "text"]
-  bullet_cues: ["text", "search", "retrieve"]
-  requires_any: ["python"]
-  clause: "tokenized/cleaned text corpora and evaluated simple retrieval baselines"
-
-- id: cplusplus
-  jd_cues: ["c++", "cpp"]
-  bullet_cues: ["opencv", "resnet", "vision", "performance"]
+- id: cxx_perf
+  jd_cues: ["c++", "cpp", "performance", "latency", "memory"]
+  bullet_cues: ["opencv", "vision", "resnet", "performance"]
   requires_any: ["c++"]
-  clause: "profiled/optimized hot paths in C++ where needed"
+  clause: "profiled hotspots and reduced latency/memory in C++ paths"
+
+- id: wasm_browser
+  jd_cues: ["webassembly", "wasm", "browser"]
+  bullet_cues: ["opencv", "vision", "performance"]
+  requires_any: ["c++"]
+  clause: "prepared C++ modules for browser targets and measured runtime impact"
+
+- id: multiplayer
+  jd_cues: ["multiplayer", "protocol", "collaboration", "realtime"]
+  bullet_cues: ["app", "pwa", "prototype"]
+  requires_any: ["javascript", "typescript", "react"]
+  clause: "validated real-time collaboration flows and basic protocol edge cases"
+
+- id: typescript_ui
+  jd_cues: ["typescript", "frontend", "ui"]
+  bullet_cues: ["react", "ui", "component", "app"]
+  requires_any: ["typescript", "react"]
+  clause: "built typed UI components in TypeScript with predictable props/state"
+
+- id: api_design
+  jd_cues: ["api", "sdk", "tooling"]
+  bullet_cues: ["app", "pwa", "prototype"]
+  requires_any: ["javascript", "python"]
+  clause: "exposed small, well-documented APIs to speed feature integration"
+
+- id: accessibility
+  jd_cues: ["accessibility", "a11y"]
+  bullet_cues: ["ui", "app", "component"]
+  requires_any: ["react"]
+  clause: "checked keyboard nav/labels to improve basic accessibility"
