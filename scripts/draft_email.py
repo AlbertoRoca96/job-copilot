@@ -4,6 +4,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from src.tailor.render import render_cover
 from src.tailor.resume import tokens, tailor_docx_in_place
 from docx import Document
+from src.ai.llm import suggest_policies  # <— NEW
 
 DATA_JSONL = os.path.join(os.path.dirname(__file__), '..', 'data', 'scores.jsonl')
 DATA_JSON  = os.path.join(os.path.dirname(__file__), '..', 'docs', 'data', 'scores.json')
@@ -14,8 +15,8 @@ PROFILE_YAML   = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'p
 PORTFOLIO_YAML = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'portfolio.yaml')
 TMPL_DIR       = os.path.join(os.path.dirname(__file__), '..', 'src', 'tailor', 'templates')
 BASE_RESUME    = os.path.join(os.path.dirname(__file__), '..', 'assets', 'Resume-2025.docx')
+RUNTIME_POL    = os.path.join(os.path.dirname(__file__), '..', 'src', 'tailor', 'policies.runtime.yaml')
 
-# simple synonym normalizer (truthful)
 SYNONYMS = {
   "js":"javascript","reactjs":"react","ts":"typescript","ml":"machine learning",
   "cv":"computer vision","postgres":"postgresql","gh actions":"github actions",
@@ -89,14 +90,34 @@ def main(top: int):
 
     drafted_covers = drafted_resumes = 0
 
+    use_llm = os.getenv("USE_LLM","0") == "1" and bool(os.getenv("OPENAI_API_KEY"))
+
     for j in jobs[:top]:
         safe_company = safe_name(j.get('company',''))
         safe_title   = safe_name(j.get('title',''))
 
-        # JD keywords for THIS job (runtime-adaptive)
         jd_kws = jd_keywords(j, vocab)
 
-        # COVER (keep your template; show alignment list for transparency)
+        # Optional: get per-job policies from LLM and write policies.runtime.yaml
+        if use_llm:
+            llm_items = suggest_policies(
+                os.getenv("OPENAI_API_KEY"),
+                j.get("title",""),
+                j.get("description",""),
+                list(vocab),
+            )
+            # stamp them as JD-cued by adding jd_cues=jd_kws (broad) so they pass the check
+            for it in llm_items:
+                if not it.get("jd_cues"):
+                    it["jd_cues"] = jd_kws[:8]
+            with open(RUNTIME_POL, "w") as rf:
+                yaml.safe_dump(llm_items, rf)
+        else:
+            # clear runtime file if any (to avoid stale rules)
+            if os.path.exists(RUNTIME_POL):
+                os.remove(RUNTIME_POL)
+
+        # COVER
         cover_fname = f"{safe_company}_{safe_title}.md"[:150]
         cover = render_cover(j, PROFILE_YAML, TMPL_DIR)
         if jd_kws:
@@ -106,7 +127,7 @@ def main(top: int):
         j['cover_path'] = f"outbox/{cover_fname}"
         drafted_covers += 1
 
-        # RESUME — policy-driven clauses (NEW signature)
+        # RESUME — deterministic + (optionally) LLM-driven runtime policies
         out_docx = os.path.join(RESUMES_MD, f"{safe_company}_{safe_title}.docx"[:150])
         doc = Document(BASE_RESUME)
         targets = portfolio_targets(portfolio)
@@ -119,7 +140,6 @@ def main(top: int):
         doc.save(out_docx)
         j['resume_docx'] = f"resumes/{os.path.basename(out_docx)}"
 
-        # EXPLAIN payload (dashboard)
         explain = {
             "company": j.get("company",""),
             "title": j.get("title",""),
