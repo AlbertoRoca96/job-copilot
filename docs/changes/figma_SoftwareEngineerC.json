@@ -1,0 +1,51 @@
+{
+  "company": "figma",
+  "title": "Software Engineer, C++",
+  "ats_keywords": [
+    "c++",
+    "communication",
+    "computer vision",
+    "data",
+    "engineer",
+    "learning",
+    "performance",
+    "python",
+    "react",
+    "software",
+    "support",
+    "typescript",
+    "workflows"
+  ],
+  "changes": [
+    {
+      "section": "Side Projects",
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  (c++, communication.",
+      "reason": "Added ATS keywords seen in JD (limited to your allowed vocab)."
+    },
+    {
+      "section": "Side Projects",
+      "before": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex",
+      "after": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex (c++, communication)",
+      "reason": "Added ATS keywords seen in JD (limited to your allowed vocab)."
+    },
+    {
+      "section": "Side Projects",
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  (c++, communication.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  (c++, communication. (communication, computer vision.",
+      "reason": "Added ATS keywords seen in JD (limited to your allowed vocab)."
+    },
+    {
+      "section": "Work Experience",
+      "before": "\u2013 Diagnosed and repaired software and hardware issues (Windows and Macintosh)",
+      "after": "\u2013 Diagnosed and repaired software and hardware issues (Windows and Macintosh) (c++, communication)",
+      "reason": "Added ATS keywords seen in JD (limited to your allowed vocab)."
+    },
+    {
+      "section": "Work Experience",
+      "before": "\u2013 Used AutoCAD for basic drafting and 3D modeling of engineering plans",
+      "after": "\u2013 Used AutoCAD for basic drafting and 3D modeling of engineering plans (c++, communication)",
+      "reason": "Added ATS keywords seen in JD (limited to your allowed vocab)."
+    }
+  ]
+}
