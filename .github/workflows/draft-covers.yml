@@ -23,10 +23,12 @@ jobs:
         with: { python-version: '3.11' }
       - run: pip install -r requirements.txt
       - run: python scripts/draft_email.py --top ${{ github.event.inputs.top }}
-      - name: Commit cover drafts
+      - name: Commit cover drafts and resumes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/outbox/
-          git commit -m "Update cover drafts [skip ci]" || echo "No changes"
-          git push
+          git add docs/outbox/ -A || true
+          git add docs/resumes/ -A || true
+          git add docs/data/scores.json || true
+          git commit -m "Update materials (covers + resumes) [skip ci]" || echo "No changes"
+          git push || echo "No changes to push"
