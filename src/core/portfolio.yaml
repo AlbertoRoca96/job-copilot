@@ -1,3 +1,4 @@
+# src/core/portfolio.yaml
 # Curated accomplishments the generator can pull from.
 # Tweak wording freely; keep tags lowercase keywords used for matching.
 
@@ -17,6 +18,11 @@ projects:
         tags: [pwa, javascript, typescript, react, ml, pytorch, huggingface, inference]
       - text: "Implemented offline caching via service worker and web app manifest for robust mobile usage."
         tags: [pwa, service worker, offline, caching, web]
+      - text: "Refactored UI components to typed props/state for safer updates and clearer contracts."
+        tags: [typescript, react, frontend]
+      - text: "Timed preprocessing/inference path to keep interactive latency acceptable on mid-range devices."
+        tags: [performance, profiling, ml, inference]
+
   - name: "Scraping & Checks Scheduler"
     link: "https://github.com/AlbertoRoca96/scraping-checks-scheduler"
     bullets:
@@ -24,6 +30,11 @@ projects:
         tags: [playwright, automation, github actions, dashboard, scraping]
       - text: "Structured repo (src/, docs/, workflows/) with 1.5k+ commits and JSON/time-series outputs."
         tags: [repo hygiene, workflows, json, ci]
+      - text: "Added failure notifications and simple health checks for scheduled jobs."
+        tags: [ci, monitoring, pipeline]
+      - text: "Normalized scraped records and versioned outputs for reproducible comparisons."
+        tags: [data, pipeline, reproducibility]
+
   - name: "Retail Inventory Tracker (Expo + Supabase)"
     link: "https://github.com/AlbertoRoca96/retail-inventory-tracker"
     bullets:
@@ -31,16 +42,26 @@ projects:
         tags: [react native, expo, supabase, postgres, sql, auth]
       - text: "CI via EAS builds on GitHub Actions; ~390 commits."
         tags: [ci, github actions, mobile]
+      - text: "Designed basic Postgres schemas and row-level security for scoped access."
+        tags: [postgres, sql, rls, security, database]
+      - text: "Created small helper APIs and documented usage for teammates."
+        tags: [api design, documentation]
+
   - name: "Cryptocurrency Volatility Index (CVI)"
     link: "https://github.com/AlbertoRoca96/Cryptocurrency-Volatility-Index-CVI"
     bullets:
       - text: "Python + JS pipeline computes CVI and indicators, publishing a GitHub Pages dashboard (MIT-licensed)."
         tags: [python, data, indicators, dashboard]
+      - text: "Cached intermediate calculations and batched updates to keep rebuilds predictable."
+        tags: [pipeline, performance, caching, scheduling]
+
   - name: "Pokedex (OpenCV + ResNet-50)"
     link: "https://github.com/AlbertoRoca96/Pokedex"
     bullets:
       - text: "Real-time desktop Pokédex: OpenCV region capture, preprocessing, and fine-tuned ResNet-50 for top-1 classification."
-        tags: [opencv, pytorch, resnet, computer vision]
+        tags: [opencv, pytorch, resnet, computer vision, realtime]
+      - text: "Profiled frame pipeline and trimmed expensive transforms to reduce latency."
+        tags: [performance, profiling, optimization]
       - text: "Trigger TTS to speak flavor text on demand."
         tags: [tts, desktop]
 
@@ -51,27 +72,48 @@ work_experience:
     bullets:
       - text: "Resolved issues and guided patients/visitors with empathy and clear communication."
         tags: [communication, customer service, support]
+      - text: "Coordinated with staff to route requests efficiently during busy periods."
+        tags: [coordination, teamwork]
+
   - role: "Technical Support Representative"
     org: "Shentel — Lynchburg, VA"
     dates: "Jul 2018 – Sept 2018"
     bullets:
       - text: "Diagnosed and repaired software/hardware issues across Windows and macOS."
         tags: [troubleshooting, windows, mac]
+      - text: "Explained technical fixes in plain language to non-technical customers."
+        tags: [communication, support]
+
   - role: "Office Assistant"
     org: "Optimize Engineering — Farmville, VA"
     dates: "Sept 2014 – Jul 2017"
     bullets:
       - text: "Produced basic drafts and 3D models in AutoCAD to support engineers."
         tags: [autocad, cad]
+      - text: "Organized drawings and revisions for easier retrieval."
+        tags: [documentation, organization]
 
 workshops:
   - title: "IoT (Arduino) — Workshop I"
     date: "June 2025"
     bullets:
       - text: "Hands-on with sensors/actuators; wrote C/C++ sketches (pinMode, digitalRead/analogRead), covered basic IoT connectivity."
-        tags: [arduino, c, c++ , iot]
+        tags: [arduino, c, c++, iot]
+
   - title: "Making Python Fast with C Bindings / Agentic AI — Workshop II"
     date: "July 2025"
     bullets:
       - text: "Built Python C extensions (CPython API/Cython/cffi); demoed agentic AI with multi-step prompting and tool use."
         tags: [python, c, cython, cffi, performance, ai]
+
+# Optional global extras the tool can leverage for honest matching
+# (These are not rendered directly; they widen allowed vocabulary safely.)
+extras_allowlist:
+  - performance
+  - optimization
+  - profiling
+  - typescript
+  - api design
+  - database
+  - realtime
+  - accessibility
