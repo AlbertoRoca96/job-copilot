@@ -1,30 +1,63 @@
-# AI/ML-heavy example set — edit freely
-- type: greenhouse
-  slug: anthropic
-  include_keywords: ["engineer","ml","machine","data"]
-  exclude_keywords: ["staff","principal","director"]
+# Entry-level / new-grad SWE focus (Greenhouse + Lever)
 
-- type: greenhouse
-  slug: openai
-  include_keywords: ["engineer","ml","infrastructure","backend","fullstack","research"]
-  exclude_keywords: ["staff","principal","director"]
-
-- type: greenhouse
-  slug: scaleai
-  include_keywords: ["engineer","ml","data","platform","quality"]
-  exclude_keywords: ["staff","principal","director"]
-
+# ---- Greenhouse boards ----
 - type: greenhouse
   slug: stripe
-  include_keywords: ["engineer","ml","infrastructure","data"]
-  exclude_keywords: ["staff","principal","director"]
+  include_keywords: ["software","engineer","developer","new grad","new-grad","entry","junior","sde"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
 
 - type: greenhouse
   slug: notion
-  include_keywords: ["engineer","ml","backend","fullstack","data"]
-  exclude_keywords: ["staff","principal","director"]
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
 
 - type: greenhouse
-  slug: xai
-  include_keywords: ["engineer","ml","inference","infrastructure"]
-  exclude_keywords: ["staff","principal","director"]
+  slug: datadog
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+- type: greenhouse
+  slug: cloudflare
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+- type: greenhouse
+  slug: duolingo
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+- type: greenhouse
+  slug: coinbase
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+- type: greenhouse
+  slug: figma
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+- type: greenhouse
+  slug: brex
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+# ---- Lever boards ----
+- type: lever
+  slug: zapier
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+- type: lever
+  slug: mercury
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+- type: lever
+  slug: loom
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
+
+- type: lever
+  slug: khanacademy
+  include_keywords: ["software","engineer","developer","new grad","entry","junior","sde"]
+  exclude_keywords: ["senior","staff","principal","lead","manager","director"]
