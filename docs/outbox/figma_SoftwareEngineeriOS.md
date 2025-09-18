@@ -1,6 +1,6 @@
 Dear Hiring Team at Figma,
 
-I'm excited to apply for the **Software Engineer, Product Engineering** role. A quick fit snapshot:
+I'm excited to apply for the **Software Engineer, iOS** role. A quick fit snapshot:
 - Background: software / engineer / software engineer / machine / learning / machine learning / ml / data / data engineer / data scientist / full stack; hands-on with python, pytorch, opencv, javascript, typescript.
 - Highlights aligned to your needs:
   1) Built and shipped ML/engineering projects (Python).
@@ -14,4 +14,4 @@ Alberto Roca
 alberto.roca@live.longwood.edu | https://github.com/AlbertoRoca96 | (434)315-4194
 
 ---
-**Keyword Alignment (ATS-safe):** c++, communication, computer vision, data, engineer, java, learning, performance, python, react, software, support, typescript, web
+**Keyword Alignment (ATS-safe):** communication, computer vision, data, engineer, learning, mobile, python, react, software, support, typescript, web, workflows

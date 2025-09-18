@@ -12,7 +12,11 @@
     "skill_overlap": 0.1154,
     "title_similarity": 0.3636,
     "loc_boost": 0.0,
-    "score": 0.1783
+    "score": 0.1783,
+    "cover_file": "figma_SoftwareEngineerMachineLearning.md",
+    "cover_path": "outbox/figma_SoftwareEngineerMachineLearning.md",
+    "resume_md": "resumes/figma_SoftwareEngineerMachineLearning.md",
+    "resume_docx": "resumes/figma_SoftwareEngineerMachineLearning.docx"
   },
   {
     "title": "Software Engineer, Product Engineering",
@@ -27,7 +31,11 @@
     "skill_overlap": 0.1923,
     "title_similarity": 0.1818,
     "loc_boost": 0.0,
-    "score": 0.1699
+    "score": 0.1699,
+    "cover_file": "figma_SoftwareEngineerProductEngineering.md",
+    "cover_path": "outbox/figma_SoftwareEngineerProductEngineering.md",
+    "resume_md": "resumes/figma_SoftwareEngineerProductEngineering.md",
+    "resume_docx": "resumes/figma_SoftwareEngineerProductEngineering.docx"
   },
   {
     "title": "Software Engineer, C++",
@@ -42,7 +50,11 @@
     "skill_overlap": 0.1538,
     "title_similarity": 0.1818,
     "loc_boost": 0.0,
-    "score": 0.1469
+    "score": 0.1469,
+    "cover_file": "figma_SoftwareEngineerC.md",
+    "cover_path": "outbox/figma_SoftwareEngineerC.md",
+    "resume_md": "resumes/figma_SoftwareEngineerC.md",
+    "resume_docx": "resumes/figma_SoftwareEngineerC.docx"
   },
   {
     "title": "Software Engineer, Data Infrastructure",
@@ -57,7 +69,11 @@
     "skill_overlap": 0.0769,
     "title_similarity": 0.2727,
     "loc_boost": 0.0,
-    "score": 0.128
+    "score": 0.128,
+    "cover_file": "figma_SoftwareEngineerDataInfrastructure.md",
+    "cover_path": "outbox/figma_SoftwareEngineerDataInfrastructure.md",
+    "resume_md": "resumes/figma_SoftwareEngineerDataInfrastructure.md",
+    "resume_docx": "resumes/figma_SoftwareEngineerDataInfrastructure.docx"
   },
   {
     "title": "Software Engineer, iOS",
@@ -72,7 +88,11 @@
     "skill_overlap": 0.1154,
     "title_similarity": 0.1818,
     "loc_boost": 0.0,
-    "score": 0.1238
+    "score": 0.1238,
+    "cover_file": "figma_SoftwareEngineeriOS.md",
+    "cover_path": "outbox/figma_SoftwareEngineeriOS.md",
+    "resume_md": "resumes/figma_SoftwareEngineeriOS.md",
+    "resume_docx": "resumes/figma_SoftwareEngineeriOS.docx"
   },
   {
     "title": "Software Engineer, Product Engineering (London, United Kingdom)",

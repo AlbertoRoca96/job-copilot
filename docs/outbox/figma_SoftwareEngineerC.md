@@ -12,3 +12,6 @@ I’ve attached my resume and would love to share details on relevant projects. 
 Best,
 Alberto Roca
 alberto.roca@live.longwood.edu | https://github.com/AlbertoRoca96 | (434)315-4194
+
+---
+**Keyword Alignment (ATS-safe):** c++, communication, computer vision, data, engineer, learning, performance, python, react, software, support, typescript, workflows
