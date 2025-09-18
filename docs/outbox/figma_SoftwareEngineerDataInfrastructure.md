@@ -14,4 +14,4 @@ Alberto Roca
 alberto.roca@live.longwood.edu | https://github.com/AlbertoRoca96 | (434)315-4194
 
 ---
-**Keyword Alignment (ATS-safe):** ai, computer vision, data, engineer, learning, machine, machine learning, performance, python, software, sql, support, workflows, communication
+**Keyword Alignment (ATS-safe):** ai, communication, computer vision, data, engineer, learning, machine, machine learning, performance, python, software, sql, support, workflows

@@ -3,6 +3,7 @@
   "title": "Software Engineer, C++",
   "ats_keywords": [
     "c++",
+    "communication",
     "computer vision",
     "data",
     "engineer",
@@ -13,39 +14,26 @@
     "software",
     "support",
     "typescript",
-    "workflows",
-    "communication"
+    "workflows"
   ],
   "changes": [
     {
       "section": "Side Projects",
       "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  (typescript.",
-      "reason": "Inserted targeted JD keyword: typescript"
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).",
+      "reason": "Aligned to JD via policy clause: \u201cbuilt reliable data/annotation pipelines (GitHub Actions + SQL/Postgres)\u201d"
     },
     {
       "section": "Side Projects",
       "before": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex",
-      "after": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex (computer vision)",
-      "reason": "Inserted targeted JD keyword: computer vision"
+      "after": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex \u2014 profiled/optimized hot paths in C++ where needed.",
+      "reason": "Aligned to JD via policy clause: \u201cprofiled/optimized hot paths in C++ where needed\u201d"
     },
     {
       "section": "Side Projects",
-      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  (typescript.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  (typescript. (react.",
-      "reason": "Inserted targeted JD keyword: react"
-    },
-    {
-      "section": "Work Experience",
-      "before": "\u2013 Diagnosed and repaired software and hardware issues (Windows and Macintosh)",
-      "after": "\u2013 Diagnosed and repaired software and hardware issues (Windows and Macintosh) (workflows)",
-      "reason": "Inserted targeted JD keyword: workflows"
-    },
-    {
-      "section": "Work Experience",
-      "before": "\u2013 Used AutoCAD for basic drafting and 3D modeling of engineering plans",
-      "after": "\u2013 Used AutoCAD for basic drafting and 3D modeling of engineering plans (support)",
-      "reason": "Inserted targeted JD keyword: support"
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).; built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).",
+      "reason": "Aligned to JD via policy clause: \u201cbuilt reliable data/annotation pipelines (GitHub Actions + SQL/Postgres)\u201d"
     }
   ]
 }
