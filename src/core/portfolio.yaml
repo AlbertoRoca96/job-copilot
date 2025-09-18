@@ -1,0 +1,77 @@
+# Curated accomplishments the generator can pull from.
+# Tweak wording freely; keep tags lowercase keywords used for matching.
+
+education:
+  degree: "B.S. in Computer Science"
+  school: "Longwood University — Farmville, VA"
+  dates: "Jan 2022 – May 2025"
+  extras:
+    - "Upsilon Pi Epsilon (CS Honor Society)"
+  gpa: "3.19"
+
+projects:
+  - name: "Pointkedex (PWA + ML)"
+    link: "https://github.com/AlbertoRoca96/pointkedex"
+    bullets:
+      - text: "Built a progressive web app that identifies Pokémon using a fine-tuned model; shipped Model v3 and deployed inference to a Hugging Face Space."
+        tags: [pwa, javascript, typescript, react, ml, pytorch, huggingface, inference]
+      - text: "Implemented offline caching via service worker and web app manifest for robust mobile usage."
+        tags: [pwa, service worker, offline, caching, web]
+  - name: "Scraping & Checks Scheduler"
+    link: "https://github.com/AlbertoRoca96/scraping-checks-scheduler"
+    bullets:
+      - text: "Automated Playwright scrapes on a GitHub Actions cron; diffs changes and publishes a GitHub Pages dashboard."
+        tags: [playwright, automation, github actions, dashboard, scraping]
+      - text: "Structured repo (src/, docs/, workflows/) with 1.5k+ commits and JSON/time-series outputs."
+        tags: [repo hygiene, workflows, json, ci]
+  - name: "Retail Inventory Tracker (Expo + Supabase)"
+    link: "https://github.com/AlbertoRoca96/retail-inventory-tracker"
+    bullets:
+      - text: "Phone-first field audit app with Expo/React Native and Supabase (Auth/Postgres/Storage/RLS)."
+        tags: [react native, expo, supabase, postgres, sql, auth]
+      - text: "CI via EAS builds on GitHub Actions; ~390 commits."
+        tags: [ci, github actions, mobile]
+  - name: "Cryptocurrency Volatility Index (CVI)"
+    link: "https://github.com/AlbertoRoca96/Cryptocurrency-Volatility-Index-CVI"
+    bullets:
+      - text: "Python + JS pipeline computes CVI and indicators, publishing a GitHub Pages dashboard (MIT-licensed)."
+        tags: [python, data, indicators, dashboard]
+  - name: "Pokedex (OpenCV + ResNet-50)"
+    link: "https://github.com/AlbertoRoca96/Pokedex"
+    bullets:
+      - text: "Real-time desktop Pokédex: OpenCV region capture, preprocessing, and fine-tuned ResNet-50 for top-1 classification."
+        tags: [opencv, pytorch, resnet, computer vision]
+      - text: "Trigger TTS to speak flavor text on demand."
+        tags: [tts, desktop]
+
+work_experience:
+  - role: "Concierge"
+    org: "Centra Southside Community Hospital — Farmville, VA"
+    dates: "Aug 2021 – Present"
+    bullets:
+      - text: "Resolved issues and guided patients/visitors with empathy and clear communication."
+        tags: [communication, customer service, support]
+  - role: "Technical Support Representative"
+    org: "Shentel — Lynchburg, VA"
+    dates: "Jul 2018 – Sept 2018"
+    bullets:
+      - text: "Diagnosed and repaired software/hardware issues across Windows and macOS."
+        tags: [troubleshooting, windows, mac]
+  - role: "Office Assistant"
+    org: "Optimize Engineering — Farmville, VA"
+    dates: "Sept 2014 – Jul 2017"
+    bullets:
+      - text: "Produced basic drafts and 3D models in AutoCAD to support engineers."
+        tags: [autocad, cad]
+
+workshops:
+  - title: "IoT (Arduino) — Workshop I"
+    date: "June 2025"
+    bullets:
+      - text: "Hands-on with sensors/actuators; wrote C/C++ sketches (pinMode, digitalRead/analogRead), covered basic IoT connectivity."
+        tags: [arduino, c, c++ , iot]
+  - title: "Making Python Fast with C Bindings / Agentic AI — Workshop II"
+    date: "July 2025"
+    bullets:
+      - text: "Built Python C extensions (CPython API/Cython/cffi); demoed agentic AI with multi-step prompting and tool use."
+        tags: [python, c, cython, cffi, performance, ai]
