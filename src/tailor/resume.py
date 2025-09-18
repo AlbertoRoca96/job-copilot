@@ -9,6 +9,36 @@ from .policies import load_policies  # merges runtime + base
 
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{1,}")
 
+# Canonical tech casing for added clauses (keeps ATS-safe tokens but looks polished)
+CANON = {
+    "c++": "C++",
+    "python": "Python",
+    "pytorch": "PyTorch",
+    "tensorflow": "TensorFlow",
+    "scikit-learn": "scikit-learn",
+    "sklearn": "scikit-learn",
+    "xgboost": "XGBoost",
+    "javascript": "JavaScript",
+    "typescript": "TypeScript",
+    "react": "React",
+    "react native": "React Native",
+    "expo": "Expo",
+    "opencv": "OpenCV",
+    "sql": "SQL",
+    "postgres": "Postgres",
+    "postgresql": "Postgres",
+    "supabase": "Supabase",
+    "github actions": "GitHub Actions",
+    "ci": "CI",
+    "nlp": "NLP",
+    "ml": "ML",
+    "rag": "RAG",
+    "webassembly": "WebAssembly",
+    "wasm": "WebAssembly",
+}
+
+# --------------------- helpers & utilities ---------------------
+
 class ChangeLog:
     def __init__(self):
         self.items = []
@@ -64,26 +94,69 @@ def best_match_idx(source_lines: List[str], target_text: str) -> int:
     return i if scores[i] >= 0.58 else -1
 
 def copy_format(from_run: Run, to_run: Run):
+    """Clone dominant run formatting (font, size, emphasis, style)."""
     try:
         to_run.font.name = from_run.font.name
         to_run.font.size = from_run.font.size
         to_run.font.bold = from_run.font.bold
         to_run.font.italic = from_run.font.italic
         to_run.font.underline = from_run.font.underline
+        # copy run style (avoids default 'Normal' look)
+        try:
+            to_run.style = from_run.style
+        except Exception:
+            pass
     except Exception:
         pass
+
+def _dominant_nonlink_run(p: Paragraph) -> Optional[Run]:
+    """Pick the run that best represents the bullet's body text (not the hyperlink)."""
+    best, best_len = None, -1
+    for r in p.runs:
+        txt = (r.text or "")
+        # skip empty & hyperlink-styled runs
+        style_name = (getattr(r.style, "name", "") or "").lower()
+        if not txt.strip():
+            continue
+        if "hyperlink" in style_name:
+            continue
+        L = len(txt.strip())
+        if L > best_len:
+            best, best_len = r, L
+    # fallback: last non-empty run
+    if best is None:
+        for r in reversed(p.runs):
+            if (r.text or "").strip():
+                return r
+    return best
+
+def canonicalize_clause(clause: str) -> str:
+    """Replace lowercased tech tokens with canonical casing."""
+    s = clause or ""
+    # Longer keys first (e.g., 'react native' before 'react')
+    for k in sorted(CANON.keys(), key=len, reverse=True):
+        pattern = re.compile(rf"\b{re.escape(k)}\b", flags=re.IGNORECASE)
+        s = pattern.sub(CANON[k], s)
+    return s
 
 def append_clause(p: Paragraph, clause: str):
     if not clause:
         return
+    clause = canonicalize_clause(clause.strip())
+    # decide separator based on existing punctuation
     sep = "; " if p.text.strip().endswith((")", "]", "”", "\"", ".", "…")) else " — "
     add = f"{sep}{clause}."
+    # choose the base run to inherit formatting from
+    base = _dominant_nonlink_run(p)
+    if base is None:
+        # simple add if we can't detect a base run
+        p.add_run(add)
+        return
+    # add run and clone formatting
     r = p.add_run(add)
-    last = next((run for run in reversed(p.runs) if normalize_ws(run.text)), None)
-    if last:
-        copy_format(last, r)
+    copy_format(base, r)
 
-# ---- policy scoring (prefer LLM/runtime, prefer specific cues, avoid generic spam) ----
+# --------------------- policy scoring & selection ---------------------
 
 _GENERIC = {"data", "software", "engineer", "engineering"}
 
@@ -113,7 +186,7 @@ def choose_policy_for_sentence(sentence: str,
         if lc_clause in used_clauses:
             continue
 
-        req = set(pol.get("requires_any") or [])
+        req = set((pol.get("requires_any") or []))
         if req and not (allowed_vocab & req):
             continue
 
@@ -163,7 +236,7 @@ def rewrite_bullets_in_section(paragraphs: List[Paragraph],
         if len(before) > 350:
             continue
         append_clause(p, clause)
-        logger.add(section_label, before, p.text, reason=f"Aligned to JD via clause: “{clause}”")
+        logger.add(section_label, before, p.text, reason=f"Aligned to JD via clause: “{canonicalize_clause(clause)}”")
         rewrites += 1
 
 def reorder_or_annotate_skills(paragraphs: List[Paragraph],
