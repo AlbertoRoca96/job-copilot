@@ -1,4 +1,7 @@
-import os, json, yaml
+import os, sys, json, yaml
+# --- Make src/ importable when run from Actions or locally ---
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from src.core.scoring import score_job
 
 DATA = os.path.join(os.path.dirname(__file__), '..', 'data', 'jobs.jsonl')
@@ -22,12 +25,12 @@ def main():
 
     jobs.sort(key=lambda x: x['score'], reverse=True)
 
-    # jsonl (for history)
+    # jsonl (history)
     with open(OUTL, 'w') as f:
         for j in jobs:
             f.write(json.dumps(j) + '\n')
 
-    # json array (for dashboard)
+    # json array (dashboard)
     os.makedirs(os.path.join(os.path.dirname(__file__), '..', 'docs', 'data'), exist_ok=True)
     with open(OUTJ, 'w') as f:
         json.dump(jobs, f, indent=2)
