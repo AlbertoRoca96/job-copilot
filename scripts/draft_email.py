@@ -44,6 +44,11 @@ def allowed_vocab(profile: dict, portfolio: dict):
     expanded = {norm(w) for w in (skills | tags | titles)}
     return sorted(expanded | skills | tags | titles)
 
+def tokens(text: str):
+    import re
+    WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{1,}")
+    return set(WORD_RE.findall((text or "").lower()))
+
 def jd_keywords(job: dict, allowed: set, cap=24):
     jtoks = [norm(w) for w in (tokens(job.get("title","")) | tokens(job.get("description","")))]
     freq = {}
@@ -65,7 +70,6 @@ def portfolio_targets(portfolio: dict):
             txt = (b.get("text","") or "").strip()
             if txt:
                 targets["Work Experience"].append(txt)
-    # de-dup
     for k, arr in list(targets.items()):
         seen=set(); uniq=[]
         for t in arr:
@@ -81,7 +85,6 @@ def safe_name(s: str) -> str:
 # -------- JD live fetch + artifact helpers --------
 
 def fetch_jd_plaintext(job_url: str, timeout=20) -> str:
-    """Best-effort fetch of a JD page, return clean visible text."""
     if not job_url:
         return ""
     try:
@@ -90,11 +93,9 @@ def fetch_jd_plaintext(job_url: str, timeout=20) -> str:
         })
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
-        # Try common body containers first; fall back to whole page text
         main = soup.select_one(".content, .opening, .job, .application, article, main, #content")
         if not main:
             main = soup
-        # Remove non-content
         for tag in main(["script","style","noscript","nav","header","footer","form"]):
             tag.decompose()
         text = " ".join(main.get_text(separator=" ", strip=True).split())
@@ -103,17 +104,13 @@ def fetch_jd_plaintext(job_url: str, timeout=20) -> str:
         return ""
 
 def pick_jd_text(job_obj: dict) -> str:
-    """Prefer the crawled description; if it's too short, fetch the live page text."""
     desc = (job_obj.get("description") or "").strip()
     if len(desc) >= 800:
         return desc
     live = fetch_jd_plaintext(job_obj.get("url",""))
-    # Use whichever is longer / more informative
-    use = live if len(live) > len(desc) else desc
-    return use
+    return live if len(live) > len(desc) else desc
 
 def write_jd_artifacts(slug: str, jd_text: str, out_dir: str):
-    """Save what the LLM actually saw, and print a log line with length + hash."""
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"{slug}.jd.txt")
     with open(path, "w") as f:
@@ -125,7 +122,6 @@ def write_jd_artifacts(slug: str, jd_text: str, out_dir: str):
 
 def main(top: int):
     with open(PROFILE_YAML, 'r') as f: profile = yaml.safe_load(f) or {}
-    # portfolio.yaml is required for bullet picking; handle missing file gently
     if os.path.exists(PORTFOLIO_YAML):
         with open(PORTFOLIO_YAML, 'r') as f: portfolio = yaml.safe_load(f) or {}
     else:
@@ -161,30 +157,30 @@ def main(top: int):
     }
     print(f"LLM: {'using model ' + model if use_llm else 'disabled or missing OPENAI_API_KEY (fallback to deterministic)'}")
 
+    def jd_sha(s: str) -> str:
+        return hashlib.sha1((s or "").encode("utf-8")).hexdigest()[:8]
+
     for j in jobs[:top]:
         safe_company = safe_name(j.get('company',''))
         safe_title   = safe_name(j.get('title',''))
         slug = f"{safe_company}_{safe_title}"[:150]
 
         # ---- Use real JD text (live fetch when needed) ----
-        jd_text = pick_jd_text(j)
-        if not jd_text:
-            jd_text = (j.get("description") or "")
-        tmp_job = dict(j)
-        tmp_job["description"] = jd_text
+        jd_text = pick_jd_text(j) or (j.get("description") or "")
+        tmp_job = dict(j); tmp_job["description"] = jd_text
         jd_kws = jd_keywords(tmp_job, vocab)
         write_jd_artifacts(slug=slug, jd_text=jd_text[:20000], out_dir=CHANGES_DIR)
+        jd_hash = jd_sha(jd_text)
 
-        # Optional: get per-job policies from LLM and write policies.runtime.yaml
+        # Optional: get per-job policies from LLM
         job_llm_count = 0
         if use_llm:
             llm_items = suggest_policies(
                 os.getenv("OPENAI_API_KEY"),
                 j.get("title",""),
-                jd_text,               # <— use full text we just fetched
+                jd_text,
                 list(vocab),
             )
-            # Stamp JD cues so they pass the JD check
             for it in llm_items:
                 if not it.get("jd_cues"):
                     it["jd_cues"] = jd_kws[:8]
@@ -204,11 +200,19 @@ def main(top: int):
         with open(os.path.join(OUTBOX_MD, cover_fname), 'w') as f: f.write(cover)
         j['cover_file'] = cover_fname
         j['cover_path'] = f"outbox/{cover_fname}"
-        drafted_covers += 1
 
-        # RESUME — deterministic + (optionally) LLM-driven runtime policies
-        out_docx = os.path.join(RESUMES_MD, f"{slug}.docx")
+        # RESUME — hashed filename + metadata stamp
+        out_docx_name = f"{slug}_{jd_hash}.docx"
+        out_docx = os.path.join(RESUMES_MD, out_docx_name)
         doc = Document(BASE_RESUME)
+        # Embed provenance into docx properties
+        try:
+            cp = doc.core_properties
+            cp.comments = f"job-copilot:{slug}:{jd_hash}"
+            cp.subject = j.get("title","")
+            cp.keywords = ", ".join(jd_kws[:12])
+        except Exception:
+            pass
         targets = portfolio_targets(portfolio)
         changes = tailor_docx_in_place(
             doc,
@@ -217,13 +221,15 @@ def main(top: int):
             allowed_vocab_list=sorted(vocab),
         )
         doc.save(out_docx)
-        j['resume_docx'] = f"resumes/{os.path.basename(out_docx)}"
+        j['resume_docx'] = f"resumes/{out_docx_name}"
+        j['resume_docx_hash'] = jd_hash  # used for cache-busting on the dashboard
 
         explain = {
             "company": j.get("company",""),
             "title": j.get("title",""),
             "ats_keywords": jd_kws,
-            "changes": changes
+            "changes": changes,
+            "jd_hash": jd_hash
         }
         changes_fname = f"{slug}.json"
         with open(os.path.join(CHANGES_DIR, changes_fname), 'w') as f:
@@ -231,12 +237,10 @@ def main(top: int):
         j['changes_path'] = f"changes/{changes_fname}"
 
         llm_summary["jobs"].append({"slug": slug, "runtime_policy_count": job_llm_count})
-        drafted_resumes += 1
+        drafted_covers += 1; drafted_resumes += 1
 
-    # Save updated jobs (with paths)
+    # Save updated jobs (with paths + hash)
     with open(DATA_JSON, 'w') as f: json.dump(jobs, f, indent=2)
-
-    # Write LLM info marker
     with open(os.path.join(DATA_DIR, "llm_info.json"), "w") as f:
         json.dump(llm_summary, f, indent=2)
 
