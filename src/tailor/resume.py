@@ -13,99 +13,87 @@ def normalize_ws(s: str) -> str:
 
 def find_section_ranges(doc: Document, section_titles: List[str]) -> Dict[str, Tuple[int,int]]:
     """
-    Returns {title: (start_idx, end_idx_exclusive)} for paragraphs whose text
-    matches a section heading (case-insensitive exact match after trimming).
-    If a section is not found, it's omitted.
+    Return {lowercased_title: (start_idx, end_idx_exclusive)} for paragraphs whose text
+    equals a section heading (case-insensitive, trimmed). If not found, omit.
     """
-    # normalize titles
-    want = [normalize_ws(t).lower() for t in section_titles]
-    idx_by_title = {}
+    wants = [normalize_ws(t).lower() for t in section_titles]
+    hits = {}
     for i, p in enumerate(doc.paragraphs):
         t = normalize_ws(p.text).lower()
-        for w in want:
+        for w in wants:
             if t == w:
-                idx_by_title[w] = i
-
+                hits[w] = i
+    # build ranges
     ranges = {}
-    # build ranges by next heading (order of appearance)
-    sorted_hits = sorted(idx_by_title.items(), key=lambda kv: kv[1])
+    sorted_hits = sorted(hits.items(), key=lambda kv: kv[1])
     for k, start in sorted_hits:
-        # end is next hit start or end of doc
-        later_starts = [v for kk, v in sorted_hits if v > start]
-        end = later_starts[0] if later_starts else len(doc.paragraphs)
+        later = [v for _, v in sorted_hits if v > start]
+        end = later[0] if later else len(doc.paragraphs)
         ranges[k] = (start, end)
     return ranges
 
 def paragraph_is_bullet(p) -> bool:
-    """
-    Heuristic: treat paragraph as bullet if its style name contains 'List' or it has numbering/bullet formatting.
-    python-docx doesn't expose list props directly without deeper XML;
-    style name heuristic works on most resumes exported from Word/Google Docs.
-    """
     name = (p.style.name or "").lower()
     if "list" in name or "bullet" in name or "number" in name:
         return True
-    # fallback simple bullets like "•", "-", "·" at start
-    if normalize_ws(p.text).startswith(("•", "-", "–", "·")):
-        return True
-    return False
+    # fallback for inline bullets
+    t = normalize_ws(p.text)
+    return t.startswith(("•", "-", "–", "·"))
 
 def best_match_idx(source_lines: List[str], target_text: str) -> int:
-    """Find the index in source_lines whose text is most similar to target_text (0..1 score), return -1 if very low."""
     target = normalize_ws(target_text)
     if not target:
         return -1
     scores = [difflib.SequenceMatcher(None, normalize_ws(s), target).ratio() for s in source_lines]
     if not scores:
         return -1
-    best_i = max(range(len(scores)), key=lambda i: scores[i])
-    return best_i if scores[best_i] >= 0.55 else -1  # threshold; tweak if needed
+    i = max(range(len(scores)), key=lambda k: scores[k])
+    return i if scores[i] >= 0.58 else -1  # slightly strict so we don't rewrite the wrong bullet
 
 def reorder_skills_line(text: str, prioritized: List[str]) -> str:
     """
-    Given a comma-separated skills line, move prioritized skills to the front (keeping the same punctuation).
-    This preserves your single-line skills formatting but surfaces ATS keywords earlier.
+    Keep your single-line skills format, move prioritized terms forward IF they already exist.
     """
     items = [normalize_ws(x) for x in re.split(r",\s*", text) if x.strip()]
     if not items:
         return text
-    # map lowercase -> original to preserve casing as written
-    original_by_lc = {x.lower(): x for x in items}
-    seen = set()
-    ordered = []
+    by_lc = {x.lower(): x for x in items}
+    seen, ordered = set(), []
     for k in prioritized:
         lc = k.lower()
-        if lc in original_by_lc and lc not in seen:
-            ordered.append(original_by_lc[lc]); seen.add(lc)
+        if lc in by_lc and lc not in seen:
+            ordered.append(by_lc[lc]); seen.add(lc)
     for x in items:
         if x.lower() not in seen:
             ordered.append(x)
     return ", ".join(ordered)
 
-def inject_keywords_into_sentence(sentence: str, kws: List[str]) -> str:
+def inject_keywords_parenthetical(sentence: str, kws: List[str]) -> str:
     """
-    Light-touch augmentation: if sentence doesn't already contain a keyword, append a concise parenthetical
-    with up to 2 missing keywords to match JD phrasing. Keeps bullet intact and avoids style changes.
+    Append up to 2 *missing* keywords in a tiny parenthetical. Does not change style or structure.
+    Only adds keywords that aren't already present.
     """
-    existing = tokens(sentence)
-    missing = [k for k in kws if k.lower() not in existing]
+    present = tokens(sentence)
+    missing = [k for k in kws if k.lower() not in present]
     if not missing:
         return sentence
     add = ", ".join(missing[:2])
-    # prefer ending with a short parenthetical
+    if not add:
+        return sentence
     if sentence.endswith("."):
         return sentence[:-1] + f" ({add})."
     return sentence + f" ({add})"
 
-def rewrite_bullets_in_section(paragraphs, start: int, end: int, target_bullets: List[str], ats_keywords: List[str], max_rewrites=3):
+def rewrite_bullets_in_section(paragraphs, start: int, end: int,
+                               target_bullets: List[str], ats_keywords: List[str],
+                               max_rewrites=3):
     """
-    Within [start,end), find bullet paragraphs and rewrite up to max_rewrites that best
-    match target_bullets (from portfolio). We do *surgical* edits: replace only the text (keeps style).
+    Inside [start,end), find bullet paragraphs and rewrite up to max_rewrites by
+    appending a tiny ATS keyword parenthetical. We pick bullets that best match your
+    curated portfolio bullets so we touch relevant lines.
     """
-    # collect bullet paragraph indices and their texts
     bullet_idxs = [i for i in range(start, end) if paragraph_is_bullet(paragraphs[i])]
     bullet_texts = [normalize_ws(paragraphs[i].text) for i in bullet_idxs]
-    # plan rewrites
     rewrites = 0
     for tb in target_bullets:
         if rewrites >= max_rewrites:
@@ -114,20 +102,22 @@ def rewrite_bullets_in_section(paragraphs, start: int, end: int, target_bullets:
         if j == -1:
             continue
         para_idx = bullet_idxs[j]
-        # apply ATS-visible but truthful tweak
-        new_text = inject_keywords_into_sentence(paragraphs[para_idx].text, ats_keywords)
-        paragraphs[para_idx].text = new_text
+        paragraphs[para_idx].text = inject_keywords_parenthetical(paragraphs[para_idx].text, ats_keywords)
         rewrites += 1
 
 def rewrite_skills(paragraphs, start: int, end: int, prioritized_keywords: List[str]):
     """
-    Find a likely skills line in [start,end) (non-bullet, comma-separated) and reorder terms
-    to bring prioritized keywords forward. Keeps same paragraph/style.
+    Reorder the FIRST non-bullet, comma-separated paragraph after the 'Technical Skills'
+    heading (most resumes use that line). We only reorder terms already present.
     """
     for i in range(start, end):
         p = paragraphs[i]
         t = normalize_ws(p.text)
-        if not paragraph_is_bullet(p) and ("," in t) and len(t) < 400 and "skills" in t.lower():
+        if not t:             # skip empty spacing
+            continue
+        if paragraph_is_bullet(p):
+            continue
+        if "," in t and len(t) < 500:
             p.text = reorder_skills_line(p.text, prioritized_keywords)
             return
 
@@ -136,30 +126,33 @@ def tailor_docx_in_place(doc: Document,
                          ats_keywords: List[str],
                          prioritized_skills: List[str]):
     """
-    Keeps the doc structure; tweaks:
-      - Side Projects / Work Experience: rewrite up to 3 bullets with ATS-safe keywords
-      - Technical Skills: reorder line to surface prioritized skills first
-    portfolio_bullets: {"Side Projects": [bullet_texts], "Work Experience": [bullet_texts]}
+    No new paragraphs/sections. We only:
+      - add tiny ATS parentheticals to up to 3 bullets in Projects/Work Experience
+      - reorder the first line under 'Technical Skills'
     """
-    # Sections we aim for (case-insensitive exact title text)
-    ranges = find_section_ranges(doc, ["Side Projects", "Work Experience", "Technical Skills", "Projects"])
+    # headings your resume uses
+    ranges = find_section_ranges(doc, [
+        "Education",
+        "Side Projects", "Projects",
+        "Work Experience",
+        "Technical Skills",
+        "Workshops",
+        "References",
+    ])
     pars = doc.paragraphs
 
-    # Projects / Side Projects
-    for sec_name in ["Side Projects", "Projects"]:
-        key = sec_name.lower()
-        if key in ranges:
-            s, e = ranges[key]
-            rewrite_bullets_in_section(pars, s, e, portfolio_bullets.get(sec_name, []), ats_keywords, max_rewrites=3)
+    # Projects
+    for sec in ("side projects", "projects"):
+        if sec in ranges:
+            s, e = ranges[sec]
+            rewrite_bullets_in_section(pars, s, e, portfolio_bullets.get("Side Projects", []) + portfolio_bullets.get("Projects", []), ats_keywords, max_rewrites=3)
 
     # Work Experience
-    key = "work experience"
-    if key in ranges:
-        s, e = ranges[key]
+    if "work experience" in ranges:
+        s, e = ranges["work experience"]
         rewrite_bullets_in_section(pars, s, e, portfolio_bullets.get("Work Experience", []), ats_keywords, max_rewrites=3)
 
-    # Technical Skills — reorder once
-    key = "technical skills"
-    if key in ranges:
-        s, e = ranges[key]
+    # Technical Skills
+    if "technical skills" in ranges:
+        s, e = ranges["technical skills"]
         rewrite_skills(pars, s, e, prioritized_skills)
