@@ -1,7 +1,16 @@
+# Python
 .venv/
 __pycache__/
 *.pyc
+
+# Local data caches
 data/*.sqlite
 data/*.db
-outbox/
+
+# Ignore only the ROOT outbox; allow the dashboard covers in docs/outbox
+/outbox/
+!docs/outbox/
+!docs/outbox/**
+
+# OS cruft
 *.DS_Store
