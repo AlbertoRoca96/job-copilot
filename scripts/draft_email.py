@@ -4,13 +4,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from src.tailor.render import render_cover
 from src.tailor.resume import tokens, tailor_docx_in_place
 from docx import Document
-from src.ai.llm import suggest_policies  # <— NEW
+from src.ai.llm import suggest_policies  # LLM (optional)
 
 DATA_JSONL = os.path.join(os.path.dirname(__file__), '..', 'data', 'scores.jsonl')
 DATA_JSON  = os.path.join(os.path.dirname(__file__), '..', 'docs', 'data', 'scores.json')
 OUTBOX_MD  = os.path.join(os.path.dirname(__file__), '..', 'docs', 'outbox')
 RESUMES_MD = os.path.join(os.path.dirname(__file__), '..', 'docs', 'resumes')
 CHANGES_DIR= os.path.join(os.path.dirname(__file__), '..', 'docs', 'changes')
+DATA_DIR   = os.path.join(os.path.dirname(__file__), '..', 'docs', 'data')
 PROFILE_YAML   = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'profile.yaml')
 PORTFOLIO_YAML = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'portfolio.yaml')
 TMPL_DIR       = os.path.join(os.path.dirname(__file__), '..', 'src', 'tailor', 'templates')
@@ -87,18 +88,29 @@ def main(top: int):
     os.makedirs(OUTBOX_MD, exist_ok=True)
     os.makedirs(RESUMES_MD, exist_ok=True)
     os.makedirs(CHANGES_DIR, exist_ok=True)
+    os.makedirs(DATA_DIR, exist_ok=True)
 
     drafted_covers = drafted_resumes = 0
 
     use_llm = os.getenv("USE_LLM","0") == "1" and bool(os.getenv("OPENAI_API_KEY"))
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+    llm_summary = {
+        "used": bool(use_llm),
+        "model": model if use_llm else None,
+        "jobs": []
+    }
+    print(f"LLM: {'using model ' + model if use_llm else 'disabled or missing OPENAI_API_KEY (fallback to deterministic)'}")
 
     for j in jobs[:top]:
         safe_company = safe_name(j.get('company',''))
         safe_title   = safe_name(j.get('title',''))
+        slug = f"{safe_company}_{safe_title}"[:150]
 
         jd_kws = jd_keywords(j, vocab)
 
         # Optional: get per-job policies from LLM and write policies.runtime.yaml
+        job_llm_count = 0
         if use_llm:
             llm_items = suggest_policies(
                 os.getenv("OPENAI_API_KEY"),
@@ -106,19 +118,20 @@ def main(top: int):
                 j.get("description",""),
                 list(vocab),
             )
-            # stamp them as JD-cued by adding jd_cues=jd_kws (broad) so they pass the check
+            # stamp JD cues so they pass the JD check
             for it in llm_items:
                 if not it.get("jd_cues"):
                     it["jd_cues"] = jd_kws[:8]
             with open(RUNTIME_POL, "w") as rf:
                 yaml.safe_dump(llm_items, rf)
+            job_llm_count = len(llm_items)
+            print(f"LLM: generated {job_llm_count} runtime policies for {slug}")
         else:
-            # clear runtime file if any (to avoid stale rules)
             if os.path.exists(RUNTIME_POL):
                 os.remove(RUNTIME_POL)
 
         # COVER
-        cover_fname = f"{safe_company}_{safe_title}.md"[:150]
+        cover_fname = f"{slug}.md"
         cover = render_cover(j, PROFILE_YAML, TMPL_DIR)
         if jd_kws:
             cover += "\n\n---\n**Keyword Alignment (ATS-safe):** " + ", ".join(jd_kws) + "\n"
@@ -128,7 +141,7 @@ def main(top: int):
         drafted_covers += 1
 
         # RESUME — deterministic + (optionally) LLM-driven runtime policies
-        out_docx = os.path.join(RESUMES_MD, f"{safe_company}_{safe_title}.docx"[:150])
+        out_docx = os.path.join(RESUMES_MD, f"{slug}.docx")
         doc = Document(BASE_RESUME)
         targets = portfolio_targets(portfolio)
         changes = tailor_docx_in_place(
@@ -146,14 +159,20 @@ def main(top: int):
             "ats_keywords": jd_kws,
             "changes": changes
         }
-        changes_fname = f"{safe_company}_{safe_title}.json"[:150]
+        changes_fname = f"{slug}.json"
         with open(os.path.join(CHANGES_DIR, changes_fname), 'w') as f:
             json.dump(explain, f, indent=2)
         j['changes_path'] = f"changes/{changes_fname}"
 
+        llm_summary["jobs"].append({"slug": slug, "runtime_policy_count": job_llm_count})
         drafted_resumes += 1
 
+    # Save updated jobs (with paths)
     with open(DATA_JSON, 'w') as f: json.dump(jobs, f, indent=2)
+
+    # Write LLM info marker
+    with open(os.path.join(DATA_DIR, "llm_info.json"), "w") as f:
+        json.dump(llm_summary, f, indent=2)
 
     print(f"Drafted {drafted_covers} cover letters -> {OUTBOX_MD}")
     print(f"Drafted {drafted_resumes} tailored resumes -> {RESUMES_MD}")
