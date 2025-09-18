@@ -61,3 +61,10 @@ location_policy:
   remote_only: true
   allowed_countries: ["US", "United States"]   # future: enforce US-only if you disable remote_only
   allowed_states: []                            # future: e.g. ["VA","DC","MD","NC","WV"]
+
+# --- search policy (optional) ---
+# Keep jobs posted within the last N days. If require_posted_date is true,
+# drop jobs that don't expose a date.
+search_policy:
+  recency_days: 14
+  require_posted_date: false
