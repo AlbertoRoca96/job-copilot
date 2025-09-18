@@ -1,18 +1,12 @@
-// Classic table renderer + scrollable Explain modal
+// Classic table renderer + scrollable Explain modal (+ Posted column + cache-busted resumes)
 (async function () {
   const statusEl = document.getElementById('status');
   const table = document.getElementById('jobs');
   const tbody = table ? table.querySelector('tbody') : null;
 
-  function showStatus(msg) {
-    if (statusEl) statusEl.textContent = msg;
-  }
-  function hideStatus() {
-    if (statusEl) statusEl.classList.add('hidden');
-  }
-  function showTable() {
-    if (table) table.classList.remove('hidden');
-  }
+  function showStatus(msg) { if (statusEl) statusEl.textContent = msg; }
+  function hideStatus() { if (statusEl) statusEl.classList.add('hidden'); }
+  function showTable() { if (table) table.classList.remove('hidden'); }
 
   // Fetch shortlist
   let jobs = [];
@@ -28,6 +22,17 @@
 
   // Sort by score desc
   jobs.sort((a, b) => (b.score || 0) - (a.score || 0));
+
+  // If header exists and has no "Posted" column, try to insert one
+  try {
+    const theadRow = table?.querySelector('thead tr');
+    if (theadRow && theadRow.children.length === 7) {
+      const th = document.createElement('th');
+      th.textContent = 'Posted';
+      // Insert after "Location" (index 3)
+      theadRow.insertBefore(th, theadRow.children[4]);
+    }
+  } catch {}
 
   // Render rows
   if (tbody) {
@@ -54,6 +59,11 @@
       const tdLoc = document.createElement('td');
       tdLoc.textContent = (j.location || '').trim();
       tr.appendChild(tdLoc);
+
+      // NEW: Posted date column (YYYY-MM-DD if available)
+      const tdPosted = document.createElement('td');
+      tdPosted.textContent = j.posted_at ? String(j.posted_at).slice(0, 10) : '—';
+      tr.appendChild(tdPosted);
 
       const tdCover = document.createElement('td');
       if (j.cover_path) {
