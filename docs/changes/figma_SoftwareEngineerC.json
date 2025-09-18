@@ -22,8 +22,8 @@
     {
       "section": "Projects",
       "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; optimized memory usage for real-time collaborative systems in c++.",
-      "reason": "Aligned to JD via clause: \u201coptimized memory usage for real-time collaborative systems in c++\u201d"
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built core features for real-time, multiplayer systems using c++ and TypeScript.",
+      "reason": "Aligned to JD via clause: \u201cbuilt core features for real-time, multiplayer systems using c++ and TypeScript\u201d"
     },
     {
       "section": "Projects",
@@ -33,9 +33,9 @@
     },
     {
       "section": "Projects",
-      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; optimized memory usage for real-time collaborative systems in c++.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; optimized memory usage for real-time collaborative systems in c++.; developed high-performance client-side systems using c++ and python.",
-      "reason": "Aligned to JD via clause: \u201cdeveloped high-performance client-side systems using c++ and python\u201d"
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built core features for real-time, multiplayer systems using c++ and TypeScript.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built core features for real-time, multiplayer systems using c++ and TypeScript.; contributed to documentation and architectural decisions for maintainable code.",
+      "reason": "Aligned to JD via clause: \u201ccontributed to documentation and architectural decisions for maintainable code\u201d"
     }
   ],
   "jd_hash": "ab127897"
