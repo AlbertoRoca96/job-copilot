@@ -1,0 +1,57 @@
+# src/tailor/policies.yaml
+# Each policy adds ONE short clause to a bullet when BOTH the JD and the bullet context match.
+# Only applied if the candidate already claims at least one required skill (requires_any).
+
+- id: ml_modeling
+  jd_cues: ["model", "training", "evaluation", "deploy", "inference"]
+  bullet_cues: ["model", "vision", "resnet", "pytorch", "classification", "inference"]
+  requires_any: ["python", "pytorch"]
+  clause: "shipped ML models with Python/PyTorch and iterative evaluation loops"
+
+- id: search_ranking_rag
+  jd_cues: ["search", "retrieval", "ranking", "rag"]
+  bullet_cues: ["search", "retrieve", "index", "dataset", "vector", "embedding"]
+  requires_any: ["python"]
+  clause: "experimented with retrieval/ranking and dataset curation for relevance"
+
+- id: data_pipelines
+  jd_cues: ["pipeline", "dataset", "data", "annotation"]
+  bullet_cues: ["pipeline", "cron", "github", "actions", "scrape", "supabase", "sql", "postgres"]
+  requires_any: ["github actions", "sql", "postgresql"]
+  clause: "built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres)"
+
+- id: mlops_infra
+  jd_cues: ["mlops", "observability", "ci", "monitor", "deployment"]
+  bullet_cues: ["github", "actions", "ci", "cron", "monitor", "deploy"]
+  requires_any: ["github actions"]
+  clause: "added CI/monitoring hooks for model/data jobs"
+
+- id: product_collab
+  jd_cues: ["product", "features", "impact", "cross-functional", "collaborate"]
+  bullet_cues: ["app", "pwa", "react", "ui", "prototype", "space"]
+  requires_any: ["react", "react native"]
+  clause: "partnered on user-facing features with quick prototypes (React/React Native)"
+
+- id: tensorflow
+  jd_cues: ["tensorflow", "keras"]
+  bullet_cues: ["model", "training", "inference"]
+  requires_any: ["python"]
+  clause: "ported experiments to TensorFlow where appropriate"
+
+- id: sklearn_xgboost
+  jd_cues: ["scikit", "sklearn", "xgboost"]
+  bullet_cues: ["classification", "regression", "feature"]
+  requires_any: ["python"]
+  clause: "ran baselines with scikit-learn/XGBoost for fast iteration"
+
+- id: nlp
+  jd_cues: ["nlp", "language", "token", "text"]
+  bullet_cues: ["text", "search", "retrieve"]
+  requires_any: ["python"]
+  clause: "tokenized/cleaned text corpora and evaluated simple retrieval baselines"
+
+- id: cplusplus
+  jd_cues: ["c++", "cpp"]
+  bullet_cues: ["opencv", "resnet", "vision", "performance"]
+  requires_any: ["c++"]
+  clause: "profiled/optimized hot paths in C++ where needed"
