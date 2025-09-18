@@ -6,7 +6,7 @@ from docx import Document
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 
-from .policies import load_policies  # loads YAML + runtime policies
+from .policies import load_policies
 
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{1,}")
 
@@ -81,25 +81,61 @@ def append_clause(p: Paragraph, clause: str):
     if last:
         copy_format(last, r)
 
-def choose_policy_for_sentence(sentence: str, jd_vocab: Set[str], allowed_vocab: Set[str], policies, used_clauses: Set[str]) -> str | None:
+_GENERIC = {"data", "software", "engineer", "engineering"}
+
+def _policy_score(policy, stoks: Set[str], jd_vocab: Set[str]) -> float:
+    # Overlap signals
+    jd_cues = set(policy.get("jd_cues") or [])
+    bullet_cues = set(policy.get("bullet_cues") or [])
+    overlap_jd = len(jd_vocab & jd_cues) if jd_cues else 0
+    overlap_bul = len(stoks & bullet_cues) if bullet_cues else 0
+
+    # Penalties for generic cues that cause spammy matches
+    penalty = 0.0
+    if jd_cues and all(c in _GENERIC for c in jd_cues):
+        penalty -= 1.0
+    # LLM/runtime boost
+    boost = 1.0 if policy.get("_source") == "runtime" else 0.0
+
+    return 2.0 * overlap_jd + 1.0 * overlap_bul + boost + penalty
+
+def choose_policy_for_sentence(sentence: str,
+                               jd_vocab: Set[str],
+                               allowed_vocab: Set[str],
+                               policies,
+                               used_clauses: Set[str]) -> str | None:
     stoks = tokens(sentence)
+    best = None
+    best_score = -1e9
+
     for pol in policies:
-        clause = (pol.get("clause") or "").strip().lower()
-        if not clause or clause in used_clauses:
+        clause = (pol.get("clause") or "").strip()
+        if not clause:
             continue
-        # JD cues must overlap current JD vocab if provided
-        jd_cues = set(x.lower() for x in (pol.get("jd_cues") or []))
-        if jd_cues and not (jd_vocab & jd_cues):
+        lc_clause = clause.lower()
+        if lc_clause in used_clauses:
             continue
-        # Bullet must be a plausible anchor
-        if not (stoks & set(pol.get("bullet_cues", []))):
-            continue
+
+        # Requires_any (candidate actually claims)
         req = set(pol.get("requires_any") or [])
         if req and not (allowed_vocab & req):
             continue
-        used_clauses.add(clause)  # reserve so we never add it twice in this doc
-        return pol["clause"]
-    return None
+
+        # Must have plausible anchor in the sentence
+        bullet_cues = set(pol.get("bullet_cues") or [])
+        if bullet_cues and not (stoks & bullet_cues):
+            continue
+
+        score = _policy_score(pol, stoks, jd_vocab)
+        if score > best_score:
+            best_score = score
+            best = pol
+
+    if not best or best_score <= 0:
+        return None
+
+    used_clauses.add(best["clause"].lower())
+    return best["clause"]
 
 def rewrite_bullets_in_section(paragraphs,
                                start: int, end: int,
@@ -137,7 +173,8 @@ def rewrite_bullets_in_section(paragraphs,
 
 def reorder_or_annotate_skills(paragraphs, start: int, end: int, prioritized: List[str], logger: ChangeLog):
     def reorder_line_text(text: str, prio: List[str]) -> str:
-        items = [normalize_ws(x) for x in re.split(r",\s*", text) if x.strip()]
+        import re as _re
+        items = [normalize_ws(x) for x in _re.split(r",\s*", text) if x.strip()]
         if not items:
             return text
         by_lc = {x.lower(): x for x in items}
@@ -162,14 +199,16 @@ def reorder_or_annotate_skills(paragraphs, start: int, end: int, prioritized: Li
             after = reorder_line_text(before, prio_present)
             if after != before:
                 p.runs[0].text = after
-                logger.add("Technical Skills", before, after, reason="Reordered to surface JD-matching skills already present.")
+                logger.add("Technical Skills", before, after,
+                           reason="Reordered to surface JD-matching skills already present.")
         else:
             if prio_present:
                 before = p.text
                 r = p.add_run(f" (Priority: {', '.join(prio_present[:6])})")
                 last = next((run for run in reversed(p.runs) if normalize_ws(run.text)), None)
                 if last: copy_format(last, r)
-                logger.add("Technical Skills", before, p.text, reason="Annotated priorities without altering styling.")
+                logger.add("Technical Skills", before, p.text,
+                           reason="Annotated priorities without altering styling.")
         return  # only the first candidate line
 
 def tailor_docx_in_place(doc: Document,
@@ -177,7 +216,7 @@ def tailor_docx_in_place(doc: Document,
                          jd_keywords: List[str],
                          allowed_vocab_list: List[str]):
     logger = ChangeLog()
-    policies = load_policies()
+    policies = load_policies()  # now merges runtime first
     jd_vocab = set(k.lower() for k in jd_keywords)
     allowed_vocab = set(k.lower() for k in allowed_vocab_list)
     used_clauses = set()
@@ -203,6 +242,4 @@ def tailor_docx_in_place(doc: Document,
         s, e = ranges["work experience"]
         rewrite_bullets_in_section(pars, s, e, portfolio_bullets.get("Work Experience", []),
                                    jd_vocab, allowed_vocab, policies, logger,
-                                   "Work Experience", max_rewrites=3, used_clauses=used_clauses)
-
-    return logger.items
+                                   "Work Experience",
