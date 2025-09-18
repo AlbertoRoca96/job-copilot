@@ -1,10 +1,16 @@
-import os, sys, json, re, yaml
+import os, sys, json, re, yaml, hashlib, textwrap
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.tailor.render import render_cover
 from src.tailor.resume import tokens, tailor_docx_in_place
 from docx import Document
-from src.ai.llm import suggest_policies  # LLM (optional)
+
+# LLM (optional)
+from src.ai.llm import suggest_policies
+
+# JD fetching
+import requests
+from bs4 import BeautifulSoup
 
 DATA_JSONL = os.path.join(os.path.dirname(__file__), '..', 'data', 'scores.jsonl')
 DATA_JSON  = os.path.join(os.path.dirname(__file__), '..', 'docs', 'data', 'scores.json')
@@ -27,8 +33,8 @@ SYNONYMS = {
 def norm(w): return SYNONYMS.get((w or "").strip().lower(), (w or "").strip().lower())
 
 def allowed_vocab(profile: dict, portfolio: dict):
-    skills = {s.lower() for s in profile.get("skills", [])}
-    titles = {t.lower() for t in profile.get("target_titles", [])}
+    skills = {s.lower() for s in (profile.get("skills") or [])}
+    titles = {t.lower() for t in (profile.get("target_titles") or [])}
     tags = set()
     for section in ("projects", "work_experience", "workshops"):
         for item in (portfolio.get(section, []) or []):
@@ -50,11 +56,15 @@ def portfolio_targets(portfolio: dict):
     targets = {"Side Projects": [], "Projects": [], "Work Experience": []}
     for p in (portfolio.get("projects", []) or []):
         for b in (p.get("bullets", []) or []):
-            targets["Side Projects"].append(b.get("text",""))
-            targets["Projects"].append(b.get("text",""))
+            txt = (b.get("text","") or "").strip()
+            if txt: 
+                targets["Side Projects"].append(txt)
+                targets["Projects"].append(txt)
     for w in (portfolio.get("work_experience", []) or []):
         for b in (w.get("bullets", []) or []):
-            targets["Work Experience"].append(b.get("text",""))
+            txt = (b.get("text","") or "").strip()
+            if txt:
+                targets["Work Experience"].append(txt)
     # de-dup
     for k, arr in list(targets.items()):
         seen=set(); uniq=[]
@@ -68,9 +78,58 @@ def portfolio_targets(portfolio: dict):
 def safe_name(s: str) -> str:
     return ''.join(c for c in (s or '') if c.isalnum() or c in ('-', '_')).strip()
 
+# -------- JD live fetch + artifact helpers --------
+
+def fetch_jd_plaintext(job_url: str, timeout=20) -> str:
+    """Best-effort fetch of a JD page, return clean visible text."""
+    if not job_url:
+        return ""
+    try:
+        r = requests.get(job_url, timeout=timeout, headers={
+            "User-Agent": "Mozilla/5.0 job-copilot-bot"
+        })
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+        # Try common body containers first; fall back to whole page text
+        main = soup.select_one(".content, .opening, .job, .application, article, main, #content")
+        if not main:
+            main = soup
+        # Remove non-content
+        for tag in main(["script","style","noscript","nav","header","footer","form"]):
+            tag.decompose()
+        text = " ".join(main.get_text(separator=" ", strip=True).split())
+        return text
+    except Exception:
+        return ""
+
+def pick_jd_text(job_obj: dict) -> str:
+    """Prefer the crawled description; if it's too short, fetch the live page text."""
+    desc = (job_obj.get("description") or "").strip()
+    if len(desc) >= 800:
+        return desc
+    live = fetch_jd_plaintext(job_obj.get("url",""))
+    # Use whichever is longer / more informative
+    use = live if len(live) > len(desc) else desc
+    return use
+
+def write_jd_artifacts(slug: str, jd_text: str, out_dir: str):
+    """Save what the LLM actually saw, and print a log line with length + hash."""
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, f"{slug}.jd.txt")
+    with open(path, "w") as f:
+        f.write(jd_text)
+    sha = hashlib.sha1(jd_text.encode("utf-8")).hexdigest()[:10]
+    print(f"JD[{slug}]: {len(jd_text)} chars (sha1 {sha}) -> docs/changes/{slug}.jd.txt")
+
+# --------------------------------------------------
+
 def main(top: int):
-    with open(PROFILE_YAML, 'r') as f: profile = yaml.safe_load(f)
-    with open(PORTFOLIO_YAML, 'r') as f: portfolio = yaml.safe_load(f)
+    with open(PROFILE_YAML, 'r') as f: profile = yaml.safe_load(f) or {}
+    # portfolio.yaml is required for bullet picking; handle missing file gently
+    if os.path.exists(PORTFOLIO_YAML):
+        with open(PORTFOLIO_YAML, 'r') as f: portfolio = yaml.safe_load(f) or {}
+    else:
+        portfolio = {"projects": [], "work_experience": [], "workshops": []}
 
     vocab = set(allowed_vocab(profile, portfolio))
 
@@ -107,7 +166,14 @@ def main(top: int):
         safe_title   = safe_name(j.get('title',''))
         slug = f"{safe_company}_{safe_title}"[:150]
 
-        jd_kws = jd_keywords(j, vocab)
+        # ---- Use real JD text (live fetch when needed) ----
+        jd_text = pick_jd_text(j)
+        if not jd_text:
+            jd_text = (j.get("description") or "")
+        tmp_job = dict(j)
+        tmp_job["description"] = jd_text
+        jd_kws = jd_keywords(tmp_job, vocab)
+        write_jd_artifacts(slug=slug, jd_text=jd_text[:20000], out_dir=CHANGES_DIR)
 
         # Optional: get per-job policies from LLM and write policies.runtime.yaml
         job_llm_count = 0
@@ -115,10 +181,10 @@ def main(top: int):
             llm_items = suggest_policies(
                 os.getenv("OPENAI_API_KEY"),
                 j.get("title",""),
-                j.get("description",""),
+                jd_text,               # <— use full text we just fetched
                 list(vocab),
             )
-            # stamp JD cues so they pass the JD check
+            # Stamp JD cues so they pass the JD check
             for it in llm_items:
                 if not it.get("jd_cues"):
                     it["jd_cues"] = jd_kws[:8]
