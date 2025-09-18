@@ -23,8 +23,8 @@
     {
       "section": "Projects",
       "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; engaged in communication with cross-functional teams for project alignment.",
-      "reason": "Aligned to JD via clause: \u201cengaged in communication with cross-functional teams for project alignment\u201d"
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; implemented optimization techniques for improved performance in applications.",
+      "reason": "Aligned to JD via clause: \u201cimplemented optimization techniques for improved performance in applications\u201d"
     },
     {
       "section": "Projects",
@@ -34,9 +34,9 @@
     },
     {
       "section": "Projects",
-      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; engaged in communication with cross-functional teams for project alignment.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; engaged in communication with cross-functional teams for project alignment.; implemented performance optimization techniques for user-facing features.",
-      "reason": "Aligned to JD via clause: \u201cimplemented performance optimization techniques for user-facing features\u201d"
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; implemented optimization techniques for improved performance in applications.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; implemented optimization techniques for improved performance in applications.; built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).",
+      "reason": "Aligned to JD via clause: \u201cbuilt reliable data/annotation pipelines (GitHub Actions + SQL/Postgres)\u201d"
     }
   ],
   "jd_hash": "6df99e0e"
