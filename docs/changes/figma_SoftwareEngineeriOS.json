@@ -18,10 +18,16 @@
   ],
   "changes": [
     {
-      "section": "Side Projects",
+      "section": "Projects",
       "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
       "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).",
-      "reason": "Aligned to JD via policy clause: \u201cbuilt reliable data/annotation pipelines (GitHub Actions + SQL/Postgres)\u201d"
+      "reason": "Aligned to JD via clause: \u201cbuilt reliable data/annotation pipelines (GitHub Actions + SQL/Postgres)\u201d"
+    },
+    {
+      "section": "Projects",
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).; built typed UI components in TypeScript with predictable props/state.",
+      "reason": "Aligned to JD via clause: \u201cbuilt typed UI components in TypeScript with predictable props/state\u201d"
     }
   ],
   "jd_hash": "4141b413"
