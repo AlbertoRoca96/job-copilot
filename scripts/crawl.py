@@ -1,4 +1,7 @@
-import yaml, json, os
+import os, sys, yaml, json
+# --- Make src/ importable when run from Actions or locally ---
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from src.ingest.greenhouse import crawl_greenhouse
 from src.ingest.lever import crawl_lever
 
@@ -29,7 +32,7 @@ def main():
 
         for j in items:
             title_l = j['title'].lower()
-            if inc and not any(k in title_l for k in inc): 
+            if inc and not any(k in title_l for k in inc):
                 continue
             if exc and any(k in title_l for k in exc):
                 continue
