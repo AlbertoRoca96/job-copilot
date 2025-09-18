@@ -8,7 +8,7 @@ _SYSTEM = """You are a careful resume-tailoring assistant.
 Return compact JSON ONLY. Do not fabricate experience or years.
 Use the job description provided verbatim to guide suggestions.
 Suggest short, honest clauses to APPEND to existing bullets (not whole bullets).
-Each is <= 14 words, declarative, neutral tone, resume-ready.
+Each clause is <= 14 words, declarative, neutral tone, resume-ready.
 No buzzwords, no adjectives like 'world-class', no exaggeration."""
 
 _USER_TMPL = """JOB TITLE:
@@ -22,12 +22,14 @@ ALLOWED VOCAB (candidate truly claims):
 
 RETURN JSON (array) with objects:
   - clause: short sentence fragment to append (no trailing period)
-  - context: one of [model,pipeline,search,rag,product,ci,nlp,vision,database,frontend,mobile]
+  - context: one of [model,pipeline,search,rag,product,ci,nlp,vision,database,frontend,mobile,cxx,performance,wasm,multiplayer,api,accessibility]
   - requires_any: list of 1-3 tokens from ALLOWED VOCAB that justify the clause
 
 HARD RULES:
-- You MUST use only technologies that appear in BOTH the JD and ALLOWED VOCAB.
-- Avoid repeating a concept/context; each suggestion must cover a different idea.
+- Use ONLY technologies/terms present in BOTH the JD AND ALLOWED VOCAB.
+- Avoid generic words (FORBIDDEN: ai, automation, workflows, cutting-edge, world-class, synergy).
+- Each suggestion must cover a DIFFERENT context (no repeated contexts).
+- Prefer concrete JD terms (e.g., 'ranking', 'retrieval', 'WebAssembly', 'multiplayer', 'SceneGraph') when in ALLOWED VOCAB.
 - 3 to 5 items total.
 - No markdown, ONLY valid JSON."""
 
@@ -41,8 +43,7 @@ def _post(api_key: str, messages):
 def suggest_policies(api_key: str, job_title: str, job_desc: str, allowed_vocab: list[str]) -> list[dict]:
     if not api_key:
         return []
-    # safety: limit desc size (API + token budget)
-    desc = (job_desc or "")[:8000]
+    desc = (job_desc or "")[:8000]  # token safety
     prompt = _USER_TMPL.format(
         title=job_title or "",
         desc=desc,
@@ -56,29 +57,34 @@ def suggest_policies(api_key: str, job_title: str, job_desc: str, allowed_vocab:
         content = data["choices"][0]["message"]["content"].strip()
         items = json.loads(content)
         out = []
-        seen = set()
+        seen_clause = set()
+        seen_ctx = set()
+        CUE_MAP = {
+            "model": ["model","pytorch","tensorflow","resnet","inference","classification","training"],
+            "pipeline": ["pipeline","cron","github","actions","sql","postgres","dataset","annotation","etl"],
+            "search": ["search","ranking","retrieve","index","vector","embedding","relevance"],
+            "rag": ["retrieval","rag","chunk","embedding","index"],
+            "product": ["app","ui","pwa","react","prototype","feature"],
+            "ci": ["ci","monitor","deploy","github","actions","workflow"],
+            "nlp": ["language","nlp","text","token"],
+            "vision": ["vision","opencv","image","resnet"],
+            "database": ["database","sql","postgres","supabase"],
+            "frontend": ["react","ui","component","typescript"],
+            "mobile": ["react native","expo","mobile"],
+            "cxx": ["c++","cpp","opencv"],
+            "performance": ["performance","latency","memory","optimize"],
+            "wasm": ["wasm","webassembly"],
+            "multiplayer": ["multiplayer","protocol","collaboration"],
+            "api": ["api","sdk","interface","tooling"],
+            "accessibility": ["accessibility","a11y"],
+        }
         for i, it in enumerate(items[:5]):
             clause = (it.get("clause") or "").strip().strip(".")
-            if not clause or clause.lower() in seen:
-                continue
-            seen.add(clause.lower())
             ctx = (it.get("context") or "").strip().lower()
             req = [str(x).strip().lower() for x in (it.get("requires_any") or [])][:3]
-            if not ctx:
+            if not clause or not ctx or clause.lower() in seen_clause or ctx in seen_ctx:
                 continue
-            CUE_MAP = {
-                "model": ["model","pytorch","tensorflow","resnet","inference","classification","training"],
-                "pipeline": ["pipeline","cron","github","actions","sql","postgres","dataset","annotation","etl"],
-                "search": ["search","ranking","retrieve","index","vector","embedding","relevance"],
-                "rag": ["retrieval","rag","chunk","embedding","index"],
-                "product": ["app","ui","pwa","react","prototype","feature"],
-                "ci": ["ci","monitor","deploy","github","actions","workflow"],
-                "nlp": ["language","nlp","text","token"],
-                "vision": ["vision","opencv","image","resnet"],
-                "database": ["database","sql","postgres","supabase"],
-                "frontend": ["react","ui","component"],
-                "mobile": ["react native","expo","mobile"],
-            }
+            seen_clause.add(clause.lower()); seen_ctx.add(ctx)
             bullet_cues = CUE_MAP.get(ctx, [ctx])
             out.append({
                 "id": f"llm_{i}",
