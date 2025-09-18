@@ -1,0 +1,37 @@
+{
+  "company": "vercel",
+  "title": "Software Engineer, Build InfrastructureHybrid - London, Berlin",
+  "ats_keywords": [
+    "ai",
+    "ci",
+    "communication",
+    "computer vision",
+    "engineer",
+    "javascript",
+    "linux",
+    "performance",
+    "software",
+    "typescript"
+  ],
+  "changes": [
+    {
+      "section": "Projects",
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built and maintained distributed systems for improved performance.",
+      "reason": "Aligned to JD via clause: \u201cbuilt and maintained distributed systems for improved performance\u201d"
+    },
+    {
+      "section": "Projects",
+      "before": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex",
+      "after": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex \u2014 profiled hotspots and reduced latency/memory in C++ paths.",
+      "reason": "Aligned to JD via clause: \u201cprofiled hotspots and reduced latency/memory in C++ paths\u201d"
+    },
+    {
+      "section": "Projects",
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built and maintained distributed systems for improved performance.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built and maintained distributed systems for improved performance.; engaged with open-source projects to enhance framework performance.",
+      "reason": "Aligned to JD via clause: \u201cengaged with open-source projects to enhance framework performance\u201d"
+    }
+  ],
+  "jd_hash": "90433a7c"
+}

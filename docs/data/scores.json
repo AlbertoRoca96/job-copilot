@@ -12,7 +12,12 @@
     "skill_overlap": 0.1538,
     "title_similarity": 0.1818,
     "loc_boost": 0.0,
-    "score": 0.1469
+    "score": 0.1469,
+    "cover_file": "vercel_SoftwareEngineerMicrofrontendsRemote-UnitedKingdomGermany.md",
+    "cover_path": "outbox/vercel_SoftwareEngineerMicrofrontendsRemote-UnitedKingdomGermany.md",
+    "resume_docx": "resumes/vercel_SoftwareEngineerMicrofrontendsRemote-UnitedKingdomGermany_03902732.docx",
+    "resume_docx_hash": "03902732",
+    "changes_path": "changes/vercel_SoftwareEngineerMicrofrontendsRemote-UnitedKingdomGermany.json"
   },
   {
     "title": "Software Engineer, Data Infrastructure",
@@ -27,7 +32,12 @@
     "skill_overlap": 0.0769,
     "title_similarity": 0.2727,
     "loc_boost": 0.0,
-    "score": 0.128
+    "score": 0.128,
+    "cover_file": "figma_SoftwareEngineerDataInfrastructure.md",
+    "cover_path": "outbox/figma_SoftwareEngineerDataInfrastructure.md",
+    "resume_docx": "resumes/figma_SoftwareEngineerDataInfrastructure_0fb57b72.docx",
+    "resume_docx_hash": "0fb57b72",
+    "changes_path": "changes/figma_SoftwareEngineerDataInfrastructure.json"
   },
   {
     "title": "Software Engineer, Build InfrastructureHybrid - London, Berlin",
@@ -42,7 +52,12 @@
     "skill_overlap": 0.1154,
     "title_similarity": 0.1818,
     "loc_boost": 0.0,
-    "score": 0.1238
+    "score": 0.1238,
+    "cover_file": "vercel_SoftwareEngineerBuildInfrastructureHybrid-LondonBerlin.md",
+    "cover_path": "outbox/vercel_SoftwareEngineerBuildInfrastructureHybrid-LondonBerlin.md",
+    "resume_docx": "resumes/vercel_SoftwareEngineerBuildInfrastructureHybrid-LondonBerlin_90433a7c.docx",
+    "resume_docx_hash": "90433a7c",
+    "changes_path": "changes/vercel_SoftwareEngineerBuildInfrastructureHybrid-LondonBerlin.json"
   },
   {
     "title": "Software Engineer, Build InfrastructureRemote - United Kingdom, Germany",
@@ -57,7 +72,12 @@
     "skill_overlap": 0.1154,
     "title_similarity": 0.1818,
     "loc_boost": 0.0,
-    "score": 0.1238
+    "score": 0.1238,
+    "cover_file": "vercel_SoftwareEngineerBuildInfrastructureRemote-UnitedKingdomGermany.md",
+    "cover_path": "outbox/vercel_SoftwareEngineerBuildInfrastructureRemote-UnitedKingdomGermany.md",
+    "resume_docx": "resumes/vercel_SoftwareEngineerBuildInfrastructureRemote-UnitedKingdomGermany_7ccc9845.docx",
+    "resume_docx_hash": "7ccc9845",
+    "changes_path": "changes/vercel_SoftwareEngineerBuildInfrastructureRemote-UnitedKingdomGermany.json"
   },
   {
     "title": "Product Engineer \u2013 v0Hybrid - San Francisco, New York City",
@@ -72,7 +92,12 @@
     "skill_overlap": 0.1538,
     "title_similarity": 0.0909,
     "loc_boost": 0.0,
-    "score": 0.1196
+    "score": 0.1196,
+    "cover_file": "vercel_ProductEngineerv0Hybrid-SanFranciscoNewYorkCity.md",
+    "cover_path": "outbox/vercel_ProductEngineerv0Hybrid-SanFranciscoNewYorkCity.md",
+    "resume_docx": "resumes/vercel_ProductEngineerv0Hybrid-SanFranciscoNewYorkCity_60bf03b9.docx",
+    "resume_docx_hash": "60bf03b9",
+    "changes_path": "changes/vercel_ProductEngineerv0Hybrid-SanFranciscoNewYorkCity.json"
   },
   {
     "title": "Software Engineer, Infrastructure",

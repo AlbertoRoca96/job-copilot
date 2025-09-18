@@ -1,0 +1,41 @@
+{
+  "company": "vercel",
+  "title": "Product Engineer \u2013 v0Hybrid - San Francisco, New York City",
+  "ats_keywords": [
+    "ai",
+    "automation",
+    "communication",
+    "computer vision",
+    "engineer",
+    "frontend",
+    "javascript",
+    "learning",
+    "performance",
+    "python",
+    "react",
+    "support",
+    "typescript",
+    "web"
+  ],
+  "changes": [
+    {
+      "section": "Projects",
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; collaborated with engineers to integrate ai models into workflows.",
+      "reason": "Aligned to JD via clause: \u201ccollaborated with engineers to integrate ai models into workflows\u201d"
+    },
+    {
+      "section": "Projects",
+      "before": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex",
+      "after": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex \u2014 profiled hotspots and reduced latency/memory in C++ paths.",
+      "reason": "Aligned to JD via clause: \u201cprofiled hotspots and reduced latency/memory in C++ paths\u201d"
+    },
+    {
+      "section": "Projects",
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; collaborated with engineers to integrate ai models into workflows.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; collaborated with engineers to integrate ai models into workflows.; implemented automation solutions for seamless integration with existing systems.",
+      "reason": "Aligned to JD via clause: \u201cimplemented automation solutions for seamless integration with existing systems\u201d"
+    }
+  ],
+  "jd_hash": "60bf03b9"
+}

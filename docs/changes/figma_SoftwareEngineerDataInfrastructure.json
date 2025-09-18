@@ -22,8 +22,8 @@
     {
       "section": "Projects",
       "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; designed and built distributed data systems for analytics and ai.",
-      "reason": "Aligned to JD via clause: \u201cdesigned and built distributed data systems for analytics and ai\u201d"
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; designed and built distributed data systems for analytics and machine learning.",
+      "reason": "Aligned to JD via clause: \u201cdesigned and built distributed data systems for analytics and machine learning\u201d"
     },
     {
       "section": "Projects",
@@ -33,8 +33,8 @@
     },
     {
       "section": "Projects",
-      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; designed and built distributed data systems for analytics and ai.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; designed and built distributed data systems for analytics and ai.; developed batch and streaming solutions for reliable data processing.",
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; designed and built distributed data systems for analytics and machine learning.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; designed and built distributed data systems for analytics and machine learning.; developed batch and streaming solutions for reliable data processing.",
       "reason": "Aligned to JD via clause: \u201cdeveloped batch and streaming solutions for reliable data processing\u201d"
     }
   ],
