@@ -1,95 +1,176 @@
-// docs/site.js
+// Classic table renderer + scrollable Explain modal
 (async function () {
-  const loadingEl = document.getElementById('loading');
-  const errorEl = document.getElementById('error');
-  const list = document.getElementById('jobs');
+  const statusEl = document.getElementById('status');
+  const table = document.getElementById('jobs');
+  const tbody = table ? table.querySelector('tbody') : null;
 
-  function doneLoading() {
-    if (loadingEl) loadingEl.style.display = 'none';
+  function showStatus(msg) {
+    if (statusEl) statusEl.textContent = msg;
   }
-  function showError(msg) {
-    console.error('[job-copilot] ', msg);
-    if (errorEl) {
-      errorEl.textContent = String(msg);
-      errorEl.style.display = 'block';
-    } else {
-      alert(msg);
-    }
+  function hideStatus() {
+    if (statusEl) statusEl.classList.add('hidden');
   }
-  function el(tag, attrs = {}, text = '') {
-    const e = document.createElement(tag);
-    Object.entries(attrs || {}).forEach(([k, v]) => e.setAttribute(k, v));
-    if (text) e.textContent = text;
-    return e;
+  function showTable() {
+    if (table) table.classList.remove('hidden');
   }
 
+  // Fetch shortlist
+  let jobs = [];
   try {
-    if (!list) {
-      throw new Error('Missing #jobs container in index.html');
-    }
-
-    // Fetch with explicit no-cache; GitHub Pages can cache aggressively.
     const res = await fetch('data/scores.json', { cache: 'no-cache' });
-    if (!res.ok) {
-      throw new Error(`Failed to fetch data/scores.json (HTTP ${res.status})`);
-    }
-    const contentType = res.headers.get('content-type') || '';
-    if (!contentType.includes('application/json') && !contentType.includes('text/json')) {
-      console.warn('scores.json content-type:', contentType);
-    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    jobs = await res.json();
+  } catch (e) {
+    showStatus('Failed to load scores.json');
+    console.error(e);
+    return;
+  }
 
-    const jobs = await res.json();
-    if (!Array.isArray(jobs)) {
-      throw new Error('scores.json is not an array. Did the workflow write the new format?');
-    }
+  // Sort by score desc
+  jobs.sort((a, b) => (b.score || 0) - (a.score || 0));
 
-    // Sort and render
-    jobs.sort((a, b) => (b.score || 0) - (a.score || 0));
+  // Render rows
+  if (tbody) {
+    jobs.forEach(j => {
+      const tr = document.createElement('tr');
 
-    for (const j of jobs) {
-      const card = el('div', { class: 'card' });
+      const tdScore = document.createElement('td');
+      tdScore.textContent = (j.score ?? 0).toFixed(3);
+      tr.appendChild(tdScore);
 
-      const title = (j.title || '').trim();
-      const company = (j.company || '').trim();
-      const h = el('h3', {}, title && company ? `${title} @ ${company}` : (title || company || 'Untitled role'));
-      card.appendChild(h);
+      const tdTitle = document.createElement('td');
+      const aJD = document.createElement('a');
+      aJD.href = j.url || '#';
+      aJD.target = '_blank';
+      aJD.rel = 'noopener';
+      aJD.textContent = j.title || '(no title)';
+      tdTitle.appendChild(aJD);
+      tr.appendChild(tdTitle);
 
-      const loc = (j.location || '').trim();
-      if (loc) card.appendChild(el('p', { class: 'muted' }, loc));
+      const tdCompany = document.createElement('td');
+      tdCompany.textContent = j.company || '';
+      tr.appendChild(tdCompany);
 
-      const links = el('div', { class: 'actions' });
+      const tdLoc = document.createElement('td');
+      tdLoc.textContent = (j.location || '').trim();
+      tr.appendChild(tdLoc);
 
-      if (j.url) {
-        links.appendChild(el('a', { href: j.url, target: '_blank', rel: 'noopener' }, 'JD'));
-      }
+      const tdCover = document.createElement('td');
       if (j.cover_path) {
-        links.appendChild(el('a', { href: j.cover_path, target: '_blank', rel: 'noopener' }, 'Cover'));
+        const a = document.createElement('a');
+        a.href = j.cover_path;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.textContent = 'Open';
+        tdCover.appendChild(a);
+      } else {
+        tdCover.textContent = '—';
       }
+      tr.appendChild(tdCover);
+
+      const tdResume = document.createElement('td');
       if (j.resume_docx) {
         const hash = j.resume_docx_hash ? `?v=${j.resume_docx_hash}` : `?t=${Date.now()}`;
-        links.appendChild(el('a', { href: j.resume_docx + hash }, 'Resume (DOCX)'));
+        const a = document.createElement('a');
+        a.href = j.resume_docx + hash;
+        a.textContent = 'DOCX';
+        tdResume.appendChild(a);
+      } else {
+        tdResume.textContent = '—';
       }
+      tr.appendChild(tdResume);
+
+      const tdExplain = document.createElement('td');
       if (j.changes_path) {
-        links.appendChild(el('a', { href: j.changes_path, target: '_blank', rel: 'noopener' }, 'Explain'));
+        const btn = document.createElement('button');
+        btn.className = 'btn';
+        btn.textContent = 'Explain';
+        btn.addEventListener('click', () => openExplain(j));
+        tdExplain.appendChild(btn);
+      } else {
+        tdExplain.textContent = '—';
       }
-      card.appendChild(links);
+      tr.appendChild(tdExplain);
 
-      const kws = Array.isArray(j.ats_keywords) ? j.ats_keywords : [];
-      if (kws.length) {
-        const tagwrap = el('div', { class: 'tags' });
-        kws.slice(0, 18).forEach(k => tagwrap.appendChild(el('span', { class: 'tag' }, k)));
-        card.appendChild(tagwrap);
-      }
-
-      list.appendChild(card);
-    }
-
-    if (!jobs.length) {
-      list.appendChild(el('div', { class: 'notice' }, 'No jobs found. Run the workflows (crawl → rank → draft-covers) to populate this list.'));
-    }
-  } catch (err) {
-    showError(err.message || err);
-  } finally {
-    doneLoading();
+      tbody.appendChild(tr);
+    });
   }
+
+  hideStatus();
+  showTable();
+
+  // -------- Explain modal ----------
+  const modal = document.getElementById('explainModal');
+  const closeBtn = document.getElementById('closeExplain');
+  const titleEl = document.getElementById('explainTitle');
+  const keywordsEl = document.getElementById('explainKeywords');
+  const changesEl = document.getElementById('explainChanges');
+
+  async function openExplain(job) {
+    titleEl.textContent = `${job.title || ''} @ ${job.company || ''}`;
+
+    // ATS keywords
+    keywordsEl.innerHTML = '';
+    const kws = Array.isArray(job.ats_keywords) ? job.ats_keywords : (job.keywords || []);
+    if (kws && kws.length) {
+      kws.slice(0, 24).forEach(k => {
+        const span = document.createElement('span');
+        span.className = 'pill';
+        span.textContent = k;
+        keywordsEl.appendChild(span);
+      });
+    }
+
+    // Diff cards
+    changesEl.innerHTML = '';
+    try {
+      const res = await fetch(job.changes_path, { cache: 'no-cache' });
+      if (res.ok) {
+        const data = await res.json();
+        const changes = Array.isArray(data.changes) ? data.changes : [];
+        changes.forEach(ch => {
+          const row = document.createElement('div');
+          row.className = 'diffrow';
+
+          const left = document.createElement('div');
+          left.className = 'diffcol';
+          left.innerHTML = `<strong>${ch.section || ''} — before</strong>\n\n${ch.before || ''}`;
+
+          const right = document.createElement('div');
+          right.className = 'diffcol';
+          right.innerHTML = `<strong>${ch.section || ''} — after</strong>\n\n${ch.after || ''}`;
+
+          const reason = document.createElement('div');
+          reason.className = 'muted';
+          reason.style.fontSize = '12px';
+          reason.style.marginTop = '4px';
+          reason.textContent = `Reason: ${ch.reason || ''}`;
+
+          changesEl.appendChild(row);
+          row.appendChild(left);
+          row.appendChild(right);
+          changesEl.appendChild(reason);
+        });
+      }
+    } catch (e) {
+      console.error(e);
+    }
+
+    // Open modal
+    modal.style.display = 'block';
+    document.body.classList.add('modal-open');
+  }
+
+  function closeExplain() {
+    modal.style.display = 'none';
+    document.body.classList.remove('modal-open');
+  }
+
+  closeBtn?.addEventListener('click', closeExplain);
+  modal?.addEventListener('click', (e) => {
+    if (e.target === modal) closeExplain();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.style.display === 'block') closeExplain();
+  });
 })();
