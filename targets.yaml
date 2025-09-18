@@ -1,0 +1,12 @@
+# Edit this list of company boards (examples shown).
+# Supported:
+# - type: greenhouse (boards.greenhouse.io/<slug>)
+# - type: lever      (jobs.lever.co/<slug>)
+- type: greenhouse
+  slug: openai
+  include_keywords: ["engineer", "ml", "applied", "platform"]
+  exclude_keywords: ["senior", "staff", "principal"]
+- type: lever
+  slug: huggingface
+  include_keywords: ["engineer", "ml"]
+  exclude_keywords: ["lead", "director"]
