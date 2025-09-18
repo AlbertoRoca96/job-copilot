@@ -7,10 +7,12 @@ __pycache__/
 data/*.sqlite
 data/*.db
 
-# Ignore only the ROOT outbox; allow the dashboard covers in docs/outbox
+# Ignore only the ROOT outbox; allow dashboard artifacts in docs/
 /outbox/
 !docs/outbox/
 !docs/outbox/**
+!docs/resumes/
+!docs/resumes/**
 
 # OS cruft
 *.DS_Store
