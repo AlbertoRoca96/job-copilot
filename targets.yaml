@@ -1,12 +1,30 @@
-# Edit this list of company boards (examples shown).
-# Supported:
-# - type: greenhouse (boards.greenhouse.io/<slug>)
-# - type: lever      (jobs.lever.co/<slug>)
+# AI/ML-heavy example set — edit freely
+- type: greenhouse
+  slug: anthropic
+  include_keywords: ["engineer","ml","machine","data"]
+  exclude_keywords: ["staff","principal","director"]
+
 - type: greenhouse
   slug: openai
-  include_keywords: ["engineer", "ml", "applied", "platform"]
-  exclude_keywords: ["senior", "staff", "principal"]
-- type: lever
-  slug: huggingface
-  include_keywords: ["engineer", "ml"]
-  exclude_keywords: ["lead", "director"]
+  include_keywords: ["engineer","ml","infrastructure","backend","fullstack","research"]
+  exclude_keywords: ["staff","principal","director"]
+
+- type: greenhouse
+  slug: scaleai
+  include_keywords: ["engineer","ml","data","platform","quality"]
+  exclude_keywords: ["staff","principal","director"]
+
+- type: greenhouse
+  slug: stripe
+  include_keywords: ["engineer","ml","infrastructure","data"]
+  exclude_keywords: ["staff","principal","director"]
+
+- type: greenhouse
+  slug: notion
+  include_keywords: ["engineer","ml","backend","fullstack","data"]
+  exclude_keywords: ["staff","principal","director"]
+
+- type: greenhouse
+  slug: xai
+  include_keywords: ["engineer","ml","inference","infrastructure"]
+  exclude_keywords: ["staff","principal","director"]
