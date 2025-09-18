@@ -25,9 +25,15 @@
     },
     {
       "section": "Projects",
+      "before": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex",
+      "after": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex \u2014 shipped ML models with Python/PyTorch and iterative evaluation loops.",
+      "reason": "Aligned to JD via clause: \u201cshipped ML models with Python/PyTorch and iterative evaluation loops\u201d"
+    },
+    {
+      "section": "Projects",
       "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).; built typed UI components in TypeScript with predictable props/state.",
-      "reason": "Aligned to JD via clause: \u201cbuilt typed UI components in TypeScript with predictable props/state\u201d"
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).; collaborated with cross-functional teams to improve workflows.",
+      "reason": "Aligned to JD via clause: \u201ccollaborated with cross-functional teams to improve workflows\u201d"
     }
   ],
   "jd_hash": "4141b413"
