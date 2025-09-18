@@ -15,62 +15,52 @@ PORTFOLIO_YAML = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'p
 TMPL_DIR       = os.path.join(os.path.dirname(__file__), '..', 'src', 'tailor', 'templates')
 BASE_RESUME    = os.path.join(os.path.dirname(__file__), '..', 'assets', 'Resume-2025.docx')
 
-# synonym normalizer (truthful)
+# simple synonym normalizer (truthful)
 SYNONYMS = {
-    "js": "javascript", "reactjs": "react", "ts": "typescript",
-    "ml": "machine learning", "cv": "computer vision", "postgres": "postgresql",
-    "gh actions": "github actions", "gh-actions": "github actions", "ci/cd": "ci",
-    "llm": "machine learning", "rest": "rest api", "etl": "data pipeline",
+  "js":"javascript","reactjs":"react","ts":"typescript","ml":"machine learning",
+  "cv":"computer vision","postgres":"postgresql","gh actions":"github actions",
+  "gh-actions":"github actions","ci/cd":"ci","llm":"machine learning","rest":"rest api",
+  "etl":"data pipeline"
 }
-def normalize_keyword(w: str):
-    return SYNONYMS.get((w or "").strip().lower(), (w or "").strip().lower())
-
-SOFT_CANON = {"communication","collaboration","teamwork","leadership","ownership","mentorship"}
+def norm(w): return SYNONYMS.get((w or "").strip().lower(), (w or "").strip().lower())
 
 def allowed_vocab(profile: dict, portfolio: dict):
     skills = {s.lower() for s in profile.get("skills", [])}
     titles = {t.lower() for t in profile.get("target_titles", [])}
     tags = set()
     for section in ("projects", "work_experience", "workshops"):
-        for item in portfolio.get(section, []) or []:
-            for b in item.get("bullets", []) or []:
-                for t in b.get("tags", []) or []:
+        for item in (portfolio.get(section, []) or []):
+            for b in (item.get("bullets", []) or []):
+                for t in (b.get("tags", []) or []):
                     tags.add(str(t).lower())
-    expanded = {normalize_keyword(w) for w in (skills | tags | titles)}
-    return expanded | skills | tags | titles
+    expanded = {norm(w) for w in (skills | tags | titles)}
+    return sorted(expanded | skills | tags | titles)
 
-def harvest_job_keywords(job: dict, allowed: set):
-    # collect JD tokens
-    jtoks_raw = tokens(job.get("title","")) | tokens(job.get("description",""))
-    jtoks = [normalize_keyword(w) for w in jtoks_raw]
-    # frequency, limited to what you claim
+def jd_keywords(job: dict, allowed: set, cap=24):
+    jtoks = [norm(w) for w in (tokens(job.get("title","")) | tokens(job.get("description","")))]
     freq = {}
     for w in jtoks:
         if w in allowed:
             freq[w] = freq.get(w, 0) + 1
-    # split hard vs soft
-    hard, soft = [], []
-    for w, _ in sorted(freq.items(), key=lambda kv: (-kv[1], kv[0])):
-        (soft if w in SOFT_CANON else hard).append(w)
-    # cap lengths a bit
-    return hard[:16], soft[:6]
+    return [w for w,_ in sorted(freq.items(), key=lambda kv: (-kv[1], kv[0]))[:cap]]
 
 def portfolio_targets(portfolio: dict):
     targets = {"Side Projects": [], "Projects": [], "Work Experience": []}
-    for p in portfolio.get("projects", []) or []:
-        for b in p.get("bullets", []) or []:
+    for p in (portfolio.get("projects", []) or []):
+        for b in (p.get("bullets", []) or []):
             targets["Side Projects"].append(b.get("text",""))
             targets["Projects"].append(b.get("text",""))
-    for w in portfolio.get("work_experience", []) or []:
-        for b in w.get("bullets", []) or []:
+    for w in (portfolio.get("work_experience", []) or []):
+        for b in (w.get("bullets", []) or []):
             targets["Work Experience"].append(b.get("text",""))
+    # de-dup
     for k, arr in list(targets.items()):
-        seen = set(); uniq=[]
+        seen=set(); uniq=[]
         for t in arr:
-            nt = (t or "").strip()
+            nt=(t or "").strip()
             if nt and nt not in seen:
                 uniq.append(nt); seen.add(nt)
-        targets[k] = uniq
+        targets[k]=uniq
     return targets
 
 def safe_name(s: str) -> str:
@@ -79,7 +69,8 @@ def safe_name(s: str) -> str:
 def main(top: int):
     with open(PROFILE_YAML, 'r') as f: profile = yaml.safe_load(f)
     with open(PORTFOLIO_YAML, 'r') as f: portfolio = yaml.safe_load(f)
-    vocab = allowed_vocab(profile, portfolio)
+
+    vocab = set(allowed_vocab(profile, portfolio))
 
     jobs = []
     if os.path.exists(DATA_JSON):
@@ -102,33 +93,37 @@ def main(top: int):
         safe_company = safe_name(j.get('company',''))
         safe_title   = safe_name(j.get('title',''))
 
-        # JD keywords (split)
-        hard_kws, soft_kws = harvest_job_keywords(j, vocab)
+        # JD keywords for THIS job (runtime-adaptive)
+        jd_kws = jd_keywords(j, vocab)
 
-        # COVER (append ATS alignment)
+        # COVER (keep your template; show alignment list for transparency)
         cover_fname = f"{safe_company}_{safe_title}.md"[:150]
         cover = render_cover(j, PROFILE_YAML, TMPL_DIR)
-        if hard_kws or soft_kws:
-            cover += "\n\n---\n**Keyword Alignment (ATS-safe):** "
-            cover += ", ".join(hard_kws + soft_kws) + "\n"
+        if jd_kws:
+            cover += "\n\n---\n**Keyword Alignment (ATS-safe):** " + ", ".join(jd_kws) + "\n"
         with open(os.path.join(OUTBOX_MD, cover_fname), 'w') as f: f.write(cover)
         j['cover_file'] = cover_fname
         j['cover_path'] = f"outbox/{cover_fname}"
         drafted_covers += 1
 
-        # RESUME — open base, tailor in place with uniqueness + context
+        # RESUME — policy-driven clauses (NEW signature)
         out_docx = os.path.join(RESUMES_MD, f"{safe_company}_{safe_title}.docx"[:150])
         doc = Document(BASE_RESUME)
         targets = portfolio_targets(portfolio)
-        changes = tailor_docx_in_place(doc, targets, jd_keywords_hard=hard_kws, jd_keywords_soft=soft_kws)
+        changes = tailor_docx_in_place(
+            doc,
+            targets,
+            jd_keywords=jd_kws,
+            allowed_vocab_list=sorted(vocab),
+        )
         doc.save(out_docx)
         j['resume_docx'] = f"resumes/{os.path.basename(out_docx)}"
 
-        # write explain payload
+        # EXPLAIN payload (dashboard)
         explain = {
             "company": j.get("company",""),
             "title": j.get("title",""),
-            "ats_keywords": hard_kws + soft_kws,
+            "ats_keywords": jd_kws,
             "changes": changes
         }
         changes_fname = f"{safe_company}_{safe_title}.json"[:150]
