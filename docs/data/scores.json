@@ -16,8 +16,9 @@
     "cover_file": "figma_SoftwareEngineerMachineLearning.md",
     "cover_path": "outbox/figma_SoftwareEngineerMachineLearning.md",
     "resume_md": "resumes/figma_SoftwareEngineerMachineLearning.md",
-    "resume_docx": "resumes/figma_SoftwareEngineerMachineLearning.docx",
-    "changes_path": "changes/figma_SoftwareEngineerMachineLearning.json"
+    "resume_docx": "resumes/figma_SoftwareEngineerMachineLearning_2a4be626.docx",
+    "changes_path": "changes/figma_SoftwareEngineerMachineLearning.json",
+    "resume_docx_hash": "2a4be626"
   },
   {
     "title": "Software Engineer, Product Engineering",
@@ -36,8 +37,9 @@
     "cover_file": "figma_SoftwareEngineerProductEngineering.md",
     "cover_path": "outbox/figma_SoftwareEngineerProductEngineering.md",
     "resume_md": "resumes/figma_SoftwareEngineerProductEngineering.md",
-    "resume_docx": "resumes/figma_SoftwareEngineerProductEngineering.docx",
-    "changes_path": "changes/figma_SoftwareEngineerProductEngineering.json"
+    "resume_docx": "resumes/figma_SoftwareEngineerProductEngineering_6df99e0e.docx",
+    "changes_path": "changes/figma_SoftwareEngineerProductEngineering.json",
+    "resume_docx_hash": "6df99e0e"
   },
   {
     "title": "Software Engineer, C++",
@@ -56,8 +58,9 @@
     "cover_file": "figma_SoftwareEngineerC.md",
     "cover_path": "outbox/figma_SoftwareEngineerC.md",
     "resume_md": "resumes/figma_SoftwareEngineerC.md",
-    "resume_docx": "resumes/figma_SoftwareEngineerC.docx",
-    "changes_path": "changes/figma_SoftwareEngineerC.json"
+    "resume_docx": "resumes/figma_SoftwareEngineerC_ab127897.docx",
+    "changes_path": "changes/figma_SoftwareEngineerC.json",
+    "resume_docx_hash": "ab127897"
   },
   {
     "title": "Software Engineer, Data Infrastructure",
@@ -76,8 +79,9 @@
     "cover_file": "figma_SoftwareEngineerDataInfrastructure.md",
     "cover_path": "outbox/figma_SoftwareEngineerDataInfrastructure.md",
     "resume_md": "resumes/figma_SoftwareEngineerDataInfrastructure.md",
-    "resume_docx": "resumes/figma_SoftwareEngineerDataInfrastructure.docx",
-    "changes_path": "changes/figma_SoftwareEngineerDataInfrastructure.json"
+    "resume_docx": "resumes/figma_SoftwareEngineerDataInfrastructure_0fb57b72.docx",
+    "changes_path": "changes/figma_SoftwareEngineerDataInfrastructure.json",
+    "resume_docx_hash": "0fb57b72"
   },
   {
     "title": "Software Engineer, iOS",
@@ -96,8 +100,9 @@
     "cover_file": "figma_SoftwareEngineeriOS.md",
     "cover_path": "outbox/figma_SoftwareEngineeriOS.md",
     "resume_md": "resumes/figma_SoftwareEngineeriOS.md",
-    "resume_docx": "resumes/figma_SoftwareEngineeriOS.docx",
-    "changes_path": "changes/figma_SoftwareEngineeriOS.json"
+    "resume_docx": "resumes/figma_SoftwareEngineeriOS_4141b413.docx",
+    "changes_path": "changes/figma_SoftwareEngineeriOS.json",
+    "resume_docx_hash": "4141b413"
   },
   {
     "title": "Software Engineer, Product Engineering (London, United Kingdom)",

@@ -22,6 +22,13 @@
       "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
       "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).",
       "reason": "Aligned to JD via policy clause: \u201cbuilt reliable data/annotation pipelines (GitHub Actions + SQL/Postgres)\u201d"
+    },
+    {
+      "section": "Side Projects",
+      "before": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex",
+      "after": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex \u2014 Mentor engineers to foster a collaborative environment.",
+      "reason": "Aligned to JD via policy clause: \u201cMentor engineers to foster a collaborative environment\u201d"
     }
-  ]
+  ],
+  "jd_hash": "4141b413"
 }
