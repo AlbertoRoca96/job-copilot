@@ -1,3 +1,4 @@
+# src/tailor/resume.py
 import re
 import difflib
 from typing import List, Tuple, Dict, Set
@@ -5,7 +6,7 @@ from docx import Document
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 
-from .policies import load_policies  # loads base + runtime YAML
+from .policies import load_policies  # loads YAML + runtime policies
 
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{1,}")
 
@@ -80,16 +81,23 @@ def append_clause(p: Paragraph, clause: str):
     if last:
         copy_format(last, r)
 
-def choose_policy_for_sentence(sentence: str, jd_vocab: Set[str], allowed_vocab: Set[str], policies) -> str | None:
+def choose_policy_for_sentence(sentence: str, jd_vocab: Set[str], allowed_vocab: Set[str], policies, used_clauses: Set[str]) -> str | None:
     stoks = tokens(sentence)
     for pol in policies:
-        if not (jd_vocab & pol["jd_cues"]):
+        clause = (pol.get("clause") or "").strip().lower()
+        if not clause or clause in used_clauses:
             continue
-        if not (stoks & pol["bullet_cues"]):
+        # JD cues must overlap current JD vocab if provided
+        jd_cues = set(x.lower() for x in (pol.get("jd_cues") or []))
+        if jd_cues and not (jd_vocab & jd_cues):
             continue
-        req = pol.get("requires_any") or set()
+        # Bullet must be a plausible anchor
+        if not (stoks & set(pol.get("bullet_cues", []))):
+            continue
+        req = set(pol.get("requires_any") or [])
         if req and not (allowed_vocab & req):
             continue
+        used_clauses.add(clause)  # reserve so we never add it twice in this doc
         return pol["clause"]
     return None
 
@@ -101,8 +109,11 @@ def rewrite_bullets_in_section(paragraphs,
                                policies,
                                logger: ChangeLog,
                                section_label: str,
-                               used_clauses: Set[str],
-                               max_rewrites=3):
+                               max_rewrites=3,
+                               used_clauses: Set[str] | None = None):
+    if used_clauses is None:
+        used_clauses = set()
+
     bullet_idxs = [i for i in range(start, end) if paragraph_is_bullet(paragraphs[i])]
     bullet_texts = [normalize_ws(paragraphs[i].text) for i in bullet_idxs]
     rewrites = 0
@@ -115,18 +126,13 @@ def rewrite_bullets_in_section(paragraphs,
         para_idx = bullet_idxs[j]
         p = paragraphs[para_idx]
         before = p.text
-        clause = choose_policy_for_sentence(before, jd_vocab, allowed_vocab, policies)
+        clause = choose_policy_for_sentence(before, jd_vocab, allowed_vocab, policies, used_clauses)
         if not clause:
             continue
-        # no duplicates across the whole doc
-        if clause.lower() in used_clauses:
-            continue
-        # keep bullets concise; skip if already very long
         if len(before) > 350:
             continue
         append_clause(p, clause)
-        used_clauses.add(clause.lower())
-        logger.add(section_label, before, p.text, reason=f"Aligned to JD via policy clause: “{clause}”")
+        logger.add(section_label, before, p.text, reason=f"Aligned to JD via clause: “{clause}”")
         rewrites += 1
 
 def reorder_or_annotate_skills(paragraphs, start: int, end: int, prioritized: List[str], logger: ChangeLog):
@@ -156,34 +162,25 @@ def reorder_or_annotate_skills(paragraphs, start: int, end: int, prioritized: Li
             after = reorder_line_text(before, prio_present)
             if after != before:
                 p.runs[0].text = after
-                logger.add("Technical Skills", before, after,
-                           reason="Reordered to surface JD-matching skills already present.")
+                logger.add("Technical Skills", before, after, reason="Reordered to surface JD-matching skills already present.")
         else:
             if prio_present:
                 before = p.text
                 r = p.add_run(f" (Priority: {', '.join(prio_present[:6])})")
                 last = next((run for run in reversed(p.runs) if normalize_ws(run.text)), None)
                 if last: copy_format(last, r)
-                logger.add("Technical Skills", before, p.text,
-                           reason="Annotated priorities without altering styling.")
+                logger.add("Technical Skills", before, p.text, reason="Annotated priorities without altering styling.")
         return  # only the first candidate line
 
 def tailor_docx_in_place(doc: Document,
                          portfolio_bullets: Dict[str, List[str]],
                          jd_keywords: List[str],
                          allowed_vocab_list: List[str]):
-    """
-    Adaptive per-job tailoring:
-      - Build JD vocab from this specific posting.
-      - Load policies (base + runtime) and apply at most one clause per chosen bullet.
-      - Keep edits surgical; preserve formatting and layout.
-      - De-duplicate clauses across the entire document.
-    """
     logger = ChangeLog()
     policies = load_policies()
     jd_vocab = set(k.lower() for k in jd_keywords)
     allowed_vocab = set(k.lower() for k in allowed_vocab_list)
-    used_clauses: Set[str] = set()
+    used_clauses = set()
 
     ranges = find_section_ranges(doc, [
         "Education","Side Projects","Projects","Work Experience",
@@ -191,25 +188,21 @@ def tailor_docx_in_place(doc: Document,
     ])
     pars = doc.paragraphs
 
-    # Skills (order/annotate)
     if "technical skills" in ranges:
         s, e = ranges["technical skills"]
         reorder_or_annotate_skills(pars, s, e, list(jd_vocab), logger)
 
-    # Projects / Side Projects
     for sec in ("side projects", "projects"):
         if sec in ranges:
             s, e = ranges[sec]
             src = (portfolio_bullets.get("Side Projects", []) + portfolio_bullets.get("Projects", []))
             rewrite_bullets_in_section(pars, s, e, src, jd_vocab, allowed_vocab, policies,
-                                       logger, "Side Projects" if sec=="side projects" else "Projects",
-                                       used_clauses, max_rewrites=3)
+                                       logger, "Projects", max_rewrites=3, used_clauses=used_clauses)
 
-    # Work Experience
     if "work experience" in ranges:
         s, e = ranges["work experience"]
         rewrite_bullets_in_section(pars, s, e, portfolio_bullets.get("Work Experience", []),
                                    jd_vocab, allowed_vocab, policies, logger,
-                                   "Work Experience", used_clauses, max_rewrites=3)
+                                   "Work Experience", max_rewrites=3, used_clauses=used_clauses)
 
     return logger.items
