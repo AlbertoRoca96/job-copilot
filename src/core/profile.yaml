@@ -1,0 +1,29 @@
+name: "Stro Gene"
+email: "diamond0976@gmail.com"
+phone: ""
+github: ""
+
+target_titles:
+  - software
+  - engineer
+  - machine
+  - learning
+  - ml
+  - data
+
+skills:
+  - python
+  - pytorch
+  - c++
+  - javascript
+  - react
+  - sql
+  - linux
+  - opencv
+  - flask
+
+must_haves: []
+
+locations:
+  - Remote
+  - Virginia
