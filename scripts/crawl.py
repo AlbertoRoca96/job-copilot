@@ -1,46 +1,97 @@
-import os, sys, yaml, json
-# --- Make src/ importable when run from Actions or locally ---
+# scripts/crawl.py
+import os, sys, json, yaml, traceback
+from typing import List, Dict
+
+# Make src/ importable
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.ingest.greenhouse import crawl_greenhouse
 from src.ingest.lever import crawl_lever
 
-DATA_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'jobs.jsonl')
+ROOT = os.path.dirname(__file__)
+DATA_DIR = os.path.join(ROOT, '..', 'data')
+OUT_JSONL = os.path.join(DATA_DIR, 'jobs.jsonl')
+TARGETS = os.path.join(ROOT, '..', 'targets.yaml')
 
-def write_jsonl(path, items):
-    with open(path, 'w') as f:
-        for it in items:
-            f.write(json.dumps(it) + '\n')
+def _load_targets() -> List[Dict]:
+    if not os.path.exists(TARGETS):
+        print(f'No targets.yaml at {TARGETS}')
+        return []
+    with open(TARGETS, 'r') as f:
+        data = yaml.safe_load(f) or []
+    # normalize to list
+    if isinstance(data, dict):
+        data = data.get('targets', [])
+    return data or []
+
+def _dedup_on_url(items: List[Dict]) -> List[Dict]:
+    seen = set()
+    out = []
+    for j in items:
+        u = (j.get('url') or '').strip()
+        if not u or u in seen:
+            continue
+        seen.add(u)
+        out.append(j)
+    return out
 
 def main():
-    here = os.path.dirname(__file__)
-    targets_file = os.path.join(here, '..', 'targets.yaml')
-    with open(targets_file, 'r') as f:
-        targets = yaml.safe_load(f)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    targets = _load_targets()
+    if not targets:
+        print('No targets provided.')
+        return
 
-    all_jobs = []
+    all_jobs: List[Dict] = []
+    failures = 0
+
     for t in targets:
-        tp, slug = t['type'], t['slug']
-        inc = [s.lower() for s in t.get('include_keywords', [])]
-        exc = [s.lower() for s in t.get('exclude_keywords', [])]
-        if tp == 'greenhouse':
-            items = crawl_greenhouse(slug)
-        elif tp == 'lever':
-            items = crawl_lever(slug)
-        else:
+        ttype = (t.get('type') or '').strip().lower()
+        slug  = (t.get('slug') or '').strip().lower()
+        if not ttype or not slug:
             continue
 
-        for j in items:
-            title_l = j['title'].lower()
-            if inc and not any(k in title_l for k in inc):
+        print(f'-- Crawling {ttype}:{slug} --')
+        try:
+            if ttype == 'greenhouse':
+                jobs = crawl_greenhouse(slug)
+            elif ttype == 'lever':
+                jobs = crawl_lever(slug)
+            else:
+                print(f'  !! Unknown type "{ttype}" (skipping)')
                 continue
-            if exc and any(k in title_l for k in exc):
-                continue
-            all_jobs.append(j)
 
-    os.makedirs(os.path.join(here, '..', 'data'), exist_ok=True)
-    write_jsonl(DATA_PATH, all_jobs)
-    print(f"Wrote {len(all_jobs)} jobs -> {DATA_PATH}")
+            # Optional include/exclude keyword filtering on title/desc
+            inc = [s.lower() for s in (t.get('include_keywords') or [])]
+            exc = [s.lower() for s in (t.get('exclude_keywords') or [])]
+
+            def _keep(j):
+                title = (j.get('title') or '').lower()
+                desc  = (j.get('description') or '').lower()
+                blob  = f"{title} {desc}"
+                if inc and not any(k in blob for k in inc):
+                    return False
+                if exc and any(k in blob for k in exc):
+                    return False
+                return True
+
+            kept = [j for j in jobs if _keep(j)]
+            print(f'  found={len(jobs)} kept={len(kept)}')
+            all_jobs.extend(kept)
+
+        except Exception as e:
+            failures += 1
+            print(f'  !! Failed {ttype}:{slug}: {e.__class__.__name__}: {e}')
+            traceback.print_exc(limit=1)
+
+    all_jobs = _dedup_on_url(all_jobs)
+
+    with open(OUT_JSONL, 'w') as f:
+        for j in all_jobs:
+            f.write(json.dumps(j) + '\n')
+
+    print(f'Crawled {len(all_jobs)} jobs across {len(targets)} targets '
+          f'(failures: {failures}) -> {OUT_JSONL}')
 
 if __name__ == '__main__':
     main()
