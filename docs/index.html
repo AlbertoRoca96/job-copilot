@@ -6,15 +6,52 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="style.css" />
   <style>
-    /* minimal modal styling */
-    #explainModal { position: fixed; inset: 0; display: none; background: rgba(0,0,0,.4); }
-    #explainModal .sheet { background: #fff; max-width: 900px; margin: 5vh auto; padding: 16px 20px; border-radius: 10px; }
+    /* --- Explain modal --- */
+    body.modal-open { overflow: hidden; }
+    #explainModal {
+      position: fixed;
+      inset: 0;
+      display: none;              /* toggled by JS */
+      background: rgba(0,0,0,.45);
+      z-index: 9999;
+    }
+    #explainModal .sheet {
+      background: #fff;
+      max-width: 1000px;
+      margin: 5vh auto;
+      padding: 16px 20px;
+      border-radius: 10px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.2);
+      /* KEY: make the content scroll within the sheet */
+      max-height: 90vh;
+      overflow: auto;
+    }
     #explainModal h3 { margin: 8px 0 12px; }
-    .diffrow { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 8px 0; }
-    .diffcol { border: 1px solid #e5e5e5; padding: 8px; border-radius: 6px; background: #fafafa; white-space: pre-wrap; }
-    .pill { display:inline-block; padding:2px 8px; margin:2px; border:1px solid #e0e0e0; border-radius:999px; font-size:12px; background:#f6f6f6;}
-    .actions { text-align:right; margin-top: 8px;}
-    .btn { padding:6px 10px; border:1px solid #ccc; background:#fff; border-radius:6px; cursor:pointer;}
+    .diffrow {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin: 8px 0;
+    }
+    .diffcol {
+      border: 1px solid #e5e5e5;
+      padding: 8px;
+      border-radius: 6px;
+      background: #fafafa;
+      white-space: pre-wrap;
+    }
+    .pill {
+      display:inline-block; padding:2px 8px; margin:2px;
+      border:1px solid #e0e0e0; border-radius:999px;
+      font-size:12px; background:#f6f6f6;
+    }
+    .actions { text-align:right; margin-top: 8px; position: sticky; top: 0; background: #fff; padding-top: 8px; }
+    .btn { padding:6px 10px; border:1px solid #ccc; background:#fff; border-radius:6px; cursor:pointer; }
+
+    /* Mobile: stack before/after vertically */
+    @media (max-width: 720px) {
+      .diffrow { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
@@ -38,10 +75,12 @@
     </table>
   </main>
 
-  <!-- modal -->
-  <div id="explainModal" role="dialog" aria-modal="true">
+  <!-- Explain modal -->
+  <div id="explainModal" role="dialog" aria-modal="true" aria-labelledby="explainTitle">
     <div class="sheet">
-      <div class="actions"><button id="closeExplain" class="btn">Close</button></div>
+      <div class="actions">
+        <button id="closeExplain" class="btn" aria-label="Close explain dialog">Close</button>
+      </div>
       <h3 id="explainTitle"></h3>
       <div id="explainKeywords"></div>
       <div id="explainChanges"></div>
