@@ -140,19 +140,30 @@ def canonicalize_clause(clause: str) -> str:
     return s
 
 def append_clause(p: Paragraph, clause: str):
+    """
+    Add a JD-aligned phrase without using a semicolon.
+    Heuristic: convert the clause to a short "Using/With ..." sentence to keep ATS-safe tokens
+    while sounding natural. This avoids awkward "; ..." suffixes.
+    """
     if not clause:
         return
-    clause = canonicalize_clause(clause.strip())
-    # decide separator based on existing punctuation
-    sep = "; " if p.text.strip().endswith((")", "]", "”", "\"", ".", "…")) else " — "
-    add = f"{sep}{clause}."
+    raw = (clause or "").strip().rstrip(".")
+    canon = canonicalize_clause(raw)
+
+    # Try to extract a technology-focused phrase
+    m = re.match(r"^(built|improved|optimized|implemented|designed|delivered|shipped|reduced|increased|created|developed|automated|migrated|refactored|scaled)\s+(.+)$", canon, flags=re.IGNORECASE)
+    phrase = m.group(2) if m else canon
+    # If it already starts with 'using/with', strip that and we'll re-add consistently
+    phrase = re.sub(r"^(using|with)\s+", "", phrase, flags=re.IGNORECASE)
+
+    # Construct an additional short sentence. No semicolons.
+    add = f" Using {phrase}."
+
     # choose the base run to inherit formatting from
     base = _dominant_nonlink_run(p)
     if base is None:
-        # simple add if we can't detect a base run
         p.add_run(add)
         return
-    # add run and clone formatting
     r = p.add_run(add)
     copy_format(base, r)
 
