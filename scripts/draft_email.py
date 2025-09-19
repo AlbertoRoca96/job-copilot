@@ -251,8 +251,8 @@ def main(top: int):
             job_llm_count = len(llm_items)
             print(f"LLM: generated {job_llm_count} runtime policies for {slug}")
         else:
-            if os.path.exists(RUNTIME_POL):
-                os.remove(RUNTIME_POL)
+            # Keep previous runtime policies if present; they can still bias selection
+            pass
 
         # COVER
         cover_fname = f"{slug}.md"

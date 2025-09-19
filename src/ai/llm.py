@@ -4,7 +4,7 @@ import os, json, requests
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 # Prefer a strong default; allow override via OPENAI_MODEL.
 # Suggest gpt-5 if available; fall back gracefully.
-MODEL = os.getenv("OPENAI_MODEL", "gpt-5")
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 _SYSTEM = """You are a careful resume-tailoring assistant.
 Return compact JSON ONLY. Do not fabricate experience or years.
@@ -109,7 +109,8 @@ def suggest_policies(api_key: str, job_title: str, job_desc: str,
             # must contain at least one ALLOWED token and one JD term
             if not any(tok in clause for tok in req):
                 continue
-            if not any(tok in clause for tok in uses):
+            # Loosen: allow clause if it mentions at least one JD term OR the clause cues overlap context
+            if not (any(tok in clause for tok in uses) or any(c in clause for c in CUE_MAP.get(ctx, []))):
                 continue
 
             # Minimal shape; bullet cues inferred from context
@@ -137,6 +138,7 @@ def suggest_policies(api_key: str, job_title: str, job_desc: str,
             })
             seen.add(clause)
         return out
-    except Exception:
-        # Best-effort: no LLM means deterministic-only tailoring
+    except Exception as e:
+        # Log minimal context for CI without leaking secrets
+        print(f"llm.suggest_policies: error {type(e).__name__}: {e}")
         return []
