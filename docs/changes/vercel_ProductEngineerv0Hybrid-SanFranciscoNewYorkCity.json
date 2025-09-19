@@ -15,20 +15,20 @@
     {
       "section": "Projects",
       "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; developed ai-driven tools for improved automation and performance.",
-      "reason": "Aligned to JD via clause: \u201cdeveloped ai-driven tools for improved automation and performance\u201d"
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using ai-powered tools for enhanced developer experience.",
+      "reason": "Aligned to JD via clause: \u201cdeveloped ai-powered tools for enhanced developer experience\u201d"
     },
     {
       "section": "Projects",
       "before": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex",
-      "after": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex \u2014 optimized workflows for ai model performance and usability.",
-      "reason": "Aligned to JD via clause: \u201coptimized workflows for ai model performance and usability\u201d"
+      "after": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex Using performance of ai models for real-world applications.",
+      "reason": "Aligned to JD via clause: \u201coptimized performance of ai models for real-world applications\u201d"
     },
     {
       "section": "Projects",
-      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; developed ai-driven tools for improved automation and performance.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; developed ai-driven tools for improved automation and performance.; implemented Python solutions for seamless integration with web applications.",
-      "reason": "Aligned to JD via clause: \u201cimplemented Python solutions for seamless integration with web applications\u201d"
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using ai-powered tools for enhanced developer experience.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using ai-powered tools for enhanced developer experience. Using automation solutions to streamline workflows.",
+      "reason": "Aligned to JD via clause: \u201cimplemented automation solutions to streamline workflows\u201d"
     }
   ],
   "jd_hash": "60bf03b9"

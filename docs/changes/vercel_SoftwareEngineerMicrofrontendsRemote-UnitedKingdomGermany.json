@@ -17,20 +17,20 @@
     {
       "section": "Projects",
       "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).",
-      "reason": "Aligned to JD via clause: \u201cbuilt reliable data/annotation pipelines (GitHub Actions + SQL/Postgres)\u201d"
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using solutions for data sharing across multiple frameworks.",
+      "reason": "Aligned to JD via clause: \u201cdeveloped solutions for data sharing across multiple frameworks\u201d"
     },
     {
       "section": "Projects",
       "before": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex",
-      "after": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex \u2014 profiled hotspots and reduced latency/memory in C++ paths.",
+      "after": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex Using profiled hotspots and reduced latency/memory in C++ paths.",
       "reason": "Aligned to JD via clause: \u201cprofiled hotspots and reduced latency/memory in C++ paths\u201d"
     },
     {
       "section": "Projects",
-      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).; added CI/monitoring hooks for model/data jobs.",
-      "reason": "Aligned to JD via clause: \u201cadded CI/monitoring hooks for model/data jobs\u201d"
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using solutions for data sharing across multiple frameworks.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using solutions for data sharing across multiple frameworks. Using reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).",
+      "reason": "Aligned to JD via clause: \u201cbuilt reliable data/annotation pipelines (GitHub Actions + SQL/Postgres)\u201d"
     }
   ],
   "jd_hash": "03902732"
