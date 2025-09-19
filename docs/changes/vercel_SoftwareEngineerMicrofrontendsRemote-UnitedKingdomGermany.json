@@ -2,19 +2,15 @@
   "company": "vercel",
   "title": "Software Engineer, MicrofrontendsRemote - United Kingdom, Germany",
   "ats_keywords": [
+    "full stack",
+    "frontend",
     "ai",
     "ci",
-    "computer vision",
     "css",
     "data",
-    "engineer",
-    "frontend",
-    "javascript",
     "organization",
     "performance",
     "react",
-    "software",
-    "typescript",
     "web"
   ],
   "changes": [
@@ -33,8 +29,8 @@
     {
       "section": "Projects",
       "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).; built typed UI components in TypeScript with predictable props/state.",
-      "reason": "Aligned to JD via clause: \u201cbuilt typed UI components in TypeScript with predictable props/state\u201d"
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).; added CI/monitoring hooks for model/data jobs.",
+      "reason": "Aligned to JD via clause: \u201cadded CI/monitoring hooks for model/data jobs\u201d"
     }
   ],
   "jd_hash": "03902732"

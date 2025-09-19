@@ -14,4 +14,4 @@ Alberto Roca
 alberto.roca@live.longwood.edu | https://github.com/AlbertoRoca96 | (434)315-4194
 
 ---
-**Keyword Alignment (ATS-safe):** ai, automation, communication, computer vision, engineer, frontend, javascript, learning, performance, python, react, support, typescript, web
+**Keyword Alignment (ATS-safe):** ai, automation, learning, performance, python, react, support, web
