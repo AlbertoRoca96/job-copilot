@@ -75,13 +75,12 @@ def suggest_policies(api_key: str, job_title: str, job_desc: str,
         ])
         content = data["choices"][0]["message"]["content"].strip()
         # Some models may wrap JSON in code fences; strip if necessary
-content = content.strip()
-if content.startswith("```"):
-    content = content.strip("`\n ")
-    # remove a possible json hint
-    if content.lower().startswith("json"):
-        content = content[4:].lstrip()
-items = json.loads(content)
+        if content.startswith("```"):
+            content = content.strip("`\n ")
+            # remove a possible json hint
+            if content.lower().startswith("json"):
+                content = content[4:].lstrip()
+        items = json.loads(content)
 
         out, seen = [], set()
         for i, it in enumerate(items[:6]):  # allow up to 6; we will filter later
