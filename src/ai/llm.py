@@ -2,14 +2,19 @@
 import os, json, requests
 
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+# Prefer a strong default; allow override via OPENAI_MODEL.
+# Suggest gpt-5 if available; fall back gracefully.
+MODEL = os.getenv("OPENAI_MODEL", "gpt-5")
 
 _SYSTEM = """You are a careful resume-tailoring assistant.
 Return compact JSON ONLY. Do not fabricate experience or years.
 Use the job description provided verbatim to guide suggestions.
 Suggest short, honest clauses to APPEND to existing bullets (not whole bullets).
 Each clause must be <= 14 words, declarative, neutral tone, resume-ready.
-No buzzwords, no adjectives, no exaggeration."""
+No buzzwords, no adjectives, no exaggeration.
+Clauses must be readable for humans (not keyword dumps) while remaining ATS-friendly.
+Avoid passive voice and vague words (optimize, various, multiple). Prefer concrete actions.
+"""
 
 _USER_TMPL = """JOB TITLE:
 {title}
@@ -69,10 +74,17 @@ def suggest_policies(api_key: str, job_title: str, job_desc: str,
             {"role": "user", "content": prompt},
         ])
         content = data["choices"][0]["message"]["content"].strip()
-        items = json.loads(content)
+        # Some models may wrap JSON in code fences; strip if necessary
+content = content.strip()
+if content.startswith("```"):
+    content = content.strip("`\n ")
+    # remove a possible json hint
+    if content.lower().startswith("json"):
+        content = content[4:].lstrip()
+items = json.loads(content)
 
         out, seen = [], set()
-        for i, it in enumerate(items[:5]):
+        for i, it in enumerate(items[:6]):  # allow up to 6; we will filter later
             clause = (it.get("clause") or "").strip().strip(".").lower()
             ctx = (it.get("context") or "").strip().lower()
             req = [str(x).strip().lower() for x in (it.get("requires_any") or [])][:3]
@@ -81,6 +93,24 @@ def suggest_policies(api_key: str, job_title: str, job_desc: str,
             if not clause or clause in seen or clause in (x.lower() for x in banlist):
                 continue
             if not ctx or not req or not uses:
+                continue
+
+            # Basic quality/readability gates
+            # - no repeated token spam
+            # - avoid all-caps or weird punctuation
+            # - keep length 4..14 words
+            wds = [w for w in clause.split() if w.strip()]
+            if not (4 <= len(wds) <= 14):
+                continue
+            if any(len(w) > 24 for w in wds):
+                continue
+            # simple spam detection: too many commas or slashes
+            if clause.count(',') > 2 or clause.count('/') > 2:
+                continue
+            # must contain at least one ALLOWED token and one JD term
+            if not any(tok in clause for tok in req):
+                continue
+            if not any(tok in clause for tok in uses):
                 continue
 
             # Minimal shape; bullet cues inferred from context
@@ -109,4 +139,5 @@ def suggest_policies(api_key: str, job_title: str, job_desc: str,
             seen.add(clause)
         return out
     except Exception:
+        # Best-effort: no LLM means deterministic-only tailoring
         return []

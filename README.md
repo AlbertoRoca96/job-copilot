@@ -20,7 +20,7 @@ This repo:
 ### Optional: LLM-assist (for smarter, non-repetitive clauses)
 
 * Add repo secrets: `OPENAI_API_KEY`, then set env `USE_LLM=1` (workflow or repo env).
-* Model defaults to `gpt-4o-mini` (override with `OPENAI_MODEL`).
+* Model defaults to `gpt-5` (override with `OPENAI_MODEL`). If your account doesn’t have access, set `OPENAI_MODEL=gpt-4o-mini` or similar.
 * The system enforces “no fabrication,” uses live JD text, and keeps a banlist to avoid repeated phrases.
 
 ## What gets produced

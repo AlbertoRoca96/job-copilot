@@ -169,6 +169,23 @@ def _policy_score(policy: dict, stoks: Set[str], jd_vocab: Set[str]) -> float:
     boost = 1.0 if policy.get("_source") == "runtime" else 0.0
     return 2.0 * overlap_jd + 1.0 * overlap_bul + boost + penalty
 
+def _readability_ok(clause: str) -> bool:
+    s = (clause or "").strip()
+    if not s:
+        return False
+    # 4..18 words, avoid spammy punctuation
+    w = [w for w in s.split() if w.strip()]
+    if not (4 <= len(w) <= 18):
+        return False
+    if s.count(',') > 2 or s.count('/') > 2:
+        return False
+    # avoid vague filler words dominating the clause
+    VAGUE = {"various","multiple","numerous","optimize","synergy","innovative"}
+    toks = tokens(s)
+    if len(VAGUE & toks) >= 2:
+        return False
+    return True
+
 def choose_policy_for_sentence(sentence: str,
                                jd_vocab: Set[str],
                                allowed_vocab: Set[str],
@@ -186,12 +203,20 @@ def choose_policy_for_sentence(sentence: str,
         if lc_clause in used_clauses:
             continue
 
+        # readability guard (human-digestible but ATS-safe)
+        if not _readability_ok(clause):
+            continue
+
         req = set((pol.get("requires_any") or []))
         if req and not (allowed_vocab & req):
             continue
 
         bullet_cues = set(pol.get("bullet_cues") or [])
         if bullet_cues and not (stoks & bullet_cues):
+            continue
+
+        # reject clauses that are too similar to the sentence already
+        if difflib.SequenceMatcher(None, normalize_ws(sentence.lower()), normalize_ws(lc_clause)).ratio() > 0.85:
             continue
 
         score = _policy_score(pol, stoks, jd_vocab)
