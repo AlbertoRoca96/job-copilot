@@ -5,7 +5,8 @@ import time
 from typing import Any, Optional
 
 import requests
-from requests.adapters import HTTPAdapter, Retry
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Reusable session with retries/backoff
 _session: Optional[requests.Session] = None
