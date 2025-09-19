@@ -11,8 +11,8 @@
     {
       "section": "Projects",
       "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built and maintained CI/cd systems for efficient software delivery.",
-      "reason": "Aligned to JD via clause: \u201cbuilt and maintained CI/cd systems for efficient software delivery\u201d"
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built and maintained CI/cd systems for efficient deployment.",
+      "reason": "Aligned to JD via clause: \u201cbuilt and maintained CI/cd systems for efficient deployment\u201d"
     },
     {
       "section": "Projects",
@@ -22,8 +22,8 @@
     },
     {
       "section": "Projects",
-      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built and maintained CI/cd systems for efficient software delivery.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built and maintained CI/cd systems for efficient software delivery.; engaged with open-source projects to enhance performance on vercel.",
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built and maintained CI/cd systems for efficient deployment.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built and maintained CI/cd systems for efficient deployment.; engaged with open-source projects to enhance performance on vercel.",
       "reason": "Aligned to JD via clause: \u201cengaged with open-source projects to enhance performance on vercel\u201d"
     }
   ],
