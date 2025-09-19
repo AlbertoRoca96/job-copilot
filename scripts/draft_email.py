@@ -35,8 +35,15 @@ SYNONYMS = {
 def norm(w): return SYNONYMS.get((w or "").strip().lower(), (w or "").strip().lower())
 
 def tokens(text: str):
-    WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{1,}")
+    WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+./-]{1,}")
     return set(WORD_RE.findall((text or "").lower()))
+
+STOPWORDS = {
+    "engineer","engineering","software","developer","develop","team","teams","experience","years","year",
+    "the","and","for","with","to","of","in","on","as","by","or","an","a","at","from","using",
+    "we","you","our","your","will","work","role","responsibilities","requirements","preferred","must",
+    "strong","plus","bonus","including","include","etc","ability","skills","excellent","communication",
+}
 
 def allowed_vocab(profile: dict, portfolio: dict):
     skills = {s.lower() for s in (profile.get("skills") or [])}
@@ -51,22 +58,61 @@ def allowed_vocab(profile: dict, portfolio: dict):
     return sorted(expanded | skills | tags | titles)
 
 def jd_keywords(job: dict, allowed: set, cap=24):
-    jtoks = [norm(w) for w in (tokens(job.get("title","")) | tokens(job.get("description","")))]
-    freq = {}
-    for w in jtoks:
-        if w in allowed:
-            freq[w] = freq.get(w, 0) + 1
-    return [w for w,_ in sorted(freq.items(), key=lambda kv: (-kv[1], kv[0]))[:cap]]
+    # Route to improved extraction; keep name for existing code
+    return extract_jd_terms(job, allowed, cap=cap)
 
-def top_jd_terms_from_text(text: str, allowed: set, cap=24):
-    # Pull frequent terms/phrases from JD that also exist in allowed vocab
-    words = list(tokens(text))
-    counts = {}
+def _count_phrase(text: str, phrase: str) -> int:
+    if not phrase:
+        return 0
+    # word-boundary, case-insensitive phrase counter
+    pat = re.compile(rf"\b{re.escape(phrase)}\b", flags=re.IGNORECASE)
+    return len(pat.findall(text or ""))
+
+def extract_jd_terms(job: dict, allowed: set, cap=24):
+    title = (job.get("title") or "").lower()
+    desc  = (job.get("description") or "").lower()
+    url   = job.get("url", "")
+
+    # split allowed into unigrams vs multi-word phrases
+    allowed_norm = {norm(a) for a in allowed}
+    phrases = [a for a in allowed_norm if " " in a]
+    unigrams = [a for a in allowed_norm if a and " " not in a]
+
+    scores = {}
+
+    # 1) Count phrases with strong weight
+    for ph in phrases:
+        if any(x in STOPWORDS for x in ph.split()):
+            continue
+        c = _count_phrase(desc, ph)
+        if c:
+            scores[ph] = scores.get(ph, 0) + 3.0 * c
+            if ph in title:
+                scores[ph] += 2.0
+
+    # 2) Count unigrams with moderate weight
+    words = list(tokens(desc))
     for w in words:
         w = norm(w)
-        if w in allowed:
-            counts[w] = counts.get(w, 0) + 1
-    return [w for w,_ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:cap]]
+        if w in unigrams and w not in STOPWORDS:
+            scores[w] = scores.get(w, 0) + 1.0
+            if w in title:
+                scores[w] += 1.5
+
+    # 3) Light boost for items appearing in URL path (often hints team focus)
+    lower_url = url.lower()
+    for k in list(scores.keys()):
+        if k in lower_url:
+            scores[k] += 0.5
+
+    ranked = [k for k,_ in sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))]
+    return ranked[:cap]
+
+# Back-compat shims (old names)
+
+def top_jd_terms_from_text(text: str, allowed: set, cap=24):
+    # Legacy alias kept for imports; route to the stronger logic using a fake job
+    return extract_jd_terms({"title":"", "description": text, "url": ""}, allowed, cap=24)
 
 def portfolio_targets(portfolio: dict):
     targets = {"Side Projects": [], "Projects": [], "Work Experience": []}
@@ -172,8 +218,9 @@ def main(top: int):
 
         jd_text = pick_jd_text(j) or (j.get("description") or "")
         tmp_job = dict(j); tmp_job["description"] = jd_text
-        jd_kws = jd_keywords(tmp_job, allowed)
-        jd_terms = top_jd_terms_from_text(jd_text, allowed, cap=24)
+        # Stronger JD term extraction (phrases + weighted tokens)
+        jd_terms = extract_jd_terms(tmp_job, allowed, cap=24)
+        jd_kws = jd_terms
         write_jd_artifacts(slug=slug, jd_text=jd_text[:20000], out_dir=CHANGES_DIR)
         jd_hash = jd_sha(jd_text)
 
