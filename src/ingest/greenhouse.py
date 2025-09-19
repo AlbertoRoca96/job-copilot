@@ -109,25 +109,29 @@ def crawl_greenhouse(slug: str):
         desc_text = ''
         posted_iso = None
 
-        job_html = get_text(full)
-        if job_html:
-            jsoup = BeautifulSoup(job_html, 'html.parser')
+        try:
+            job_html = get_text(full)
+            if job_html:
+                jsoup = BeautifulSoup(job_html, 'html.parser')
 
-            # Try common location spots on GH job page
-            loc_spots = jsoup.select('.location, [class*="location"], .app-location')
-            for el in loc_spots:
-                page_location = el.get_text(strip=True)
-                if page_location:
-                    break
+                # Try common location spots on GH job page
+                loc_spots = jsoup.select('.location, [class*="location"], .app-location')
+                for el in loc_spots:
+                    page_location = el.get_text(strip=True)
+                    if page_location:
+                        break
 
-            # Description
-            main = jsoup.select_one('.content, .opening, .job, .application, #content') or jsoup
-            for tag in main(['script', 'style']):
-                tag.decompose()
-            desc_text = ' '.join(main.get_text(separator=' ', strip=True).split())
+                # Description
+                main = jsoup.select_one('.content, .opening, .job, .application, #content') or jsoup
+                for tag in main(['script', 'style']):
+                    tag.decompose()
+                desc_text = ' '.join(main.get_text(separator=' ', strip=True).split())
 
-            # Posted date (best-effort)
-            posted_iso = _extract_posted_from_jsonld(jsoup) or _extract_posted_from_dom(jsoup)
+                # Posted date (best-effort)
+                posted_iso = _extract_posted_from_jsonld(jsoup) or _extract_posted_from_dom(jsoup)
+        except Exception:
+            # If parsing fails for this job, continue; minimal record still gets written
+            pass
 
         location = page_location or list_location
 

@@ -18,10 +18,14 @@ def _get_session() -> requests.Session:
     s = requests.Session()
     retries = Retry(
         total=4,                # up to 4 retry attempts
+        connect=4,
+        read=4,
+        status=4,
         backoff_factor=0.6,     # 0.6s, 1.2s, 2.4s, 4.8s…
         status_forcelist=(429, 500, 502, 503, 504),
         allowed_methods=frozenset(["GET", "HEAD"]),
         raise_on_status=False,
+        respect_retry_after_header=True,
     )
     adapter = HTTPAdapter(max_retries=retries, pool_connections=20, pool_maxsize=20)
     s.mount("http://", adapter)

@@ -12,7 +12,11 @@ def _ms_to_iso(ms) -> str | None:
 
 def crawl_lever(slug: str):
     url = f"https://api.lever.co/v0/postings/{slug}?mode=json"
-    data = get_json(url) or []
+    data = []
+    try:
+        data = get_json(url) or []
+    except Exception:
+        data = []
     jobs = []
     for p in data:
         j = Job(
