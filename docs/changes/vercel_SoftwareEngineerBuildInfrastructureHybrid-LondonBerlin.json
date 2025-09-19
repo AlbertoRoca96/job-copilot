@@ -17,8 +17,8 @@
     {
       "section": "Projects",
       "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built and maintained distributed systems for improved performance.",
-      "reason": "Aligned to JD via clause: \u201cbuilt and maintained distributed systems for improved performance\u201d"
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; added CI/monitoring hooks for model/data jobs.",
+      "reason": "Aligned to JD via clause: \u201cadded CI/monitoring hooks for model/data jobs\u201d"
     },
     {
       "section": "Projects",
@@ -28,9 +28,9 @@
     },
     {
       "section": "Projects",
-      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built and maintained distributed systems for improved performance.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; built and maintained distributed systems for improved performance.; engaged with open-source projects to enhance framework performance.",
-      "reason": "Aligned to JD via clause: \u201cengaged with open-source projects to enhance framework performance\u201d"
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; added CI/monitoring hooks for model/data jobs.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits. ; added CI/monitoring hooks for model/data jobs.; built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).",
+      "reason": "Aligned to JD via clause: \u201cbuilt reliable data/annotation pipelines (GitHub Actions + SQL/Postgres)\u201d"
     }
   ],
   "jd_hash": "90433a7c"
