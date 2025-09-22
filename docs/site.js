@@ -1,5 +1,11 @@
-// Classic table renderer + scrollable Explain modal (+ Posted column + cache-busted resumes)
-(async function () {
+// docs/site.js
+// Renders your shortlist table (existing) AND shows a signed-in panel for:
+// - profile save (acts like profile.yaml)
+// - resume upload to private Storage
+// - "Tailor my application" -> calls Edge Function to start the GitHub Action
+
+(async function() {
+  // ---------- Shortlist (unchanged parts) ----------
   const statusEl = document.getElementById('status');
   const table = document.getElementById('jobs');
   const tbody = table ? table.querySelector('tbody') : null;
@@ -8,90 +14,53 @@
   function hideStatus() { if (statusEl) statusEl.classList.add('hidden'); }
   function showTable() { if (table) table.classList.remove('hidden'); }
 
-  // Fetch shortlist
   let jobs = [];
   try {
     const res = await fetch('data/scores.json', { cache: 'no-cache' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     jobs = await res.json();
-  } catch (e) {
-    showStatus('Failed to load scores.json');
-    console.error(e);
-    return;
+  } catch {
+    showStatus('Failed to load scores.json'); return;
   }
-
-  // Sort by score desc
   jobs.sort((a, b) => (b.score || 0) - (a.score || 0));
 
-  // Render rows
   if (tbody) {
-    jobs.forEach(j => {
+    for (const j of jobs) {
       const tr = document.createElement('tr');
 
       const tdScore = document.createElement('td');
-      tdScore.textContent = (j.score ?? 0).toFixed(3);
-      tr.appendChild(tdScore);
+      tdScore.textContent = (j.score ?? 0).toFixed(3); tr.appendChild(tdScore);
 
       const tdTitle = document.createElement('td');
       const aJD = document.createElement('a');
-      aJD.href = j.url || '#';
-      aJD.target = '_blank';
-      aJD.rel = 'noopener';
+      aJD.href = j.url || '#'; aJD.target = '_blank'; aJD.rel = 'noopener';
       aJD.textContent = j.title || '(no title)';
-      tdTitle.appendChild(aJD);
-      tr.appendChild(tdTitle);
+      tdTitle.appendChild(aJD); tr.appendChild(tdTitle);
 
-      const tdCompany = document.createElement('td');
-      tdCompany.textContent = j.company || '';
-      tr.appendChild(tdCompany);
+      const tdCompany = document.createElement('td'); tdCompany.textContent = j.company || ''; tr.appendChild(tdCompany);
+      const tdLoc = document.createElement('td'); tdLoc.textContent = (j.location || '').trim(); tr.appendChild(tdLoc);
 
-      const tdLoc = document.createElement('td');
-      tdLoc.textContent = (j.location || '').trim();
-      tr.appendChild(tdLoc);
-
-      const tdPosted = document.createElement('td');
-      tdPosted.textContent = j.posted_at ? String(j.posted_at).slice(0, 10) : '—';
-      tr.appendChild(tdPosted);
+      // Posted (if present)
+      const tdPosted = document.createElement('td'); tdPosted.textContent = j.posted_at ? String(j.posted_at).slice(0,10) : '—'; tr.appendChild(tdPosted);
 
       const tdCover = document.createElement('td');
-      if (j.cover_path) {
-        const a = document.createElement('a');
-        a.href = j.cover_path;
-        a.target = '_blank';
-        a.rel = 'noopener';
-        a.textContent = 'Open';
-        tdCover.appendChild(a);
-      } else { tdCover.textContent = '—'; }
-      tr.appendChild(tdCover);
+      if (j.cover_path) { const a=document.createElement('a'); a.href=j.cover_path; a.target='_blank'; a.rel='noopener'; a.textContent='Open'; tdCover.appendChild(a); }
+      else tdCover.textContent = '—'; tr.appendChild(tdCover);
 
       const tdResume = document.createElement('td');
-      if (j.resume_docx) {
-        const hash = j.resume_docx_hash ? `?v=${j.resume_docx_hash}` : `?t=${Date.now()}`;
-        const a = document.createElement('a');
-        a.href = j.resume_docx + hash;
-        a.textContent = 'DOCX';
-        tdResume.appendChild(a);
-      } else { tdResume.textContent = '—'; }
-      tr.appendChild(tdResume);
+      if (j.resume_docx) { const hash=j.resume_docx_hash?`?v=${j.resume_docx_hash}`:`?t=${Date.now()}`; const a=document.createElement('a'); a.href=j.resume_docx+hash; a.textContent='DOCX'; tdResume.appendChild(a); }
+      else tdResume.textContent = '—'; tr.appendChild(tdResume);
 
       const tdExplain = document.createElement('td');
-      if (j.changes_path) {
-        const btn = document.createElement('button');
-        btn.className = 'btn';
-        btn.textContent = 'Explain';
-        btn.addEventListener('click', () => openExplain(j));
-        tdExplain.appendChild(btn);
-      } else { tdExplain.textContent = '—'; }
-      tr.appendChild(tdExplain);
+      if (j.changes_path) { const b=document.createElement('button'); b.className='btn'; b.textContent='Explain'; b.onclick=()=>openExplain(j); tdExplain.appendChild(b); }
+      else tdExplain.textContent = '—'; tr.appendChild(tdExplain);
 
       tbody.appendChild(tr);
-    });
+    }
   }
+  hideStatus(); showTable();
 
-  hideStatus();
-  showTable();
-
-  // -------- Explain modal ----------
+  // Explain modal (unchanged)
   const modal = document.getElementById('explainModal');
   const closeBtn = document.getElementById('closeExplain');
   const titleEl = document.getElementById('explainTitle');
@@ -100,18 +69,9 @@
 
   async function openExplain(job) {
     titleEl.textContent = `${job.title || ''} @ ${job.company || ''}`;
-
     keywordsEl.innerHTML = '';
     const kws = Array.isArray(job.ats_keywords) ? job.ats_keywords : (job.keywords || []);
-    if (kws && kws.length) {
-      kws.slice(0, 24).forEach(k => {
-        const span = document.createElement('span');
-        span.className = 'pill';
-        span.textContent = k;
-        keywordsEl.appendChild(span);
-      });
-    }
-
+    kws.slice(0, 24).forEach(k => { const s=document.createElement('span'); s.className='pill'; s.textContent=k; keywordsEl.appendChild(s); });
     changesEl.innerHTML = '';
     try {
       const res = await fetch(job.changes_path, { cache: 'no-cache' });
@@ -119,155 +79,113 @@
         const data = await res.json();
         const changes = Array.isArray(data.changes) ? data.changes : [];
         changes.forEach(ch => {
-          const row = document.createElement('div');
-          row.className = 'diffrow';
-
-          const left = document.createElement('div');
-          left.className = 'diffcol';
-          left.innerHTML = `<strong>${ch.section || ''} — before</strong>\n\n${ch.before || ''}`;
-
-          const right = document.createElement('div');
-          right.className = 'diffcol';
-          right.innerHTML = `<strong>${ch.section || ''} — after</strong>\n\n${ch.after || ''}`;
-
-          const reason = document.createElement('div');
-          reason.className = 'muted';
-          reason.style.fontSize = '12px';
-          reason.style.marginTop = '4px';
-          reason.textContent = `Reason: ${ch.reason || ''}`;
-
-          changesEl.appendChild(row);
-          row.appendChild(left);
-          row.appendChild(right);
-          changesEl.appendChild(reason);
+          const row=document.createElement('div'); row.className='diffrow';
+          const L=document.createElement('div'); L.className='diffcol'; L.innerHTML = `<strong>${ch.section||''} — before</strong>\n\n${ch.before||''}`;
+          const R=document.createElement('div'); R.className='diffcol'; R.innerHTML = `<strong>${ch.section||''} — after</strong>\n\n${ch.after||''}`;
+          const reason=document.createElement('div'); reason.className='muted'; reason.style.fontSize='12px'; reason.style.marginTop='4px'; reason.textContent=`Reason: ${ch.reason || ''}`;
+          changesEl.appendChild(row); row.appendChild(L); row.appendChild(R); changesEl.appendChild(reason);
         });
       }
-    } catch (e) { console.error(e); }
-
-    modal.style.display = 'block';
-    document.body.classList.add('modal-open');
+    } catch {}
+    modal.style.display='block'; document.body.classList.add('modal-open');
   }
-
-  function closeExplain() { modal.style.display = 'none'; document.body.classList.remove('modal-open'); }
+  function closeExplain(){ modal.style.display='none'; document.body.classList.remove('modal-open'); }
   closeBtn?.addEventListener('click', closeExplain);
-  modal?.addEventListener('click', (e) => { if (e.target === modal) closeExplain(); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && modal.style.display === 'block') closeExplain(); });
-})();
+  modal?.addEventListener('click', e => { if (e.target===modal) closeExplain(); });
+  document.addEventListener('keydown', e => { if (e.key==='Escape' && modal.style.display==='block') closeExplain(); });
 
-// ---------- Supabase auth + upload + trigger (dashboard only) ----------
-(async function () {
+  // ---------- Auth + user panel ----------
   await new Promise(r => window.addEventListener('load', r));
-  if (!window.supabase) return;
+  const supabase = window.supabase.createClient(
+    'https://YOUR-REF.supabase.co',
+    'YOUR_ANON_KEY'
+  ); // Supabase JS v2 createClient. :contentReference[oaicite:7]{index=7}
 
-  // TODO: replace with your actual values from Settings → API
-  const SUPABASE_URL = 'https://imozfqawxpsasjdmgdkh.supabase.co';
-  const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc';
-
-  const supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
-
-  const loginBtn = document.getElementById('login');
-  const logoutBtn = document.getElementById('logout');
-  const whoami = document.getElementById('whoami');
-  const prof = document.getElementById('profile');
-  const saveProfile = document.getElementById('saveProfile');
-  const runTailor = document.getElementById('runTailor');
-  const uploadResume = document.getElementById('uploadResume');
+  // Insert a small panel in the page header
+  const header = document.querySelector('.wrap') || document.body;
+  const panel = document.createElement('div');
+  panel.innerHTML = `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0 16px">
+      <a class="btn" href="login.html">Sign in</a>
+      <button id="logout" class="btn" style="display:none">Sign out</button>
+      <span id="who" class="muted"></span>
+      <label>Full name <input id="full_name" style="width:180px"></label>
+      <label>Phone <input id="phone" style="width:140px"></label>
+      <label>Skills <input id="skills" placeholder="comma-separated" style="width:180px"></label>
+      <button id="saveProfile" class="btn">Save Profile</button>
+      <input type="file" id="resume" accept=".docx" />
+      <button id="uploadResume" class="btn">Upload Resume</button>
+      <button id="runTailor" class="btn">Tailor my application</button>
+      <span id="runMsg" class="muted"></span>
+    </div>`;
+  header.insertBefore(panel, header.children[1]);
 
   async function refresh() {
-    const { data: { user } } = await supa.auth.getUser();
+    const { data: { user } } = await supabase.auth.getUser();
+    document.getElementById('logout').style.display = user ? '' : 'none';
+    document.querySelector('a.btn[href="login.html"]').style.display = user ? 'none' : '';
+    document.getElementById('who').textContent = user ? `Signed in as ${user.email || user.id}` : '';
+    // Try load profile
     if (user) {
-      whoami.textContent = `Signed in as ${user.email || user.id}`;
-      loginBtn.style.display = 'none';
-      logoutBtn.style.display = '';
-      prof.style.display = '';
-    } else {
-      whoami.textContent = '';
-      loginBtn.style.display = '';
-      logoutBtn.style.display = 'none';
-      prof.style.display = 'none';
+      const r = await fetch(`${supabase.storage.url.replace('/storage/v1','')}/rest/v1/profiles?id=eq.${user.id}&select=*`, {
+        headers: { apikey: supabase.headers().apikey, Authorization: supabase.headers().Authorization }
+      });
+      if (r.ok) {
+        const rows = await r.json();
+        const p = rows[0] || {};
+        document.getElementById('full_name').value = p.full_name || '';
+        document.getElementById('phone').value = p.phone || '';
+        document.getElementById('skills').value = (p.skills || []).join(', ');
+      }
     }
   }
+  refresh();
 
-  loginBtn.onclick = async () => {
-    await supa.auth.signInWithOAuth({
-      provider: 'github',
-      options: {
-        // IMPORTANT: send the user back to the project pages path, not the domain root
-        redirectTo: 'https://albertoroca96.github.io/job-copilot/'
-      }
-    });
-  };
+  document.getElementById('logout').onclick = async () => { await supabase.auth.signOut(); location.href = './login.html'; };
 
-  logoutBtn.onclick = async () => { await supa.auth.signOut(); location.reload(); };
-  await refresh();
-
-  // Save profile
-  saveProfile.onclick = async () => {
-    const { data: { user } } = await supa.auth.getUser();
-    if (!user) return;
-
-    const payload = {
+  document.getElementById('saveProfile').onclick = async () => {
+    const { data: { user } } = await supabase.auth.getUser(); if (!user) return;
+    const body = {
       id: user.id,
       full_name: document.getElementById('full_name').value || null,
       phone: document.getElementById('phone').value || null,
-      skills: (document.getElementById('skills').value || '')
-        .split(',').map(s => s.trim()).filter(Boolean)
+      skills: (document.getElementById('skills').value || '').split(',').map(s=>s.trim()).filter(Boolean)
     };
-
-    // upsert via REST
-    await fetch(`${SUPABASE_URL}/rest/v1/profiles`, {
+    await fetch(`${supabase.storage.url.replace('/storage/v1','')}/rest/v1/profiles`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        apikey: SUPABASE_ANON,
-        Authorization: `Bearer ${(await supa.auth.getSession()).data.session?.access_token || ''}`,
+        apikey: supabase.headers().apikey,
+        Authorization: supabase.headers().Authorization,
         Prefer: 'resolution=merge-duplicates'
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(body)
     });
-    alert('Profile saved.');
+    alert('Saved!');
   };
 
-  // Upload resume to private bucket: resumes/{uid}/current.docx
-  uploadResume.onclick = async () => {
-    const { data: { user } } = await supa.auth.getUser();
-    if (!user) return;
-    const f = document.getElementById('resume').files[0];
-    if (!f) return alert('Choose a .docx');
-
+  document.getElementById('uploadResume').onclick = async () => {
+    const { data: { user } } = await supabase.auth.getUser(); if (!user) return alert('Sign in first.');
+    const file = document.getElementById('resume').files[0]; if (!file) return alert('Choose a .docx file');
     const path = `${user.id}/current.docx`;
-    const { error } = await supa.storage.from('resumes').upload(path, f, { upsert: true });
+    const { error } = await supabase.storage.from('resumes').upload(path, file, { upsert: true }); // Storage upload. :contentReference[oaicite:8]{index=8}
     if (error) return alert('Upload error: ' + error.message);
-
-    // record row
-    await fetch(`${SUPABASE_URL}/rest/v1/resumes`, {
+    await fetch(`${supabase.storage.url.replace('/storage/v1','')}/rest/v1/resumes`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        apikey: SUPABASE_ANON,
-        Authorization: `Bearer ${(await supa.auth.getSession()).data.session?.access_token || ''}`
-      },
+      headers: { 'Content-Type': 'application/json', apikey: supabase.headers().apikey, Authorization: supabase.headers().Authorization },
       body: JSON.stringify({ user_id: user.id, path })
     });
-    alert('Uploaded resume.');
+    alert('Uploaded.');
   };
 
-  // Call Edge Function to trigger GH Action
-  runTailor.onclick = async () => {
-    const { data: { session } } = await supa.auth.getSession();
-    if (!session) return alert('Sign in first.');
-
-    const resp = await fetch(`${SUPABASE_URL}/functions/v1/request-run`, {
+  document.getElementById('runTailor').onclick = async () => {
+    const { data: { session } } = await supabase.auth.getSession(); if (!session) return alert('Sign in first.');
+    const resp = await fetch(`${supabase.storage.url.replace('/storage/v1','')}/functions/v1/request-run`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${session.access_token}`,
-        apikey: SUPABASE_ANON
-      },
-      body: JSON.stringify({ note: 'user-initiated from dashboard' })
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}`, apikey: supabase.headers().apikey },
+      body: JSON.stringify({ note: 'user run from dashboard' })
     });
-    const out = await resp.json().catch(() => ({}));
-    document.getElementById('runMsg').textContent =
-      resp.ok ? `Request queued: ${out.request_id}` : `Error: ${out.error || resp.status}`;
+    const out = await resp.json().catch(()=>({}));
+    document.getElementById('runMsg').textContent = resp.ok ? `Queued: ${out.request_id}` : `Error: ${out.error || resp.status}`;
   };
 })();
