@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>job-copilot — Sign in</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js" defer></script>
+</head>
+<body>
+  <main class="wrap" style="max-width:640px">
+    <h1>Sign in</h1>
+    <p>Enter your email to receive a magic link. No password required.</p>
+    <label>Email <input id="email" type="email" placeholder="you@example.com" /></label>
+    <button id="send" class="btn">Send magic link</button>
+    <div id="msg" class="muted" style="margin-top:10px"></div>
+  </main>
+
+  <script>
+    window.addEventListener('load', async () => {
+      const supabase = window.supabase.createClient(
+        'https://YOUR-REF.supabase.co',
+        'YOUR_ANON_KEY'
+      ); // createClient. :contentReference[oaicite:5]{index=5}
+
+      document.getElementById('send').onclick = async () => {
+        const email = document.getElementById('email').value.trim();
+        if (!email) return;
+        const redirectTo = 'https://albertoroca96.github.io/job-copilot/';
+        const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: redirectTo } });
+        document.getElementById('msg').textContent = error ? ('Error: ' + error.message) : 'Check your email for the link.';
+      };
+    });
+  </script>
+</body>
+</html>
