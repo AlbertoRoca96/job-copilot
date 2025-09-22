@@ -17,10 +17,12 @@ def download(bucket, path, out_path):
 
 def main(user_id):
   rows = query(f"{SUPABASE_URL}/rest/v1/resumes?user_id=eq.{user_id}&select=*&order=created_at.desc&limit=1")
-  if not rows: 
+  if not rows:
     print("No resume for user", user_id); return
   row = rows[0]
-  download(row["bucket"], row["path"], "assets/Resume-2025.docx")
+  bucket = row.get("bucket", "resumes")
+  path = row["path"]
+  download(bucket, path, "assets/Resume-2025.docx")
   print("Downloaded resume -> assets/Resume-2025.docx")
 
 if __name__ == "__main__":
