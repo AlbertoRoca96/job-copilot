@@ -11,8 +11,8 @@
     {
       "section": "Projects",
       "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using participated in on-call rotation for build pipeline support.",
-      "reason": "Aligned to JD via clause: \u201cparticipated in on-call rotation for build pipeline support\u201d"
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using and maintained infrastructure for CI systems at scale.",
+      "reason": "Aligned to JD via clause: \u201cbuilt and maintained infrastructure for CI systems at scale\u201d"
     },
     {
       "section": "Projects",
@@ -22,10 +22,10 @@
     },
     {
       "section": "Projects",
-      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using participated in on-call rotation for build pipeline support.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using participated in on-call rotation for build pipeline support. Using reliable data/annotation pipelines (GitHub Actions + SQL/Postgres).",
-      "reason": "Aligned to JD via clause: \u201cbuilt reliable data/annotation pipelines (GitHub Actions + SQL/Postgres)\u201d"
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using and maintained infrastructure for CI systems at scale.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using and maintained infrastructure for CI systems at scale. Using added CI/monitoring hooks for model/data jobs.",
+      "reason": "Aligned to JD via clause: \u201cadded CI/monitoring hooks for model/data jobs\u201d"
     }
   ],
-  "jd_hash": "7ccc9845"
+  "jd_hash": "db40a7aa"
 }

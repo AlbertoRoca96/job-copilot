@@ -11,8 +11,8 @@
     {
       "section": "Projects",
       "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using and maintained CI/cd systems for high-scale applications.",
-      "reason": "Aligned to JD via clause: \u201cbuilt and maintained CI/cd systems for high-scale applications\u201d"
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using and maintained CI/cd systems for efficient software delivery.",
+      "reason": "Aligned to JD via clause: \u201cbuilt and maintained CI/cd systems for efficient software delivery\u201d"
     },
     {
       "section": "Projects",
@@ -22,9 +22,9 @@
     },
     {
       "section": "Projects",
-      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using and maintained CI/cd systems for high-scale applications.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using and maintained CI/cd systems for high-scale applications. Using added CI/monitoring hooks for model/data jobs.",
-      "reason": "Aligned to JD via clause: \u201cadded CI/monitoring hooks for model/data jobs\u201d"
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using and maintained CI/cd systems for efficient software delivery.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using and maintained CI/cd systems for efficient software delivery. Using engaged with open-source projects to enhance system performance.",
+      "reason": "Aligned to JD via clause: \u201cengaged with open-source projects to enhance system performance\u201d"
     }
   ],
   "jd_hash": "90433a7c"

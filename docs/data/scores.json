@@ -12,7 +12,12 @@
     "skill_overlap": 0.1538,
     "title_similarity": 0.1818,
     "loc_boost": 0.0,
-    "score": 0.1469
+    "score": 0.1469,
+    "cover_file": "vercel_SoftwareEngineerMicrofrontendsRemote-UnitedKingdomGermany.md",
+    "cover_path": "outbox/vercel_SoftwareEngineerMicrofrontendsRemote-UnitedKingdomGermany.md",
+    "resume_docx": "resumes/vercel_SoftwareEngineerMicrofrontendsRemote-UnitedKingdomGermany_03902732.docx",
+    "resume_docx_hash": "03902732",
+    "changes_path": "changes/vercel_SoftwareEngineerMicrofrontendsRemote-UnitedKingdomGermany.json"
   },
   {
     "title": "Software Engineer, Data Infrastructure",
@@ -27,7 +32,12 @@
     "skill_overlap": 0.0769,
     "title_similarity": 0.2727,
     "loc_boost": 0.0,
-    "score": 0.128
+    "score": 0.128,
+    "cover_file": "figma_SoftwareEngineerDataInfrastructure.md",
+    "cover_path": "outbox/figma_SoftwareEngineerDataInfrastructure.md",
+    "resume_docx": "resumes/figma_SoftwareEngineerDataInfrastructure_0fb57b72.docx",
+    "resume_docx_hash": "0fb57b72",
+    "changes_path": "changes/figma_SoftwareEngineerDataInfrastructure.json"
   },
   {
     "title": "Software Engineer, Build InfrastructureHybrid - London, Berlin",
@@ -42,7 +52,12 @@
     "skill_overlap": 0.1154,
     "title_similarity": 0.1818,
     "loc_boost": 0.0,
-    "score": 0.1238
+    "score": 0.1238,
+    "cover_file": "vercel_SoftwareEngineerBuildInfrastructureHybrid-LondonBerlin.md",
+    "cover_path": "outbox/vercel_SoftwareEngineerBuildInfrastructureHybrid-LondonBerlin.md",
+    "resume_docx": "resumes/vercel_SoftwareEngineerBuildInfrastructureHybrid-LondonBerlin_90433a7c.docx",
+    "resume_docx_hash": "90433a7c",
+    "changes_path": "changes/vercel_SoftwareEngineerBuildInfrastructureHybrid-LondonBerlin.json"
   },
   {
     "title": "Software Engineer, Build InfrastructureRemote - United Kingdom, Germany",
@@ -57,7 +72,12 @@
     "skill_overlap": 0.1154,
     "title_similarity": 0.1818,
     "loc_boost": 0.0,
-    "score": 0.1238
+    "score": 0.1238,
+    "cover_file": "vercel_SoftwareEngineerBuildInfrastructureRemote-UnitedKingdomGermany.md",
+    "cover_path": "outbox/vercel_SoftwareEngineerBuildInfrastructureRemote-UnitedKingdomGermany.md",
+    "resume_docx": "resumes/vercel_SoftwareEngineerBuildInfrastructureRemote-UnitedKingdomGermany_db40a7aa.docx",
+    "resume_docx_hash": "db40a7aa",
+    "changes_path": "changes/vercel_SoftwareEngineerBuildInfrastructureRemote-UnitedKingdomGermany.json"
   },
   {
     "title": "Product Engineer \u2013 v0Hybrid - San Francisco, New York City",
@@ -72,7 +92,12 @@
     "skill_overlap": 0.1538,
     "title_similarity": 0.0909,
     "loc_boost": 0.0,
-    "score": 0.1196
+    "score": 0.1196,
+    "cover_file": "vercel_ProductEngineerv0Hybrid-SanFranciscoNewYorkCity.md",
+    "cover_path": "outbox/vercel_ProductEngineerv0Hybrid-SanFranciscoNewYorkCity.md",
+    "resume_docx": "resumes/vercel_ProductEngineerv0Hybrid-SanFranciscoNewYorkCity_7b123299.docx",
+    "resume_docx_hash": "7b123299",
+    "changes_path": "changes/vercel_ProductEngineerv0Hybrid-SanFranciscoNewYorkCity.json"
   },
   {
     "title": "Software Engineer, Infrastructure",
@@ -87,7 +112,12 @@
     "skill_overlap": 0.0769,
     "title_similarity": 0.1818,
     "loc_boost": 0.0,
-    "score": 0.1007
+    "score": 0.1007,
+    "cover_file": "figma_SoftwareEngineerInfrastructure.md",
+    "cover_path": "outbox/figma_SoftwareEngineerInfrastructure.md",
+    "resume_docx": "resumes/figma_SoftwareEngineerInfrastructure_81d7d3a0.docx",
+    "resume_docx_hash": "81d7d3a0",
+    "changes_path": "changes/figma_SoftwareEngineerInfrastructure.json"
   },
   {
     "title": "Software Engineer, GrowthHybrid - San Francisco, New York City",
@@ -102,7 +132,12 @@
     "skill_overlap": 0.0769,
     "title_similarity": 0.1818,
     "loc_boost": 0.0,
-    "score": 0.1007
+    "score": 0.1007,
+    "cover_file": "vercel_SoftwareEngineerGrowthHybrid-SanFranciscoNewYorkCity.md",
+    "cover_path": "outbox/vercel_SoftwareEngineerGrowthHybrid-SanFranciscoNewYorkCity.md",
+    "resume_docx": "resumes/vercel_SoftwareEngineerGrowthHybrid-SanFranciscoNewYorkCity_460b4d15.docx",
+    "resume_docx_hash": "460b4d15",
+    "changes_path": "changes/vercel_SoftwareEngineerGrowthHybrid-SanFranciscoNewYorkCity.json"
   },
   {
     "title": "AI EngineerHybrid - San Francisco, New York City",
@@ -117,7 +152,12 @@
     "skill_overlap": 0.1538,
     "title_similarity": 0.0,
     "loc_boost": 0.0,
-    "score": 0.0923
+    "score": 0.0923,
+    "cover_file": "vercel_AIEngineerHybrid-SanFranciscoNewYorkCity.md",
+    "cover_path": "outbox/vercel_AIEngineerHybrid-SanFranciscoNewYorkCity.md",
+    "resume_docx": "resumes/vercel_AIEngineerHybrid-SanFranciscoNewYorkCity_47047b44.docx",
+    "resume_docx_hash": "47047b44",
+    "changes_path": "changes/vercel_AIEngineerHybrid-SanFranciscoNewYorkCity.json"
   },
   {
     "title": "Data Engineer",
@@ -132,7 +172,12 @@
     "skill_overlap": 0.0385,
     "title_similarity": 0.1818,
     "loc_boost": 0.0,
-    "score": 0.0776
+    "score": 0.0776,
+    "cover_file": "figma_DataEngineer.md",
+    "cover_path": "outbox/figma_DataEngineer.md",
+    "resume_docx": "resumes/figma_DataEngineer_80bfff49.docx",
+    "resume_docx_hash": "80bfff49",
+    "changes_path": "changes/figma_DataEngineer.json"
   },
   {
     "title": "Software Engineer, Support PlatformHybrid - San Francisco",
@@ -147,7 +192,12 @@
     "skill_overlap": 0.0385,
     "title_similarity": 0.1818,
     "loc_boost": 0.0,
-    "score": 0.0776
+    "score": 0.0776,
+    "cover_file": "vercel_SoftwareEngineerSupportPlatformHybrid-SanFrancisco.md",
+    "cover_path": "outbox/vercel_SoftwareEngineerSupportPlatformHybrid-SanFrancisco.md",
+    "resume_docx": "resumes/vercel_SoftwareEngineerSupportPlatformHybrid-SanFrancisco_58317484.docx",
+    "resume_docx_hash": "58317484",
+    "changes_path": "changes/vercel_SoftwareEngineerSupportPlatformHybrid-SanFrancisco.json"
   },
   {
     "title": "Software Engineer, EdgeHybrid - San Francisco, New York City",

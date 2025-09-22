@@ -1,0 +1,32 @@
+{
+  "company": "figma",
+  "title": "Data Engineer",
+  "ats_keywords": [
+    "data",
+    "learning",
+    "sql",
+    "support",
+    "workflows"
+  ],
+  "changes": [
+    {
+      "section": "Projects",
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using scalable data pipelines connecting various cloud data sources.",
+      "reason": "Aligned to JD via clause: \u201cbuilt scalable data pipelines connecting various cloud data sources\u201d"
+    },
+    {
+      "section": "Projects",
+      "before": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex",
+      "after": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex Using established best practices for analytics and modeling datasets.",
+      "reason": "Aligned to JD via clause: \u201cestablished best practices for analytics and modeling datasets\u201d"
+    },
+    {
+      "section": "Projects",
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using scalable data pipelines connecting various cloud data sources.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using scalable data pipelines connecting various cloud data sources. Using documented and simplified complex data requirements for stakeholders.",
+      "reason": "Aligned to JD via clause: \u201cdocumented and simplified complex data requirements for stakeholders\u201d"
+    }
+  ],
+  "jd_hash": "80bfff49"
+}

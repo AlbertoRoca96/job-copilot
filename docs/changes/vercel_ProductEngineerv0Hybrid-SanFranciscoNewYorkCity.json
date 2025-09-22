@@ -15,8 +15,8 @@
     {
       "section": "Projects",
       "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using ai-powered tools for enhanced developer experience.",
-      "reason": "Aligned to JD via clause: \u201cdeveloped ai-powered tools for enhanced developer experience\u201d"
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using automation solutions to streamline workflows.",
+      "reason": "Aligned to JD via clause: \u201cimplemented automation solutions to streamline workflows\u201d"
     },
     {
       "section": "Projects",
@@ -26,10 +26,10 @@
     },
     {
       "section": "Projects",
-      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using ai-powered tools for enhanced developer experience.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using ai-powered tools for enhanced developer experience. Using automation solutions to streamline workflows.",
-      "reason": "Aligned to JD via clause: \u201cimplemented automation solutions to streamline workflows\u201d"
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using automation solutions to streamline workflows.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using automation solutions to streamline workflows. Using ai-powered tools for enhanced developer experience.",
+      "reason": "Aligned to JD via clause: \u201cdeveloped ai-powered tools for enhanced developer experience\u201d"
     }
   ],
-  "jd_hash": "60bf03b9"
+  "jd_hash": "7b123299"
 }

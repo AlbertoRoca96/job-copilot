@@ -1,0 +1,36 @@
+{
+  "company": "figma",
+  "title": "Software Engineer, Infrastructure",
+  "ats_keywords": [
+    "ci",
+    "data",
+    "learning",
+    "postgresql",
+    "python",
+    "realtime",
+    "support",
+    "typescript",
+    "workflows"
+  ],
+  "changes": [
+    {
+      "section": "Projects",
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using workflows for efficient infrastructure management.",
+      "reason": "Aligned to JD via clause: \u201cimplemented workflows for efficient infrastructure management\u201d"
+    },
+    {
+      "section": "Projects",
+      "before": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex",
+      "after": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex Using ML models with Python/PyTorch and iterative evaluation loops.",
+      "reason": "Aligned to JD via clause: \u201cshipped ML models with Python/PyTorch and iterative evaluation loops\u201d"
+    },
+    {
+      "section": "Projects",
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using workflows for efficient infrastructure management.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using workflows for efficient infrastructure management. Using tools for learning and improving developer experience.",
+      "reason": "Aligned to JD via clause: \u201cbuilt tools for learning and improving developer experience\u201d"
+    }
+  ],
+  "jd_hash": "81d7d3a0"
+}

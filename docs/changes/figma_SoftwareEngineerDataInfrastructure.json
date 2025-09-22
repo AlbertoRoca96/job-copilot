@@ -18,8 +18,8 @@
     {
       "section": "Projects",
       "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using batch and streaming solutions for data processing and movement.",
-      "reason": "Aligned to JD via clause: \u201cdeveloped batch and streaming solutions for data processing and movement\u201d"
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using and built large-scale distributed data systems for analytics.",
+      "reason": "Aligned to JD via clause: \u201cdesigned and built large-scale distributed data systems for analytics\u201d"
     },
     {
       "section": "Projects",
@@ -29,9 +29,9 @@
     },
     {
       "section": "Projects",
-      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using batch and streaming solutions for data processing and movement.",
-      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using batch and streaming solutions for data processing and movement. Using data reliability and performance for engineering and business stakeholders.",
-      "reason": "Aligned to JD via clause: \u201cimproved data reliability and performance for engineering and business stakeholders\u201d"
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using and built large-scale distributed data systems for analytics.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using and built large-scale distributed data systems for analytics. Using batch and streaming solutions for reliable data processing.",
+      "reason": "Aligned to JD via clause: \u201cdeveloped batch and streaming solutions for reliable data processing\u201d"
     }
   ],
   "jd_hash": "0fb57b72"

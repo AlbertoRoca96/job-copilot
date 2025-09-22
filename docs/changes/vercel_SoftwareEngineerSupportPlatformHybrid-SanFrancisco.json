@@ -1,0 +1,33 @@
+{
+  "company": "vercel",
+  "title": "Software Engineer, Support PlatformHybrid - San Francisco",
+  "ats_keywords": [
+    "ci",
+    "support",
+    "ai",
+    "automation",
+    "documentation",
+    "python"
+  ],
+  "changes": [
+    {
+      "section": "Projects",
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using authored documentation for internal processes and troubleshooting.",
+      "reason": "Aligned to JD via clause: \u201cauthored documentation for internal processes and troubleshooting\u201d"
+    },
+    {
+      "section": "Projects",
+      "before": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex",
+      "after": "\u2013 Real-time desktop Pok\u00e9dex: captures a screen region with OpenCV, preprocesses frames, and runs a fine-tuned ResNet-50 for top-1 classification; triggers TTS to speak flavor text on demand. https://github.com/AlbertoRoca96/Pokedex Using ML models with Python/PyTorch and iterative evaluation loops.",
+      "reason": "Aligned to JD via clause: \u201cshipped ML models with Python/PyTorch and iterative evaluation loops\u201d"
+    },
+    {
+      "section": "Projects",
+      "before": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using authored documentation for internal processes and troubleshooting.",
+      "after": "\u2013 Phone-first field audit app built with Expo (React Native) and Supabase (Auth/Postgres/Storage/RLS); CI uses EAS builds via GitHub Actions; ~390 commits.  Using authored documentation for internal processes and troubleshooting. Using added CI/monitoring hooks for model/data jobs.",
+      "reason": "Aligned to JD via clause: \u201cadded CI/monitoring hooks for model/data jobs\u201d"
+    }
+  ],
+  "jd_hash": "58317484"
+}
