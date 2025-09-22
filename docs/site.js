@@ -23,17 +23,6 @@
   // Sort by score desc
   jobs.sort((a, b) => (b.score || 0) - (a.score || 0));
 
-  // If header exists and has no "Posted" column, try to insert one
-  try {
-    const theadRow = table?.querySelector('thead tr');
-    if (theadRow && theadRow.children.length === 7) {
-      const th = document.createElement('th');
-      th.textContent = 'Posted';
-      // Insert after "Location" (index 3)
-      theadRow.insertBefore(th, theadRow.children[4]);
-    }
-  } catch {}
-
   // Render rows
   if (tbody) {
     jobs.forEach(j => {
@@ -60,7 +49,6 @@
       tdLoc.textContent = (j.location || '').trim();
       tr.appendChild(tdLoc);
 
-      // NEW: Posted date column (YYYY-MM-DD if available)
       const tdPosted = document.createElement('td');
       tdPosted.textContent = j.posted_at ? String(j.posted_at).slice(0, 10) : '—';
       tr.appendChild(tdPosted);
@@ -73,9 +61,7 @@
         a.rel = 'noopener';
         a.textContent = 'Open';
         tdCover.appendChild(a);
-      } else {
-        tdCover.textContent = '—';
-      }
+      } else { tdCover.textContent = '—'; }
       tr.appendChild(tdCover);
 
       const tdResume = document.createElement('td');
@@ -85,9 +71,7 @@
         a.href = j.resume_docx + hash;
         a.textContent = 'DOCX';
         tdResume.appendChild(a);
-      } else {
-        tdResume.textContent = '—';
-      }
+      } else { tdResume.textContent = '—'; }
       tr.appendChild(tdResume);
 
       const tdExplain = document.createElement('td');
@@ -97,9 +81,7 @@
         btn.textContent = 'Explain';
         btn.addEventListener('click', () => openExplain(j));
         tdExplain.appendChild(btn);
-      } else {
-        tdExplain.textContent = '—';
-      }
+      } else { tdExplain.textContent = '—'; }
       tr.appendChild(tdExplain);
 
       tbody.appendChild(tr);
@@ -119,7 +101,6 @@
   async function openExplain(job) {
     titleEl.textContent = `${job.title || ''} @ ${job.company || ''}`;
 
-    // ATS keywords
     keywordsEl.innerHTML = '';
     const kws = Array.isArray(job.ats_keywords) ? job.ats_keywords : (job.keywords || []);
     if (kws && kws.length) {
@@ -131,7 +112,6 @@
       });
     }
 
-    // Diff cards
     changesEl.innerHTML = '';
     try {
       const res = await fetch(job.changes_path, { cache: 'no-cache' });
@@ -162,25 +142,123 @@
           changesEl.appendChild(reason);
         });
       }
-    } catch (e) {
-      console.error(e);
-    }
+    } catch (e) { console.error(e); }
 
-    // Open modal
     modal.style.display = 'block';
     document.body.classList.add('modal-open');
   }
 
-  function closeExplain() {
-    modal.style.display = 'none';
-    document.body.classList.remove('modal-open');
+  function closeExplain() { modal.style.display = 'none'; document.body.classList.remove('modal-open'); }
+  closeBtn?.addEventListener('click', closeExplain);
+  modal?.addEventListener('click', (e) => { if (e.target === modal) closeExplain(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && modal.style.display === 'block') closeExplain(); });
+})();
+
+// ---------- Supabase auth + upload + trigger (dashboard only) ----------
+(async function () {
+  await new Promise(r => window.addEventListener('load', r));
+  if (!window.supabase) return;
+
+  // TODO: replace with your actual values from Settings → API
+  const SUPABASE_URL = 'https://YOUR-PROJECT-ref.supabase.co';
+  const SUPABASE_ANON = 'YOUR_ANON_PUBLIC_KEY';
+
+  const supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+
+  const loginBtn = document.getElementById('login');
+  const logoutBtn = document.getElementById('logout');
+  const whoami = document.getElementById('whoami');
+  const prof = document.getElementById('profile');
+  const saveProfile = document.getElementById('saveProfile');
+  const runTailor = document.getElementById('runTailor');
+  const uploadResume = document.getElementById('uploadResume');
+
+  async function refresh() {
+    const { data: { user } } = await supa.auth.getUser();
+    if (user) {
+      whoami.textContent = `Signed in as ${user.email || user.id}`;
+      loginBtn.style.display = 'none';
+      logoutBtn.style.display = '';
+      prof.style.display = '';
+    } else {
+      whoami.textContent = '';
+      loginBtn.style.display = '';
+      logoutBtn.style.display = 'none';
+      prof.style.display = 'none';
+    }
   }
 
-  closeBtn?.addEventListener('click', closeExplain);
-  modal?.addEventListener('click', (e) => {
-    if (e.target === modal) closeExplain();
-  });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && modal.style.display === 'block') closeExplain();
-  });
+  loginBtn.onclick = async () => { await supa.auth.signInWithOAuth({ provider: 'github' }); };
+  logoutBtn.onclick = async () => { await supa.auth.signOut(); location.reload(); };
+  await refresh();
+
+  // Save profile
+  saveProfile.onclick = async () => {
+    const { data: { user } } = await supa.auth.getUser();
+    if (!user) return;
+
+    const payload = {
+      id: user.id,
+      full_name: document.getElementById('full_name').value || null,
+      phone: document.getElementById('phone').value || null,
+      skills: (document.getElementById('skills').value || '')
+        .split(',').map(s => s.trim()).filter(Boolean)
+    };
+
+    // upsert via REST
+    await fetch(`${SUPABASE_URL}/rest/v1/profiles`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: SUPABASE_ANON,
+        Authorization: `Bearer ${(await supa.auth.getSession()).data.session?.access_token || ''}`,
+        Prefer: 'resolution=merge-duplicates'
+      },
+      body: JSON.stringify(payload)
+    });
+    alert('Profile saved.');
+  };
+
+  // Upload resume to private bucket: resumes/{uid}/current.docx
+  uploadResume.onclick = async () => {
+    const { data: { user } } = await supa.auth.getUser();
+    if (!user) return;
+    const f = document.getElementById('resume').files[0];
+    if (!f) return alert('Choose a .docx');
+
+    const path = `${user.id}/current.docx`;
+    const { error } = await supa.storage.from('resumes').upload(path, f, { upsert: true });
+    if (error) return alert('Upload error: ' + error.message);
+
+    // record row
+    await fetch(`${SUPABASE_URL}/rest/v1/resumes`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: SUPABASE_ANON,
+        Authorization: `Bearer ${(await supa.auth.getSession()).data.session?.access_token || ''}`
+      },
+      body: JSON.stringify({ user_id: user.id, path })
+    });
+    alert('Uploaded resume.');
+  };
+
+  // Call Edge Function to trigger GH Action
+  runTailor.onclick = async () => {
+    const { data: { session } } = await supa.auth.getSession();
+    if (!session) return alert('Sign in first.');
+
+    const resp = await fetch(`${SUPABASE_URL}/functions/v1/request-run`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+        apikey: SUPABASE_ANON
+      },
+      body: JSON.stringify({ note: 'user-initiated from dashboard' })
+    });
+    const out = await resp.json().catch(() => ({}));
+    document.getElementById('runMsg').textContent =
+      resp.ok ? `Request queued: ${out.request_id}` : `Error: ${out.error || resp.status}`;
+  };
 })();
