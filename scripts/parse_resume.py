@@ -5,7 +5,6 @@ from docx import Document
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SRK = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 
-# very light heuristics; expand as needed
 PHONE_RE = re.compile(r"(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}")
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
@@ -21,12 +20,13 @@ def tokens(text: str):
 def extract(docx_path: str):
   doc = Document(docx_path)
   full = "\n".join(p.text for p in doc.paragraphs)
-  phone = (PHONE_RE.search(full) or [None])[0]
-  email = (EMAIL_RE.search(full) or [None])[0]
+  phone_m = PHONE_RE.search(full)
+  email_m = EMAIL_RE.search(full)
+  phone = phone_m.group(0) if phone_m else None
+  email = email_m.group(0) if email_m else None
   toks = tokens(full)
   skills = sorted([s for s in KNOWN_SKILLS if any(t in s or s in t for t in toks)])
   name = None
-  # naive: first non-empty centered-ish heading or top two words
   for p in doc.paragraphs[:8]:
     t = p.text.strip()
     if t and len(t.split())<=4 and not EMAIL_RE.search(t) and not PHONE_RE.search(t):
@@ -43,10 +43,13 @@ def upsert_profile(user_id: str, profile: dict):
 
 def main(user_id: str):
   path = "assets/Resume-2025.docx"
-  if not os.path.exists(path): 
+  if not os.path.exists(path):
     print("No resume at", path); return
   prof = extract(path)
-  upsert_profile(user_id, {k:v for k,v in prof.items() if v})
+  prof = {k:v for k,v in prof.items() if v}
+  if not prof:
+    print("No fields extracted."); return
+  upsert_profile(user_id, prof)
   print("Upserted profile with extracted fields.")
 
 if __name__ == "__main__":
