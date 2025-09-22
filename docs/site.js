@@ -188,7 +188,16 @@
     }
   }
 
-  loginBtn.onclick = async () => { await supa.auth.signInWithOAuth({ provider: 'github' }); };
+  loginBtn.onclick = async () => {
+    await supa.auth.signInWithOAuth({
+      provider: 'github',
+      options: {
+        // IMPORTANT: send the user back to the project pages path, not the domain root
+        redirectTo: 'https://albertoroca96.github.io/job-copilot/'
+      }
+    });
+  };
+
   logoutBtn.onclick = async () => { await supa.auth.signOut(); location.reload(); };
   await refresh();
 
