@@ -2,12 +2,8 @@ name: tailor-user
 on:
   workflow_dispatch:
     inputs:
-      user_id:
-        description: "Supabase auth user id"
-        required: true
-      request_id:
-        description: "job_requests row id"
-        required: true
+      user_id: { description: "Supabase user id", required: true }
+      request_id: { description: "job_requests id", required: true }
 
 permissions:
   contents: write
@@ -28,16 +24,18 @@ jobs:
         with: { python-version: '3.11' }
 
       - name: Install deps
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt python-docx requests
 
-      - name: Fetch user resume from Supabase
-        run: |
-          python scripts/fetch_user_assets.py --user "${{ github.event.inputs.user_id }}"
+      - name: Fetch user's resume from Supabase
+        run: python scripts/fetch_user_assets.py --user "${{ github.event.inputs.user_id }}"
+
+      - name: Parse resume and upsert profile (autofill)
+        run: python scripts/parse_resume.py --user "${{ github.event.inputs.user_id }}"
 
       - name: Draft covers & resumes (top=5)
         run: python scripts/draft_email.py --top 5
 
-      - name: Commit tailored outputs
+      - name: Commit outputs
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -45,5 +43,5 @@ jobs:
           git add docs/resumes/ -A || true
           git add docs/changes/ -A || true
           git add docs/data/scores.json || true
-          git commit -m "Tailored run ${{ github.event.inputs.request_id }} [skip ci]" || echo "No changes"
-          git push || echo "No changes to push"
+          git commit -m "Tailor run ${{ github.event.inputs.request_id }} [skip ci]" || echo "No changes"
+          git push || true
