@@ -160,8 +160,8 @@
   if (!window.supabase) return;
 
   // TODO: replace with your actual values from Settings → API
-  const SUPABASE_URL = 'https://YOUR-PROJECT-ref.supabase.co';
-  const SUPABASE_ANON = 'YOUR_ANON_PUBLIC_KEY';
+  const SUPABASE_URL = 'https://imozfqawxpsasjdmgdkh.supabase.co';
+  const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc';
 
   const supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 
