@@ -114,8 +114,8 @@
   await new Promise(r => window.addEventListener('load', r));
 
   const supabase = window.supabase.createClient(
-    'https://YOUR-REF.supabase.co',
-    'YOUR_ANON_KEY'
+    'https://imozfqawxpsasjdmgdkh.supabase.co',
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc'
   );
 
   const loginLink = document.getElementById('loginLink');
