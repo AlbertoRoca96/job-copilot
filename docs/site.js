@@ -1,11 +1,11 @@
 // docs/site.js
-// Renders your shortlist table (existing) AND shows a signed-in panel for:
+// Renders your shortlist table AND shows a signed-in panel for:
 // - profile save (acts like profile.yaml)
 // - resume upload to private Storage
 // - "Tailor my application" -> calls Edge Function to start the GitHub Action
 
 (async function() {
-  // ---------- Shortlist (unchanged parts) ----------
+  // ---------- Shortlist ----------
   const statusEl = document.getElementById('status');
   const table = document.getElementById('jobs');
   const tbody = table ? table.querySelector('tbody') : null;
@@ -40,7 +40,6 @@
       const tdCompany = document.createElement('td'); tdCompany.textContent = j.company || ''; tr.appendChild(tdCompany);
       const tdLoc = document.createElement('td'); tdLoc.textContent = (j.location || '').trim(); tr.appendChild(tdLoc);
 
-      // Posted (if present)
       const tdPosted = document.createElement('td'); tdPosted.textContent = j.posted_at ? String(j.posted_at).slice(0,10) : '—'; tr.appendChild(tdPosted);
 
       const tdCover = document.createElement('td');
@@ -60,7 +59,7 @@
   }
   hideStatus(); showTable();
 
-  // Explain modal (unchanged)
+  // -------- Explain modal ----------
   const modal = document.getElementById('explainModal');
   const closeBtn = document.getElementById('closeExplain');
   const titleEl = document.getElementById('explainTitle');
@@ -99,33 +98,20 @@
   const supabase = window.supabase.createClient(
     'https://imozfqawxpsasjdmgdkh.supabase.co',
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc'
-  ); // Supabase JS v2 createClient. :contentReference[oaicite:7]{index=7}
+  );
 
-  // Insert a small panel in the page header
-  const header = document.querySelector('.wrap') || document.body;
-  const panel = document.createElement('div');
-  panel.innerHTML = `
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0 16px">
-      <a class="btn" href="login.html">Sign in</a>
-      <button id="logout" class="btn" style="display:none">Sign out</button>
-      <span id="who" class="muted"></span>
-      <label>Full name <input id="full_name" style="width:180px"></label>
-      <label>Phone <input id="phone" style="width:140px"></label>
-      <label>Skills <input id="skills" placeholder="comma-separated" style="width:180px"></label>
-      <button id="saveProfile" class="btn">Save Profile</button>
-      <input type="file" id="resume" accept=".docx" />
-      <button id="uploadResume" class="btn">Upload Resume</button>
-      <button id="runTailor" class="btn">Tailor my application</button>
-      <span id="runMsg" class="muted"></span>
-    </div>`;
-  header.insertBefore(panel, header.children[1]);
+  const loginLink = document.getElementById('loginLink');
+  const logoutBtn = document.getElementById('logout');
+  const who = document.getElementById('whoami');
+  const profileBox = document.getElementById('profile');
 
   async function refresh() {
     const { data: { user } } = await supabase.auth.getUser();
-    document.getElementById('logout').style.display = user ? '' : 'none';
-    document.querySelector('a.btn[href="login.html"]').style.display = user ? 'none' : '';
-    document.getElementById('who').textContent = user ? `Signed in as ${user.email || user.id}` : '';
-    // Try load profile
+    logoutBtn.style.display = user ? '' : 'none';
+    if (loginLink) loginLink.style.display = user ? 'none' : '';
+    who.textContent = user ? `Signed in as ${user.email || user.id}` : '';
+    profileBox.style.display = user ? '' : 'none';
+
     if (user) {
       const r = await fetch(`${supabase.storage.url.replace('/storage/v1','')}/rest/v1/profiles?id=eq.${user.id}&select=*`, {
         headers: { apikey: supabase.headers().apikey, Authorization: supabase.headers().Authorization }
@@ -141,7 +127,7 @@
   }
   refresh();
 
-  document.getElementById('logout').onclick = async () => { await supabase.auth.signOut(); location.href = './login.html'; };
+  logoutBtn.onclick = async () => { await supabase.auth.signOut(); location.href = './login.html'; };
 
   document.getElementById('saveProfile').onclick = async () => {
     const { data: { user } } = await supabase.auth.getUser(); if (!user) return;
@@ -168,7 +154,7 @@
     const { data: { user } } = await supabase.auth.getUser(); if (!user) return alert('Sign in first.');
     const file = document.getElementById('resume').files[0]; if (!file) return alert('Choose a .docx file');
     const path = `${user.id}/current.docx`;
-    const { error } = await supabase.storage.from('resumes').upload(path, file, { upsert: true }); // Storage upload. :contentReference[oaicite:8]{index=8}
+    const { error } = await supabase.storage.from('resumes').upload(path, file, { upsert: true });
     if (error) return alert('Upload error: ' + error.message);
     await fetch(`${supabase.storage.url.replace('/storage/v1','')}/rest/v1/resumes`, {
       method: 'POST',
@@ -186,6 +172,8 @@
       body: JSON.stringify({ note: 'user run from dashboard' })
     });
     const out = await resp.json().catch(()=>({}));
-    document.getElementById('runMsg').textContent = resp.ok ? `Queued: ${out.request_id}` : `Error: ${out.error || resp.status}`;
+    document.getElementById('runMsg').textContent =
+      resp.ok ? `Queued: ${out.request_id}` :
+      `Error: ${out.error || resp.status}${out.detail ? ' — ' + String(out.detail).slice(0,140) : ''}`;
   };
 })();
