@@ -21,12 +21,12 @@
       const supabase = window.supabase.createClient(
         'https://imozfqawxpsasjdmgdkh.supabase.co,
         'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc'
-      ); // createClient. :contentReference[oaicite:5]{index=5}
+      );
 
       document.getElementById('send').onclick = async () => {
         const email = document.getElementById('email').value.trim();
         if (!email) return;
-        const redirectTo = 'https://albertoroca96.github.io/job-copilot/';
+        const redirectTo = 'https://albertoroca96.github.io/job-copilot/'; // must be allowlisted in Supabase Auth
         const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: redirectTo } });
         document.getElementById('msg').textContent = error ? ('Error: ' + error.message) : 'Check your email for the link.';
       };
