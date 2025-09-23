@@ -18,11 +18,21 @@
     .pill { display:inline-block; padding:2px 8px; margin:2px; border:1px solid #e0e0e0; border-radius:999px; font-size:12px; background:#f6f6f6; }
     .ctl { margin:6px 8px 0 0; min-width:280px; }
     label small { color:#666; font-weight:400; }
+    /* small header bar with Profile link */
+    .topbar { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:10px 0; }
+    .topbar h1 { margin:0; }
+    .topnav a { text-decoration:none; }
   </style>
 </head>
 <body>
   <main class="wrap" style="max-width:980px">
-    <h1>job-copilot</h1>
+    <header class="topbar">
+      <h1>job-copilot</h1>
+      <nav class="topnav">
+        <a class="pill" href="profile.html">Profile</a>
+      </nav>
+    </header>
+
     <p class="muted">Sign in, upload your resume, set targets, then run. Your shortlist is private and per-user.</p>
 
     <p id="signinOnly"><a class="btn" href="login.html">Sign in</a></p>
@@ -30,6 +40,7 @@
     <section id="onboard" class="card hidden">
       <div class="row">
         <span id="who"></span>
+        <a class="btn" href="profile.html">Profile</a>
         <button id="logout" class="btn">Sign out</button>
       </div>
 
