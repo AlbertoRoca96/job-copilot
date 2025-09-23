@@ -1,4 +1,3 @@
-# .github/workflows/draft-covers.yml
 name: draft-covers
 
 on:
@@ -62,9 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           uid="${{ github.event.inputs.user_id }}"
-          # Delete older prefixes so only this run's files remain visible.
-          # Supabase Storage REST: DELETE /storage/v1/object/{bucket} with JSON { "prefixes": [...] }
-          # Ref: docs show delete-multiple-objects with "prefixes" array.
+          # Remove previous artifacts so only fresh ones show on the dashboard
           curl -sS -X DELETE \
             "${SUPABASE_URL%/}/storage/v1/object/outputs" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
@@ -116,11 +113,35 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo '{}' > docs/data/drafts_index.json
-          test -d docs/outbox  && find docs/outbox  -maxdepth 1 -type f -printf '%P\n' | jq -R . | jq -s '{outbox: .}'  > /tmp/idx1.json || echo '{"outbox":[]}' > /tmp/idx1.json
-          test -d docs/resumes && find docs/resumes -maxdepth 1 -type f -printf '%P\n' | jq -R . | jq -s '{resumes: .}' > /tmp/idx2.json || echo '{"resumes":[]}' > /tmp/idx2.json
-          test -d docs/changes && find docs/changes -maxdepth 1 -type f -printf '%P\n' | jq -R . | jq -s '{changes: .}' > /tmp/idx3.json || echo '{"changes":[]}' > /tmp/idx3.json
-          jq -s '.[0] * .[1] * .[2]' /tmp/idx1.json /tmp/idx2.json /tmp/idx3.json > docs/data/drafts_index.json
+
+          mkdir -p docs/data
+
+          # Only include things we truly upload:
+          # - covers: markdown
+          # - resumes: docx (primary) and md (if you keep text versions)
+          # - changes: JSON summaries (exclude *.jd.txt)
+          #
+          # Each glob may produce no matches; handle that without failing.
+          shopt -s nullglob
+
+          OUTBOX_LIST=()
+          for f in docs/outbox/*.md; do OUTBOX_LIST+=("$(basename "$f")"); done
+
+          RESUME_LIST=()
+          for f in docs/resumes/*.docx docs/resumes/*.md; do RESUME_LIST+=("$(basename "$f")"); done || true
+
+          CHANGES_LIST=()
+          for f in docs/changes/*.json; do CHANGES_LIST+=("$(basename "$f")"); done
+
+          # Convert bash arrays -> JSON arrays
+          jq -n \
+            --argjson outbox  "$(printf '%s\n' "${OUTBOX_LIST[@]:-}"  | jq -R . | jq -s .)" \
+            --argjson resumes "$(printf '%s\n' "${RESUME_LIST[@]:-}" | jq -R . | jq -s .)" \
+            --argjson changes "$(printf '%s\n' "${CHANGES_LIST[@]:-}" | jq -R . | jq -s .)" \
+            '{outbox:$outbox, resumes:$resumes, changes:$changes}' \
+          > docs/data/drafts_index.json
+
+          echo "Built drafts_index.json:"
           cat docs/data/drafts_index.json
 
       # ---------- UPLOADS ----------
