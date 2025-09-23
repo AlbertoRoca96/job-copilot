@@ -12,25 +12,22 @@
     .muted { color:#666; } .hidden { display:none; }
     .pill { display:inline-block; padding:2px 8px; margin:2px; border:1px solid #e0e0e0; border-radius:999px; font-size:12px; background:#f6f6f6; }
     dt { font-weight:600; } dd { margin:0 0 10px 0; }
-    .btn { padding:6px 12px; border:1px solid #ccc; border-radius:8px; background:#fff; cursor:pointer; }
-    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-    a.file { display:block; margin:4px 0; }
+    .btn { padding:6px 10px; border:1px solid #ccc; background:#fff; border-radius:6px; cursor:pointer; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom:1px solid #eee; padding:6px 8px; text-align:left; }
   </style>
 </head>
 <body>
   <main class="wrap">
-    <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:10px">
-      <h1>Your profile</h1>
-      <a class="pill" href="./">← Home</a>
-    </div>
+    <h1>Your profile</h1>
     <p class="muted">Parsed from your latest resume + saved targets. This page updates after each run.</p>
 
     <p id="signinOnly"><a href="login.html">Sign in</a> to view your profile.</p>
 
     <section id="profile" class="card hidden" aria-live="polite">
-      <div class="row" style="margin-bottom:10px">
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
         <span id="who"></span>
-        <button id="logout" class="btn">Sign out</button>
+        <a class="pill" href="./">← Back</a>
       </div>
 
       <dl>
@@ -40,25 +37,26 @@
         <dt>Skills</dt><dd id="skills">—</dd>
         <dt>Desired titles</dt><dd id="titles">—</dd>
         <dt>Locations</dt><dd id="locs">—</dd>
-        <dt>Search policy</dt><dd id="policy" class="muted">—</dd>
+        <dt>Search policy</dt>
+        <dd id="policy" class="muted">—</dd>
         <dt>Updated</dt><dd id="updated">—</dd>
       </dl>
     </section>
 
-    <section id="drafts" class="card hidden" style="margin-top:16px">
-      <h2>Draft tailored materials</h2>
-      <div class="row">
-        <label for="topN">Top roles to draft</label>
-        <input id="topN" type="number" min="1" max="25" value="5" style="width:80px" />
-        <button id="runDrafts" class="btn">Draft now</button>
-        <span id="draftMsg" class="muted"></span>
+    <section id="materials" class="card hidden" style="margin-top:16px">
+      <h2>Generate materials</h2>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label>Top roles <input id="topN" type="number" min="1" max="20" value="5" style="width:80px;margin-left:6px"></label>
+        <button id="genBtn" class="btn">Generate covers & resumes</button>
+        <span id="genMsg" class="muted"></span>
       </div>
-
-      <div style="margin-top:10px">
-        <h3 style="margin:6px 0">Latest covers</h3>
-        <div id="covers"></div>
-        <h3 style="margin:14px 0 6px">Latest tailored resumes</h3>
-        <div id="resumes"></div>
+      <div id="drafts" style="margin-top:10px">
+        <h3>Drafts</h3>
+        <table id="draftTable" class="hidden">
+          <thead><tr><th>Type</th><th>File</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div id="noDrafts" class="muted">No drafts yet.</div>
       </div>
     </section>
   </main>
