@@ -1,4 +1,3 @@
-# scripts/draft_email.py
 import os, sys, json, re, yaml, hashlib
 from typing import Tuple
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -7,7 +6,7 @@ from src.tailor.render import render_cover
 from src.tailor.resume import tailor_docx_in_place
 from docx import Document
 
-from src.ai.llm import craft_tailored_snippets, suggest_policies
+from src.ai.llm import craft_tailored_snippets  # richer helper
 
 import requests
 from bs4 import BeautifulSoup
@@ -23,7 +22,6 @@ PROFILE_YAML   = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'p
 PORTFOLIO_YAML = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'portfolio.yaml')
 TMPL_DIR       = os.path.join(os.path.dirname(__file__), '..', 'src', 'tailor', 'templates')
 BASE_RESUME    = os.path.join(os.path.dirname(__file__), '..', 'assets', 'Resume-2025.docx')
-RUNTIME_POL    = os.path.join(os.path.dirname(__file__), '..', 'src', 'tailor', 'policies.runtime.yaml')
 BANLIST_JSON   = os.path.join(DATA_DIR, 'banlist.json')
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL","").rstrip("/")
@@ -101,28 +99,6 @@ def extract_jd_terms(job: dict, allowed: set, cap=24):
     ranked = [k for k,_ in sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))]
     return ranked[:cap]
 
-def portfolio_targets(portfolio: dict):
-    targets = {"Side Projects": [], "Projects": [], "Work Experience": []}
-    for p in (portfolio.get("projects", []) or []):
-        for b in (p.get("bullets", []) or []):
-            txt = (b.get("text","") or "").strip()
-            if txt:
-                targets["Side Projects"].append(txt)
-                targets["Projects"].append(txt)
-    for w in (portfolio.get("work_experience", []) or []):
-        for b in (w.get("bullets", []) or []):
-            txt = (b.get("text","") or "").strip()
-            if txt:
-                targets["Work Experience"].append(txt)
-    for k, arr in list(targets.items()):
-        seen=set(); uniq=[]
-        for t in arr:
-            nt=(t or "").strip()
-            if nt and nt not in seen:
-                uniq.append(nt); seen.add(nt)
-        targets[k]=uniq
-    return targets
-
 def safe_name(s: str) -> str:
     return ''.join(c for c in (s or '') if c.isalnum() or c in ('-', '_')).strip()
 
@@ -144,22 +120,6 @@ def pick_jd_text(job_obj: dict) -> str:
     live = fetch_jd_plaintext(job_obj.get("url",""))
     return live if len(live) > len(desc) else desc
 
-def write_jd_artifacts(slug: str, jd_text: str, out_dir: str):
-    os.makedirs(out_dir, exist_ok=True)
-    path = os.path.join(out_dir, f"{slug}.jd.txt")
-    with open(path, "w") as f: f.write(jd_text)
-    sha = hashlib.sha1(jd_text.encode("utf-8")).hexdigest()[:10]
-    print(f"JD[{slug}]: {len(jd_text)} chars (sha1 {sha}) -> docs/changes/{slug}.jd.txt")
-
-def load_profile_for_user(user_id: str) -> dict:
-    if not (SUPABASE_URL and SRK and user_id):
-        return {}
-    url = f"{SUPABASE_URL}/rest/v1/profiles?id=eq.{user_id}&select=*"
-    r = requests.get(url, headers={"apikey": SRK, "Authorization": f"Bearer {SRK}"}, timeout=30)
-    r.raise_for_status()
-    arr = r.json()
-    return (arr[0] if arr else {}) or {}
-
 def write_profile_yaml_from_dict(d: dict):
     y = {
         "full_name": d.get("full_name"),
@@ -173,6 +133,16 @@ def write_profile_yaml_from_dict(d: dict):
     with open(PROFILE_YAML, "w") as f:
         yaml.safe_dump({k:v for k,v in y.items() if v is not None}, f)
 
+def load_profile_for_user(user_id: str) -> dict:
+    if not (SUPABASE_URL and SRK and user_id):
+        return {}
+    url = f"{SUPABASE_URL}/rest/v1/profiles?id=eq.{user_id}&select=*"
+    r = requests.get(url, headers={"apikey": SRK, "Authorization": f"Bearer {SRK}"}, timeout=30)
+    r.raise_for_status()
+    arr = r.json()
+    return (arr[0] if arr else {}) or {}
+
+# Keep dashboard order + dedup by url
 def _dedup_by_url_keep_order(items):
     seen = set()
     out = []
@@ -185,69 +155,47 @@ def _dedup_by_url_keep_order(items):
         out.append(j)
     return out
 
-def _insert_targeted_summary_paragraph(doc: Document, sentence: str) -> dict | None:
+def _insert_targeted_summary_paragraph(doc: Document, sentence: str):
     """
-    Insert a Summary heading + targeted sentence AFTER the first paragraph (preserves name),
-    or after an existing 'Summary' heading if present. Return a UI-ready change object.
+    Insert summary near the top and return a UI-ready change item.
+    Use text-swapping to emulate insert-at-index (python-docx limitation).
     """
     if not sentence:
         return None
-
     import re as _re
-
-    # Look for an existing Summary heading
-    idx_summary = None
+    idx = None
     for i, p in enumerate(doc.paragraphs):
-        if _re.search(r"\b(professional\s+summary|summary)\b", (p.text or "").lower()):
-            idx_summary = i
+        if _re.search(r"\bsummary\b", (p.text or "").lower()):
+            idx = i + 1
             break
-
-    if idx_summary is not None:
-        # Insert right after the Summary heading
-        insert_at = min(idx_summary + 1, len(doc.paragraphs))
+    if idx is None:
+        p0 = doc.paragraphs[0] if doc.paragraphs else doc.add_paragraph("")
+        original = p0.text
         tail = doc.add_paragraph(sentence)
-        original = doc.paragraphs[insert_at].text if insert_at < len(doc.paragraphs) else ""
-        # swap to land it at insert_at
-        doc.paragraphs[insert_at].text, tail.text = tail.text, doc.paragraphs[insert_at].text
+        p0.text, tail.text = tail.text, p0.text
         return {
             "anchor_section": "Summary",
             "original_paragraph_text": original,
-            "modified_paragraph_text": doc.paragraphs[insert_at].text,
+            "modified_paragraph_text": p0.text,
             "inserted_sentence": sentence
         }
-
-    # No Summary heading: create a new heading paragraph + sentence, placed after the first paragraph (name)
-    name_idx = 0
-    # Add the heading and the sentence at the end, then bubble them up by swapping
-    heading = doc.add_paragraph("Summary")
-    para = doc.add_paragraph(sentence)
-
-    # Move heading to index 1 (after name) by swapping
-    if len(doc.paragraphs) >= 2:
-        doc.paragraphs[1].text, heading.text = heading.text, doc.paragraphs[1].text
-        # Move the sentence to index 2
-        if len(doc.paragraphs) >= 3:
-            doc.paragraphs[2].text, para.text = para.text, doc.paragraphs[2].text
-            original = ""  # new paragraph
-            return {
-                "anchor_section": "Summary",
-                "original_paragraph_text": original,
-                "modified_paragraph_text": doc.paragraphs[2].text,
-                "inserted_sentence": sentence
-            }
-    # Fallback: if document was tiny, just return the new sentence change
+    tail = doc.add_paragraph(sentence)
+    original = doc.paragraphs[idx].text
+    doc.paragraphs[idx].text, tail.text = tail.text, doc.paragraphs[idx].text
     return {
         "anchor_section": "Summary",
-        "original_paragraph_text": "",
-        "modified_paragraph_text": sentence,
+        "original_paragraph_text": original,
+        "modified_paragraph_text": doc.paragraphs[idx].text,
         "inserted_sentence": sentence
     }
 
 def main(top: int, user: str | None):
+    # Load profile
     prof = load_profile_for_user(user) if user else {}
     if prof:
         write_profile_yaml_from_dict(prof)
 
+    # Ensure portfolio placeholder file exists
     if not os.path.exists(PORTFOLIO_YAML):
         os.makedirs(os.path.dirname(PORTFOLIO_YAML), exist_ok=True)
         with open(PORTFOLIO_YAML, "w") as f:
@@ -260,6 +208,7 @@ def main(top: int, user: str | None):
 
     allowed = set(allowed_vocab(profile, portfolio))
 
+    # same shortlist as dashboard
     jobs = []
     if os.path.exists(DATA_JSON):
         with open(DATA_JSON) as f:
@@ -275,11 +224,13 @@ def main(top: int, user: str | None):
     jobs = _dedup_by_url_keep_order(jobs)
     jobs = jobs[: max(1, min(20, int(top or 5)))]
 
+    # dirs
     os.makedirs(OUTBOX_MD, exist_ok=True)
     os.makedirs(RESUMES_MD, exist_ok=True)
     os.makedirs(CHANGES_DIR, exist_ok=True)
     os.makedirs(DATA_DIR, exist_ok=True)
 
+    # banlist
     try:
         with open(BANLIST_JSON, 'r') as bf: banlist = json.load(bf)
         if not isinstance(banlist, list): banlist = []
@@ -299,17 +250,20 @@ def main(top: int, user: str | None):
     llm_summary = {"used": bool(api_key), "model": model if api_key else None, "jobs": []}
 
     for j in jobs:
-        safe_company = ''.join(c for c in (j.get('company','') or '') if c.isalnum() or c in ('-','_')).strip()
-        safe_title   = ''.join(c for c in (j.get('title','') or '')   if c.isalnum() or c in ('-','_')).strip()
+        safe_company = safe_name(j.get('company',''))
+        safe_title   = safe_name(j.get('title',''))
         slug = f"{safe_company}_{safe_title}"[:150]
 
         jd_text = pick_jd_text(j) or (j.get("description") or "")
         tmp_job = dict(j); tmp_job["description"] = jd_text
         jd_kws = extract_jd_terms(tmp_job, allowed, cap=24)
-        write_jd_artifacts(slug=slug, jd_text=jd_text[:20000], out_dir=CHANGES_DIR)
+        # keep JD file for debugging
+        os.makedirs(CHANGES_DIR, exist_ok=True)
+        with open(os.path.join(CHANGES_DIR, f"{slug}.jd.txt"), "w") as f:
+            f.write(jd_text[:20000])
         jd_hash = jd_sha(jd_text)
 
-        # ---- LLM: targeted summary + runtime bullet policies ----
+        # LLM tailored snippet (summary + extra keywords)
         crafted = craft_tailored_snippets(
             api_key=api_key,
             model=model,
@@ -323,29 +277,7 @@ def main(top: int, user: str | None):
         summary_sentence = (crafted.get("summary_sentence") or "").strip()
         extra_keywords = crafted.get("keywords") or []
 
-        runtime_policies = []
-        if api_key:
-            runtime_policies = suggest_policies(
-                api_key,
-                j.get("title",""),
-                jd_text,
-                list(allowed),
-                jd_kws,
-                list(banset),
-            ) or []
-            # write runtime policy file consumed by load_policies()
-            try:
-                with open(RUNTIME_POL, "w") as rf:
-                    yaml.safe_dump(runtime_policies, rf)
-            except Exception:
-                pass
-            # extend banlist with newly used clauses
-            for it in runtime_policies:
-                clause = (it.get("clause") or "").strip().lower()
-                if clause:
-                    banset.add(clause)
-
-        # ---- COVER ----
+        # COVER
         cover_fname = f"{slug}.md"
         cover = render_cover(j, PROFILE_YAML, TMPL_DIR)
         if summary_sentence:
@@ -355,7 +287,7 @@ def main(top: int, user: str | None):
         with open(os.path.join(OUTBOX_MD, cover_fname), 'w') as f: f.write(cover)
         j['cover_path'] = f"outbox/{cover_fname}"
 
-        # ---- RESUME ----
+        # RESUME
         out_docx_name = f"{slug}_{jd_hash}.docx"
         out_docx = os.path.join(RESUMES_MD, out_docx_name)
         doc = Document(BASE_RESUME)
@@ -367,6 +299,7 @@ def main(top: int, user: str | None):
             except Exception:
                 summary_change = None
 
+        # document metadata for ATS
         try:
             cp = doc.core_properties
             cp.comments = f"job-copilot:{slug}:{jd_hash}"
@@ -380,10 +313,9 @@ def main(top: int, user: str | None):
         except Exception:
             pass
 
-        targets = {"projects": [], "work_experience": [], "workshops": []}
+        # *** KEY FIX: tailor bullets in the doc itself (no empty targets) ***
         granular_changes = tailor_docx_in_place(
             doc,
-            targets,
             jd_keywords=jd_kws,
             allowed_vocab_list=sorted(allowed),
         )
@@ -392,10 +324,9 @@ def main(top: int, user: str | None):
         j['resume_docx'] = f"resumes/{out_docx_name}"
         j['resume_docx_hash'] = jd_hash
 
-        # ---- UI JSON (granular diffs) ----
+        # Build changes JSON (summary first so it shows as Change 1)
         changes_list = []
-        if summary_change:
-            changes_list.append(summary_change)
+        if summary_change: changes_list.append(summary_change)
         for it in granular_changes or []:
             changes_list.append(it)
 
@@ -407,17 +338,11 @@ def main(top: int, user: str | None):
             "changes": changes_list,
             "jd_hash": jd_hash
         }
-        changes_fname = f"{slug}.json"
-        with open(os.path.join(CHANGES_DIR, changes_fname), 'w') as f:
+        with open(os.path.join(CHANGES_DIR, f"{slug}.json"), 'w') as f:
             json.dump(explain, f, indent=2)
-        j['changes_path'] = f"changes/{changes_fname}"
+        j['changes_path'] = f"changes/{slug}.json"
 
-        llm_summary["jobs"].append({
-            "slug": slug,
-            "injected": bool(summary_sentence),
-            "runtime_policy_count": len(runtime_policies),
-            "changes": len(changes_list)
-        })
+        llm_summary["jobs"].append({"slug": slug, "injected": bool(summary_sentence), "changes": len(changes_list)})
         drafted_covers += 1; drafted_resumes += 1
 
     with open(DATA_JSON, 'w') as f: json.dump(jobs, f, indent=2)
