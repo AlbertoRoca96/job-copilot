@@ -1,177 +1,166 @@
 // docs/site.js
-// Multi-user onboarding:
-// - If no session: show Sign in link only
-// - If signed in: show upload + targets + run buttons
-// - Shortlist loads from private Storage outputs/<uid>/scores.json via a signed URL
+<!-- docs/site.js -->
+<script>
+(function () {
+  // Expose a single initializer. Does nothing if the expected elements don’t exist.
+  window.initOnboardControls = async function initOnboardControls(supabase) {
+    // ---- DOM lookups (guard everything; this script is reusable) ----
+    const el = (id) => document.getElementById(id);
 
-(async function () {
-  await new Promise(r => window.addEventListener('load', r));
+    const onboard   = el('onboard');
+    const shortlist = el('shortlist');
 
-  const supabase = window.supabase.createClient(
-    'https://imozfqawxpsasjdmgdkh.supabase.co',
-    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc'
-  );
+    // If the page doesn’t have the dashboard scaffolding, just no-op.
+    if (!onboard && !shortlist) return;
 
-  // UI
-  const signinOnly = document.getElementById('signinOnly');
-  const onboard    = document.getElementById('onboard');
-  const who        = document.getElementById('who');
-  const logout     = document.getElementById('logout');
-  const uploadBtn  = document.getElementById('uploadResume');
-  const upMsg      = document.getElementById('upMsg');
-  const runBtn     = document.getElementById('runTailor');
-  const runMsg     = document.getElementById('runMsg');
-  const refreshBtn = document.getElementById('refresh');
+    const who        = el('who');
+    const logout     = el('logout');
+    const uploadBtn  = el('uploadResume');
+    const upMsg      = el('upMsg');
+    const runBtn     = el('runTailor');
+    const runMsg     = el('runMsg');
+    const refreshBtn = el('refresh');
 
-  const table      = document.getElementById('jobs');
-  const tbody      = table.querySelector('tbody');
-  const shortlist  = document.getElementById('shortlist');
-  const noData     = document.getElementById('noData');
+    const table  = el('jobs');
+    const tbody  = table ? table.querySelector('tbody') : null;
+    const noData = el('noData');
 
-  // helpers
-  async function getUser()     { return (await supabase.auth.getUser()).data.user || null; }
-  async function getSession()  { return (await supabase.auth.getSession()).data.session || null; }
+    // ---- helpers ----
+    async function getUser()    { return (await supabase.auth.getUser()).data.user || null; }
+    async function getSession() { return (await supabase.auth.getSession()).data.session || null; }
 
-  async function showState() {
-    const user = await getUser();
-    if (!user) {
-      signinOnly.classList.remove('hidden');
-      onboard.classList.add('hidden');
-      shortlist.classList.add('hidden');
-      return;
+    // ---- actions ----
+    async function uploadResume() {
+      const session = await getSession();
+      const user = session?.user;
+      if (!user) return alert('Sign in first.');
+
+      const fileEl = document.getElementById('resume');
+      const file = fileEl?.files?.[0];
+      if (!file) return alert('Choose a .docx file');
+
+      const path = `${user.id}/current.docx`;
+
+      // Upload the private file to the 'resumes' bucket
+      const { error: upErr } = await supabase.storage.from('resumes').upload(path, file, { upsert: true });
+      if (upErr) { if (upMsg) upMsg.textContent = 'Upload error: ' + upErr.message; return; }
+
+      // Record metadata (optional, matches your existing table)
+      const { error: metaErr } = await supabase.from('resumes').insert({ user_id: user.id, bucket: 'resumes', path });
+      if (metaErr) { if (upMsg) upMsg.textContent = 'Upload metadata error: ' + metaErr.message; return; }
+
+      if (upMsg) upMsg.textContent = 'Uploaded.';
     }
-    signinOnly.classList.add('hidden');
-    onboard.classList.remove('hidden');
-    who.textContent = `Signed in as ${user.email || user.id}`;
-    await loadShortlist();
-  }
 
-  // 1) Upload resume (.docx)
-  async function uploadResume() {
-    const session = await getSession();
-    const user = session?.user;
-    if (!user) return alert('Sign in first.');
+    async function runTailor() {
+      const session = await getSession();
+      if (!session) return alert('Sign in first.');
+      if (runMsg) runMsg.textContent = 'Queuing…';
 
-    const file = document.getElementById('resume').files[0];
-    if (!file) return alert('Choose a .docx file');
+      // collect preferences from inputs (guards allow missing elements)
+      const titlesVal = (document.getElementById('desiredTitles')?.value || '')
+        .split(',').map(s => s.trim()).filter(Boolean);
+      const locsVal   = (document.getElementById('desiredLocs')?.value || '')
+        .split(',').map(s => s.trim()).filter(Boolean);
+      const recencyDays   = Math.max(0, parseInt(document.getElementById('recencyDays')?.value || '0', 10) || 0);
+      const remoteOnly    = !!document.getElementById('remoteOnly')?.checked;
+      const requirePosted = !!document.getElementById('requirePosted')?.checked;
 
-    const path = `${user.id}/current.docx`;
-
-    // Upload private file
-    const { error: upErr } = await supabase.storage.from('resumes').upload(path, file, { upsert: true });
-    if (upErr) { upMsg.textContent = 'Upload error: ' + upErr.message; return; }
-
-    // Insert metadata row
-    const { error: metaErr } = await supabase.from('resumes').insert({ user_id: user.id, bucket: 'resumes', path });
-    if (metaErr) { upMsg.textContent = 'Upload metadata error: ' + metaErr.message; return; }
-
-    upMsg.textContent = 'Uploaded.';
-  }
-
-  // 2) Trigger Edge Function -> GH Action (with preferences) and redirect to profile
-  async function runTailor() {
-    const session = await getSession();
-    if (!session) return alert('Sign in first.');
-    runMsg.textContent = 'Queuing…';
-
-    // collect preferences
-    const titlesVal = (document.getElementById('desiredTitles')?.value || '')
-      .split(',').map(s => s.trim()).filter(Boolean);
-    const locsVal   = (document.getElementById('desiredLocs')?.value || '')
-      .split(',').map(s => s.trim()).filter(Boolean);
-    const recencyDays = Math.max(0, parseInt(document.getElementById('recencyDays')?.value || '0', 10) || 0);
-    const remoteOnly  = !!document.getElementById('remoteOnly')?.checked;
-    const requirePosted = !!document.getElementById('requirePosted')?.checked;
-
-    try {
-      const restBase = 'https://imozfqawxpsasjdmgdkh.supabase.co';
-      const resp = await fetch(`${restBase}/functions/v1/request-run`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          apikey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc',
-          Authorization: `Bearer ${session.access_token}`
-        },
-        body: JSON.stringify({
-          note: 'user run from onboarding',
-          preferences: {
-            target_titles: titlesVal,
-            locations: locsVal,
-            search_policy: {
-              recency_days: recencyDays,
-              require_posted_date: requirePosted,
-              remote_only: remoteOnly
+      try {
+        const restBase = 'https://imozfqawxpsasjdmgdkh.supabase.co';
+        const resp = await fetch(`${restBase}/functions/v1/request-run`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc',
+            Authorization: `Bearer ${session.access_token}`
+          },
+          body: JSON.stringify({
+            note: 'user run from profile',
+            preferences: {
+              target_titles: titlesVal,
+              locations: locsVal,
+              search_policy: {
+                recency_days: recencyDays,
+                require_posted_date: requirePosted,
+                remote_only: remoteOnly
+              }
             }
-          }
-        })
-      });
+          })
+        });
 
-      let detail = '';
-      let out = {};
-      try { out = await resp.json(); detail = out?.detail || out?.error || ''; } catch {}
-      if (!resp.ok) {
-        runMsg.textContent = `Error: ${detail || resp.status}`;
+        let detail = '';
+        let out = {};
+        try { out = await resp.json(); detail = out?.detail || out?.error || ''; } catch {}
+        if (!resp.ok) { if (runMsg) runMsg.textContent = `Error: ${detail || resp.status}`; return; }
+
+        if (runMsg) runMsg.textContent = `Queued: ${out?.request_id || 'ok'}`;
+        // UX: remain on profile (this page) — data updates when the run finishes
+        await loadShortlist(); // kick an immediate refresh once
+      } catch (e) {
+        if (runMsg) runMsg.textContent = 'Error: ' + String(e);
+      }
+    }
+
+    async function loadShortlist() {
+      const user = await getUser(); if (!user) return;
+
+      if (!shortlist || !table || !tbody) return; // nothing to render
+      // signed URL to private outputs/<uid>/scores.json
+      const key = `${user.id}/scores.json`;
+      const { data, error } = await supabase.storage.from('outputs').createSignedUrl(key, 60);
+      if (error || !data?.signedUrl) {
+        shortlist.classList.remove('hidden');
+        table.classList.add('hidden');
+        if (noData) noData.classList.remove('hidden');
         return;
       }
 
-      runMsg.textContent = `Queued: ${out?.request_id || 'ok'}`;
+      let arr = [];
+      try {
+        const res = await fetch(data.signedUrl, { cache: 'no-cache' });
+        if (res.ok) arr = await res.json();
+      } catch {}
 
-      // UX: take user to live profile page; it reads from DB and will update as soon as parse finishes
-      window.location.href = 'profile.html';
-    } catch (e) {
-      runMsg.textContent = 'Error: ' + String(e);
-    }
-  }
+      if (!Array.isArray(arr) || arr.length === 0) {
+        shortlist.classList.remove('hidden');
+        table.classList.add('hidden');
+        if (noData) noData.classList.remove('hidden');
+        return;
+      }
 
-  // 3) Load shortlist from outputs/<uid>/scores.json via signed URL
-  async function loadShortlist() {
-    const user = await getUser(); if (!user) return;
-
-    const key = `${user.id}/scores.json`;
-    const { data, error } = await supabase.storage.from('outputs').createSignedUrl(key, 60);
-    if (error || !data?.signedUrl) {
+      tbody.innerHTML = '';
+      arr.sort((a, b) => (b.score || 0) - (a.score || 0));
+      for (const j of arr) {
+        const tr = document.createElement('tr');
+        const tdScore = document.createElement('td'); tdScore.textContent = (j.score ?? 0).toFixed(3); tr.appendChild(tdScore);
+        const tdTitle = document.createElement('td');
+        const a = document.createElement('a'); a.href = j.url || '#'; a.target = '_blank'; a.rel = 'noopener'; a.textContent = j.title || '(no title)';
+        tdTitle.appendChild(a); tr.appendChild(tdTitle);
+        const tdCompany = document.createElement('td'); tdCompany.textContent = j.company || ''; tr.appendChild(tdCompany);
+        const tdLoc = document.createElement('td'); tdLoc.textContent = (j.location || '').trim(); tr.appendChild(tdLoc);
+        const tdPosted = document.createElement('td'); tdPosted.textContent = j.posted_at ? String(j.posted_at).slice(0,10) : '—'; tr.appendChild(tdPosted);
+        tbody.appendChild(tr);
+      }
       shortlist.classList.remove('hidden');
-      table.classList.add('hidden');
-      noData.classList.remove('hidden');
-      return;
+      table.classList.remove('hidden');
+      if (noData) noData.classList.add('hidden');
     }
 
-    let arr = [];
-    try {
-      const res = await fetch(data.signedUrl, { cache: 'no-cache' });
-      if (res.ok) arr = await res.json();
-    } catch {}
+    // ---- wire up & show ----
+    const user = await getUser();
+    if (!user) return; // profile.js already shows the "sign in" prompt
 
-    if (!Array.isArray(arr) || arr.length === 0) {
-      shortlist.classList.remove('hidden');
-      table.classList.add('hidden');
-      noData.classList.remove('hidden');
-      return;
-    }
+    if (who) who.textContent = `Signed in as ${user.email || user.id}`;
 
-    tbody.innerHTML = '';
-    arr.sort((a, b) => (b.score || 0) - (a.score || 0));
-    for (const j of arr) {
-      const tr = document.createElement('tr');
-      const tdScore = document.createElement('td'); tdScore.textContent = (j.score ?? 0).toFixed(3); tr.appendChild(tdScore);
-      const tdTitle = document.createElement('td');
-      const a = document.createElement('a'); a.href = j.url || '#'; a.target = '_blank'; a.rel = 'noopener'; a.textContent = j.title || '(no title)';
-      tdTitle.appendChild(a); tr.appendChild(tdTitle);
-      const tdCompany = document.createElement('td'); tdCompany.textContent = j.company || ''; tr.appendChild(tdCompany);
-      const tdLoc = document.createElement('td'); tdLoc.textContent = (j.location || '').trim(); tr.appendChild(tdLoc);
-      const tdPosted = document.createElement('td'); tdPosted.textContent = j.posted_at ? String(j.posted_at).slice(0,10) : '—'; tr.appendChild(tdPosted);
-      tbody.appendChild(tr);
-    }
-    shortlist.classList.remove('hidden');
-    table.classList.remove('hidden');
-    noData.classList.add('hidden');
-  }
+    if (onboard)  onboard.classList.remove('hidden');
 
-  // wire up
-  uploadBtn.onclick = uploadResume;
-  runBtn.onclick = runTailor;
-  refreshBtn.onclick = loadShortlist;
-  logout.onclick = async () => { await supabase.auth.signOut(); location.reload(); };
+    if (uploadBtn)  uploadBtn.onclick  = uploadResume;
+    if (runBtn)     runBtn.onclick     = runTailor;
+    if (refreshBtn) refreshBtn.onclick = loadShortlist;
+    if (logout)     logout.onclick     = async () => { await supabase.auth.signOut(); location.reload(); };
 
-  await showState();
+    await loadShortlist();
+  };
 })();
+</script>
