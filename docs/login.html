@@ -17,22 +17,36 @@
     .muted { color:#666; font-size:.9rem; }
     .rowlink { text-align:center; margin-top:10px; }
     .center { text-align:center; }
+    .sep { height:1px; background:#eee; margin:14px 0; }
+    .hidden { display:none; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1 class="center">Sign in</h1>
 
+    <!-- Standard auth -->
     <label>Email</label>
-    <input id="email" type="email" placeholder="you@example.com" />
+    <input id="email" type="email" placeholder="you@example.com" autocomplete="email" />
 
     <label style="margin-top:8px">Password</label>
-    <input id="password" type="password" placeholder="••••••••" />
+    <input id="password" type="password" placeholder="••••••••" autocomplete="current-password" />
 
     <button id="signin" class="btn primary row">Sign in</button>
     <button id="signup" class="btn row">Create account</button>
     <button id="magic"  class="btn row">Send magic link</button>
     <button id="forgot" class="btn row">Forgot password</button>
+
+    <div class="sep"></div>
+
+    <!-- Password reset (shown after recovery link) -->
+    <div id="resetBox" class="hidden" aria-live="polite">
+      <label>New password</label>
+      <input id="newPw" type="password" placeholder="At least 8 characters" autocomplete="new-password" />
+      <label style="margin-top:8px">Confirm new password</label>
+      <input id="newPw2" type="password" placeholder="Repeat password" autocomplete="new-password" />
+      <button id="setPw" class="btn primary row">Set new password</button>
+    </div>
 
     <div id="msg" class="muted center" style="margin-top:10px;"></div>
     <div class="rowlink"><a href="./">← Back to start</a></div>
@@ -45,38 +59,74 @@
         'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc'
       );
 
-      // --- complete redirect sessions (magic link or PKCE) ---
-      function parseHash() {
+      const msg = document.getElementById('msg');
+      const emailEl = document.getElementById('email');
+      const passEl  = document.getElementById('password');
+
+      const resetBox = document.getElementById('resetBox');
+      const newPw  = document.getElementById('newPw');
+      const newPw2 = document.getElementById('newPw2');
+
+      const goHome = () => setTimeout(() => (window.location.href = './'), 250);
+
+      // ---------- Helpers to complete Supabase redirect sessions ----------
+      function parseHashKV() {
         const h = (location.hash || '').replace(/^#/, '');
         const out = {};
+        if (!h) return out;
         h.split('&').forEach(kv => {
           const [k,v] = kv.split('=');
           if (k) out[decodeURIComponent(k)] = decodeURIComponent(v || '');
         });
         return out;
       }
+
       async function finishRedirect() {
-        const hash = parseHash();
+        // New-style links use ?code=... (PKCE)
+        const params = new URLSearchParams(location.search);
+        const code = params.get('code');
+
+        if (code) {
+          await supabase.auth.exchangeCodeForSession(code);
+          history.replaceState({}, '', location.pathname);
+          return;
+        }
+
+        // Older links (or SSO) may put tokens in hash
+        const hash = parseHashKV();
         if (hash.access_token && hash.refresh_token) {
           await supabase.auth.setSession({ access_token: hash.access_token, refresh_token: hash.refresh_token });
           history.replaceState({}, '', location.pathname);
-        } else {
-          const params = new URLSearchParams(location.search);
-          const code = params.get('code');
-          if (code) {
-            await supabase.auth.exchangeCodeForSession(code);
-            history.replaceState({}, '', location.pathname);
-          }
         }
       }
+
       await finishRedirect();
 
-      const msg = document.getElementById('msg');
-      const emailEl = document.getElementById('email');
-      const passEl  = document.getElementById('password');
+      // Show reset UI if we arrived from a recovery link:
+      // 1) Supabase emits PASSWORD_RECOVERY on the auth state change
+      supabase.auth.onAuthStateChange((event) => {
+        if (event === 'PASSWORD_RECOVERY') {
+          resetBox.classList.remove('hidden');
+          msg.textContent = 'Enter a new password to finish resetting your account.';
+        }
+      });
 
-      const goHome = () => setTimeout(() => (window.location.href = './'), 250);
+      // 2) Also detect via URL hash parameter "type=recovery" (Supabase appends this sometimes)
+      const hashKV = parseHashKV();
+      if ((hashKV.type || '').toLowerCase() === 'recovery') {
+        resetBox.classList.remove('hidden');
+        msg.textContent = 'Enter a new password to finish resetting your account.';
+        history.replaceState({}, '', location.pathname); // clean URL
+      }
 
+      // 3) Or simply show if we have a fresh session already (commonly true after clicking the reset link)
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session && resetBox.classList.contains('hidden') && (hashKV.access_token || new URLSearchParams(location.search).get('code'))) {
+        resetBox.classList.remove('hidden');
+        msg.textContent = 'Enter a new password to finish resetting your account.';
+      }
+
+      // ---------- Standard auth buttons ----------
       document.getElementById('signin').onclick = async () => {
         const email = emailEl.value.trim(), password = passEl.value;
         if (!email || !password) { msg.textContent = 'Provide email & password.'; return; }
@@ -115,8 +165,22 @@
         msg.textContent = error ? ('Error: ' + error.message) : 'Password reset link sent.';
       };
 
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) { msg.textContent = 'You are signed in. Redirecting…'; goHome(); }
+      // ---------- Complete reset: set the new password ----------
+      document.getElementById('setPw').onclick = async () => {
+        const p1 = newPw.value || '';
+        const p2 = newPw2.value || '';
+        if (p1.length < 8) { msg.textContent = 'Password must be at least 8 characters.'; return; }
+        if (p1 !== p2)   { msg.textContent = 'Passwords do not match.'; return; }
+        const { error } = await supabase.auth.updateUser({ password: p1 });
+        msg.textContent = error ? ('Error: ' + error.message) : 'Password updated. Redirecting…';
+        if (!error) goHome();
+      };
+
+      // If user is already signed in and *not* doing recovery, send them home.
+      if (session && resetBox.classList.contains('hidden')) {
+        msg.textContent = 'You are signed in. Redirecting…';
+        goHome();
+      }
     });
   </script>
 </body>
