@@ -7,26 +7,30 @@
   <link rel="stylesheet" href="style.css" />
   <script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js" defer></script>
   <style>
-    .wrap { max-width: 980px; margin: 20px auto; }
+    .wrap { max-width: 920px; margin: 20px auto; }
     .card { border:1px solid #e5e5e5; border-radius:10px; padding:14px; background:#fcfcfc; }
     .muted { color:#666; } .hidden { display:none; }
     .pill { display:inline-block; padding:2px 8px; margin:2px; border:1px solid #e0e0e0; border-radius:999px; font-size:12px; background:#f6f6f6; }
     dt { font-weight:600; } dd { margin:0 0 10px 0; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { border-bottom:1px solid #eee; padding:6px 8px; text-align:left; }
+    .btn { padding:6px 12px; border:1px solid #ccc; border-radius:8px; background:#fff; cursor:pointer; }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    a.file { display:block; margin:4px 0; }
   </style>
 </head>
 <body>
   <main class="wrap">
-    <h1>Your profile</h1>
+    <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:10px">
+      <h1>Your profile</h1>
+      <a class="pill" href="./">← Home</a>
+    </div>
     <p class="muted">Parsed from your latest resume + saved targets. This page updates after each run.</p>
 
-    <p id="signinOnly"><a class="pill" href="login.html">Sign in</a> to view your profile.</p>
+    <p id="signinOnly"><a href="login.html">Sign in</a> to view your profile.</p>
 
     <section id="profile" class="card hidden" aria-live="polite">
-      <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
+      <div class="row" style="margin-bottom:10px">
         <span id="who"></span>
-        <a class="pill" href="./">← Back</a>
+        <button id="logout" class="btn">Sign out</button>
       </div>
 
       <dl>
@@ -41,21 +45,21 @@
       </dl>
     </section>
 
-    <section id="shortlist" class="card hidden" style="margin-top:16px">
-      <h2>Your shortlist</h2>
-      <table id="jobs" class="hidden">
-        <thead>
-          <tr>
-            <th>Score</th>
-            <th>Title</th>
-            <th>Company</th>
-            <th>Location</th>
-            <th>Posted</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-      <div id="noData" class="muted">No shortlist yet. It’ll appear here when the run finishes.</div>
+    <section id="drafts" class="card hidden" style="margin-top:16px">
+      <h2>Draft tailored materials</h2>
+      <div class="row">
+        <label for="topN">Top roles to draft</label>
+        <input id="topN" type="number" min="1" max="25" value="5" style="width:80px" />
+        <button id="runDrafts" class="btn">Draft now</button>
+        <span id="draftMsg" class="muted"></span>
+      </div>
+
+      <div style="margin-top:10px">
+        <h3 style="margin:6px 0">Latest covers</h3>
+        <div id="covers"></div>
+        <h3 style="margin:14px 0 6px">Latest tailored resumes</h3>
+        <div id="resumes"></div>
+      </div>
     </section>
   </main>
 
