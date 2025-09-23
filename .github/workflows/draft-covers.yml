@@ -55,21 +55,26 @@ jobs:
             -H "Prefer: return=minimal" \
             --data '{"status":"running"}'
 
-      - name: Ensure work dirs
+      # 🔥 Clean old artifacts from repo checkout so we only index/upload the new run
+      - name: Clean work dirs
         shell: bash
         run: |
+          set -euo pipefail
+          rm -rf docs/outbox docs/resumes docs/changes docs/data/drafts_index.json
           mkdir -p docs/outbox docs/resumes docs/changes docs/data
 
       - name: Download shortlist scores.json from Storage
         shell: bash
         run: |
           set -euo pipefail
-          # Signed URL is not needed here (server->server). We can POST directly to storage with SRK.
+          # Server-to-server; SRK works directly.
           curl -sS -f \
             "${SUPABASE_URL%/}/storage/v1/object/outputs/${{ github.event.inputs.user_id }}/scores.json" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-            -o docs/data/scores.json || echo "No scores.json found; proceeding"
+            -o docs/data/scores.json
+          # Fail clearly if missing, so we don't generate “everything”
+          test -s docs/data/scores.json || { echo "scores.json missing for user"; exit 2; }
 
       - name: Fetch user's latest resume
         shell: bash
@@ -84,18 +89,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/draft_email.py --top "${{ github.event.inputs.top }}"
+          python scripts/draft_email.py --top "${{ github.event.inputs.top }}" --user "${{ github.event.inputs.user_id }}"
 
       - name: Build drafts_index.json (list of generated files)
         shell: bash
         run: |
           set -euo pipefail
-          echo '{}' > docs/data/drafts_index.json
-          test -d docs/outbox  && find docs/outbox  -type f -maxdepth 1 -printf '%P\n' | jq -R . | jq -s '{outbox: .}'  > /tmp/idx1.json || echo '{"outbox":[]}' > /tmp/idx1.json
-          test -d docs/resumes && find docs/resumes -type f -maxdepth 1 -printf '%P\n' | jq -R . | jq -s '{resumes: .}' > /tmp/idx2.json || echo '{"resumes":[]}' > /tmp/idx2.json
-          test -d docs/changes && find docs/changes -type f -maxdepth 1 -printf '%P\n' | jq -R . | jq -s '{changes: .}' > /tmp/idx3.json || echo '{"changes":[]}' > /tmp/idx3.json
+          test -d docs/outbox  && find docs/outbox  -maxdepth 1 -type f -printf '%P\n' | jq -R . | jq -s '{outbox: .}'  > /tmp/idx1.json || echo '{"outbox":[]}'  > /tmp/idx1.json
+          test -d docs/resumes && find docs/resumes -maxdepth 1 -type f -printf '%P\n' | jq -R . | jq -s '{resumes: .}' > /tmp/idx2.json || echo '{"resumes":[]}' > /tmp/idx2.json
+          test -d docs/changes && find docs/changes -maxdepth 1 -type f -printf '%P\n' | jq -R . | jq -s '{changes: .}' > /tmp/idx3.json || echo '{"changes":[]}' > /tmp/idx3.json
           jq -s '.[0] * .[1] * .[2]' /tmp/idx1.json /tmp/idx2.json /tmp/idx3.json > docs/data/drafts_index.json
-          cat docs/data/drafts_index.json
+          jq . docs/data/drafts_index.json
 
       - name: Upload covers (markdown) to outputs/<uid>/outbox/
         if: ${{ always() }}
