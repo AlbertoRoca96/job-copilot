@@ -6,51 +6,119 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="style.css" />
   <script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js" defer></script>
+  <style>
+    .card { max-width: 380px; margin: 10vh auto; border:1px solid #e5e5e5; border-radius:12px; padding:20px; background:#fff; box-shadow:0 6px 18px rgba(0,0,0,.06); }
+    h1 { margin: 0 0 12px; font-size: 22px; }
+    label { display:block; margin:8px 0 4px; font-weight:600; }
+    input[type="email"], input[type="password"], input[type="text"] { width:100%; padding:10px; border:1px solid #d9d9d9; border-radius:8px; }
+    .btn { width:100%; padding:10px 12px; border-radius:8px; border:1px solid #c7c7c7; background:#f8f8f8; cursor:pointer; font-weight:600; }
+    .btn.primary { background:#2d6cdf; color:#fff; border-color:#2d6cdf; }
+    .btn.row { display:block; margin-top:10px; }
+    .muted { color:#666; font-size:.9rem; }
+    .rowlink { text-align:center; margin-top:10px; }
+    .center { text-align:center; }
+  </style>
 </head>
 <body>
-  <main class="wrap" style="max-width:640px">
-    <h1>Sign in</h1>
-    <p>Enter your email to receive a magic link. No password required.</p>
+  <div class="card">
+    <h1 class="center">Sign in</h1>
 
-    <label>Email <input id="email" type="email" placeholder="you@example.com" /></label>
-    <button id="send" class="btn">Send magic link</button>
-    <div id="msg" class="muted" style="margin-top:10px"></div>
-  </main>
+    <label>Email</label>
+    <input id="email" type="email" placeholder="you@example.com" />
+
+    <label style="margin-top:8px">Password</label>
+    <input id="password" type="password" placeholder="••••••••" />
+
+    <button id="signin" class="btn primary row">Sign in</button>
+    <button id="signup" class="btn row">Create account</button>
+    <button id="magic"  class="btn row">Send magic link</button>
+    <button id="forgot" class="btn row">Forgot password</button>
+
+    <div id="msg" class="muted center" style="margin-top:10px;"></div>
+    <div class="rowlink"><a href="./">← Back to dashboard</a></div>
+  </div>
 
   <script>
+    // Supabase client for this page (your real project values)
     window.addEventListener('load', async () => {
       const supabase = window.supabase.createClient(
         'https://imozfqawxpsasjdmgdkh.supabase.co',
         'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc'
       );
 
-      // If the magic link lands on login.html, finalize the session and bounce to dashboard
-      const { data: sessionData, error } = await supabase.auth.getSession(); // this parses #access_token if present
-      if (sessionData?.session && !error) {
-        // Optional: clean the hash
-        if (location.hash) history.replaceState({}, '', location.pathname);
-        location.replace('./'); // go to index.html
-        return;
+      // --- Complete redirect sessions (magic link or PKCE code) ---
+      function parseHashParams() {
+        const h = (location.hash || '').replace(/^#/, '');
+        const out = {};
+        h.split('&').forEach(kv => {
+          const [k,v] = kv.split('=');
+          if (k) out[decodeURIComponent(k)] = decodeURIComponent(v || '');
+        });
+        return out;
       }
+      async function finishRedirect() {
+        const hash = parseHashParams();
+        if (hash.access_token && hash.refresh_token) {
+          await supabase.auth.setSession({ access_token: hash.access_token, refresh_token: hash.refresh_token });
+          history.replaceState({}, '', location.pathname);
+        } else {
+          const params = new URLSearchParams(location.search);
+          const code = params.get('code');
+          if (code) {
+            await supabase.auth.exchangeCodeForSession(code);
+            history.replaceState({}, '', location.pathname);
+          }
+        }
+      }
+      await finishRedirect();
 
-      // If Supabase appended an error to the URL (e.g., error_description in hash)
-      try {
-        const frag = new URLSearchParams(location.hash.slice(1));
-        const err = frag.get('error_description');
-        if (err) document.getElementById('msg').textContent = 'Error: ' + err;
-      } catch {}
+      const msg = document.getElementById('msg');
+      const emailEl = document.getElementById('email');
+      const passEl  = document.getElementById('password');
 
-      document.getElementById('send').onclick = async () => {
-        const email = document.getElementById('email').value.trim();
-        if (!email) return;
-        const redirectTo = 'https://albertoroca96.github.io/job-copilot/'; // MUST be allowlisted in Supabase
+      async function toDashboard() { setTimeout(() => { window.location.href = './'; }, 250); }
+
+      document.getElementById('signin').onclick = async () => {
+        const email = emailEl.value.trim(), password = passEl.value;
+        if (!email || !password) { msg.textContent = 'Provide email & password.'; return; }
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        msg.textContent = error ? ('Error: ' + error.message) : 'Signed in!';
+        if (!error) toDashboard();
+      };
+
+      document.getElementById('signup').onclick = async () => {
+        const email = emailEl.value.trim(), password = passEl.value;
+        if (!email || !password) { msg.textContent = 'Provide email & password.'; return; }
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: { emailRedirectTo: 'https://albertoroca96.github.io/job-copilot/login.html' }
+        });
+        msg.textContent = error ? ('Error: ' + error.message) : 'Check your email to confirm your account.';
+      };
+
+      document.getElementById('magic').onclick = async () => {
+        const email = emailEl.value.trim();
+        if (!email) { msg.textContent = 'Enter your email.'; return; }
         const { error } = await supabase.auth.signInWithOtp({
           email,
-          options: { emailRedirectTo: redirectTo }
+          options: { emailRedirectTo: 'https://albertoroca96.github.io/job-copilot/login.html' }
         });
-        document.getElementById('msg').textContent =
-          error ? ('Error: ' + error.message) : 'Check your email for the link.';
+        msg.textContent = error ? ('Error: ' + error.message) : 'Magic link sent — check your inbox.';
       };
+
+      document.getElementById('forgot').onclick = async () => {
+        const email = emailEl.value.trim();
+        if (!email) { msg.textContent = 'Enter your email.'; return; }
+        const { error } = await supabase.auth.resetPasswordForEmail(
+          email,
+          { redirectTo: 'https://albertoroca96.github.io/job-copilot/login.html' }
+        );
+        msg.textContent = error ? ('Error: ' + error.message) : 'Password reset link sent.';
+      };
+
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) { msg.textContent = 'You are signed in. Redirecting…'; toDashboard(); }
     });
   </script>
 </body>
