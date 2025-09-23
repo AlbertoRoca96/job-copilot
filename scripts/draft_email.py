@@ -1,6 +1,6 @@
 # scripts/draft_email.py
 import os, sys, json, re, yaml, hashlib
-from typing import Tuple  # <-- fix: needed for _insert_targeted_summary_paragraph
+from typing import Tuple
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.tailor.render import render_cover
@@ -8,7 +8,7 @@ from src.tailor.resume import tailor_docx_in_place
 from docx import Document
 
 # LLM (new richer helper)
-from src.ai.llm import craft_tailored_snippets, suggest_policies
+from src.ai.llm import craft_tailored_snippets
 
 # JD fetching
 import requests
@@ -21,7 +21,6 @@ RESUMES_MD = os.path.join(os.path.dirname(__file__), '..', 'docs', 'resumes')
 CHANGES_DIR= os.path.join(os.path.dirname(__file__), '..', 'docs', 'changes')
 DATA_DIR   = os.path.join(os.path.dirname(__file__), '..', 'docs', 'data')
 
-# Legacy template expects a YAML path; we'll synthesize it from Supabase profile
 PROFILE_YAML   = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'profile.yaml')
 PORTFOLIO_YAML = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'portfolio.yaml')
 TMPL_DIR       = os.path.join(os.path.dirname(__file__), '..', 'src', 'tailor', 'templates')
@@ -176,7 +175,7 @@ def write_profile_yaml_from_dict(d: dict):
     with open(PROFILE_YAML, "w") as f:
         yaml.safe_dump({k:v for k,v in y.items() if v is not None}, f)
 
-# NEW: keep dashboard order + dedup by url
+# Keep dashboard order + dedup by url
 def _dedup_by_url_keep_order(items):
     seen = set()
     out = []
@@ -189,14 +188,20 @@ def _dedup_by_url_keep_order(items):
         out.append(j)
     return out
 
-def _insert_targeted_summary_paragraph(doc: Document, sentence: str) -> Tuple[bool, int]:
+def _insert_targeted_summary_paragraph(doc: Document, sentence: str):
     """
-    Insert a brief targeted summary near the top. If a heading/paragraph containing
-    'Summary' exists, insert after it; else insert at very top.
-    Returns (inserted, index).
+    Insert a concise targeted sentence near the top and return a UI-ready change item:
+      {
+        "anchor_section": "Summary",
+        "original_paragraph_text": "...",
+        "modified_paragraph_text": "...",
+        "inserted_sentence": "..."
+      }
+    For simple insertion we create/swap text as python-docx has no direct
+    "insert at index" API; swapping text is the common workaround.
     """
     if not sentence:
-        return (False, -1)
+        return None
 
     import re as _re
     idx = None
@@ -206,14 +211,29 @@ def _insert_targeted_summary_paragraph(doc: Document, sentence: str) -> Tuple[bo
             break
 
     if idx is None:
-        p = doc.paragraphs[0] if doc.paragraphs else doc.add_paragraph("")
+        # Insert at very top by swapping with a new first paragraph
+        p0 = doc.paragraphs[0] if doc.paragraphs else doc.add_paragraph("")
+        original = p0.text
         newp = doc.add_paragraph(sentence)
-        p.text, newp.text = newp.text, p.text
-        return (True, 0)
+        # swap texts so the new content is effectively at index 0
+        p0.text, newp.text = newp.text, p0.text
+        return {
+            "anchor_section": "Summary",
+            "original_paragraph_text": original,
+            "modified_paragraph_text": p0.text,
+            "inserted_sentence": sentence
+        }
 
     tail = doc.add_paragraph(sentence)
+    original = doc.paragraphs[idx].text
+    # swap to place “tail” content at idx
     doc.paragraphs[idx].text, tail.text = tail.text, doc.paragraphs[idx].text
-    return (True, idx)
+    return {
+        "anchor_section": "Summary",
+        "original_paragraph_text": original,
+        "modified_paragraph_text": doc.paragraphs[idx].text,
+        "inserted_sentence": sentence
+    }
 
 def main(top: int, user: str | None):
     # Load per-user profile (and materialize profile.yaml)
@@ -287,7 +307,7 @@ def main(top: int, user: str | None):
         write_jd_artifacts(slug=slug, jd_text=jd_text[:20000], out_dir=CHANGES_DIR)
         jd_hash = jd_sha(jd_text)
 
-        # LLM tailored snippet
+        # LLM tailored snippet (summary + extra keywords)
         crafted = craft_tailored_snippets(
             api_key=api_key,
             model=model,
@@ -298,7 +318,7 @@ def main(top: int, user: str | None):
             jd_keywords=jd_kws,
             banlist=sorted(list(banset)),
         )
-        summary_sentence = crafted.get("summary_sentence") or ""
+        summary_sentence = (crafted.get("summary_sentence") or "").strip()
         extra_keywords = crafted.get("keywords") or []
 
         # COVER
@@ -316,11 +336,12 @@ def main(top: int, user: str | None):
         out_docx = os.path.join(RESUMES_MD, out_docx_name)
         doc = Document(BASE_RESUME)
 
-        inserted_idx = -1
-        try:
-            ok, inserted_idx = _insert_targeted_summary_paragraph(doc, summary_sentence)
-        except Exception:
-            ok = False
+        summary_change = None
+        if summary_sentence:
+            try:
+                summary_change = _insert_targeted_summary_paragraph(doc, summary_sentence)
+            except Exception:
+                summary_change = None
 
         try:
             cp = doc.core_properties
@@ -336,28 +357,33 @@ def main(top: int, user: str | None):
             pass
 
         targets = {"projects": [], "work_experience": [], "workshops": []}
-        changes = tailor_docx_in_place(
+        granular_changes = tailor_docx_in_place(
             doc,
             targets,
             jd_keywords=jd_kws,
             allowed_vocab_list=sorted(allowed),
         )
 
+        # Save the file after modifications
         doc.save(out_docx)
         j['resume_docx'] = f"resumes/{out_docx_name}"
         j['resume_docx_hash'] = jd_hash
+
+        # Build the UI JSON (now with real granular diffs)
+        changes_list = []
+        if summary_change:
+            changes_list.append(summary_change)
+
+        # Map tailor_docx_in_place entries (already UI-shaped)
+        for it in granular_changes or []:
+            changes_list.append(it)
 
         explain = {
             "company": j.get("company",""),
             "title": j.get("title",""),
             "ats_keywords": jd_kws,
             "llm_keywords": extra_keywords[:12],
-            "injected": {
-                "summary_sentence": summary_sentence,
-                "position": "after Summary heading" if inserted_idx > 0 else "top_of_document",
-                "paragraph_index": inserted_idx
-            },
-            "changes": changes,
+            "changes": changes_list,
             "jd_hash": jd_hash
         }
         changes_fname = f"{slug}.json"
@@ -365,7 +391,7 @@ def main(top: int, user: str | None):
             json.dump(explain, f, indent=2)
         j['changes_path'] = f"changes/{changes_fname}"
 
-        llm_summary["jobs"].append({"slug": slug, "injected": bool(summary_sentence)})
+        llm_summary["jobs"].append({"slug": slug, "injected": bool(summary_sentence), "changes": len(changes_list)})
         drafted_covers += 1; drafted_resumes += 1
 
     with open(DATA_JSON, 'w') as f: json.dump(jobs, f, indent=2)
