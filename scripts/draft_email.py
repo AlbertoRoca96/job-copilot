@@ -7,7 +7,7 @@ from src.tailor.render import render_cover
 from src.tailor.resume import tailor_docx_in_place
 from docx import Document
 
-from src.ai.llm import craft_tailored_snippets  # richer helper
+# NOTE: no craft_tailored_snippets import (we're not creating any "Targeted" summary)
 
 import requests
 from bs4 import BeautifulSoup
@@ -156,43 +156,6 @@ def _dedup_by_url_keep_order(items):
         out.append(j)
     return out
 
-def _insert_targeted_summary_paragraph(doc: Document, sentence: str):
-    """
-    Insert a *new* summary paragraph without overwriting existing content.
-    Prefer to insert right after a 'Summary' heading if present; otherwise
-    insert after the very first paragraph (name/contact block).
-
-    Returns a UI-ready change object describing the insertion.
-    """
-    if not (sentence or "").strip():
-        return None
-
-    import re as _re
-    target_idx = None
-    for i, p in enumerate(doc.paragraphs):
-        if _re.search(r"\bsummary\b", (p.text or "").strip().lower()):
-            target_idx = i
-            break
-
-    # Fallback: after first paragraph (usually name/contact)
-    if target_idx is None:
-        target_idx = 0 if doc.paragraphs else -1
-
-    # Create the new paragraph at the end, then move it after target using XML API
-    newp = doc.add_paragraph((sentence or "").strip())
-
-    if target_idx >= 0 and len(doc.paragraphs) > 0:
-        target = doc.paragraphs[target_idx]
-        # Move new paragraph node after target node
-        target._p.addnext(newp._p)
-
-    return {
-        "anchor_section": "Summary",
-        "original_paragraph_text": "",           # insertion, not a rewrite
-        "modified_paragraph_text": sentence,     # the new paragraph content
-        "inserted_sentence": sentence
-    }
-
 def main(top: int, user: str | None):
     # Load profile
     prof = load_profile_for_user(user) if user else {}
@@ -242,16 +205,16 @@ def main(top: int, user: str | None):
         banlist = []
     banset = {x.strip().lower() for x in banlist}
 
+    # LLM flags retained for future use, but we don't generate a summary now
     use_llm = os.getenv("USE_LLM","0") == "1" and bool(os.getenv("OPENAI_API_KEY"))
-    api_key = os.getenv("OPENAI_API_KEY") if use_llm else None
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    print(f"LLM: {'using model ' + model if api_key else 'disabled (fallback)'}")
+    print(f"LLM: {'enabled' if use_llm else 'disabled (no summary injected)'}")
 
     def jd_sha(s: str) -> str:
         return hashlib.sha1((s or "").encode("utf-8")).hexdigest()[:8]
 
     drafted_covers = drafted_resumes = 0
-    llm_summary = {"used": bool(api_key), "model": model if api_key else None, "jobs": []}
+    llm_summary = {"used": False, "model": None, "jobs": []}
 
     for j in jobs:
         safe_company = safe_name(j.get('company',''))
@@ -261,33 +224,18 @@ def main(top: int, user: str | None):
         jd_text = pick_jd_text(j) or (j.get("description") or "")
         tmp_job = dict(j); tmp_job["description"] = jd_text
         jd_kws = extract_jd_terms(tmp_job, allowed, cap=24)
+
         # keep JD file for debugging
         os.makedirs(CHANGES_DIR, exist_ok=True)
         with open(os.path.join(CHANGES_DIR, f"{slug}.jd.txt"), "w") as f:
             f.write(jd_text[:20000])
         jd_hash = jd_sha(jd_text)
 
-        # LLM tailored snippet (summary + extra keywords)
-        crafted = craft_tailored_snippets(
-            api_key=api_key,
-            model=model,
-            job_title=j.get("title",""),
-            jd_text=jd_text,
-            profile=profile,
-            allowed_vocab=sorted(list(allowed)),
-            jd_keywords=jd_kws,
-            banlist=sorted(list(banset)),
-        )
-        summary_sentence = (crafted.get("summary_sentence") or "").strip()
-        extra_keywords = crafted.get("keywords") or []
-
-        # COVER
+        # COVER (no "Targeted Summary" block)
         cover_fname = f"{slug}.md"
         cover = render_cover(j, PROFILE_YAML, TMPL_DIR)
-        if summary_sentence:
-            cover += f"\n\n**Targeted Summary:** {summary_sentence}\n"
-        if jd_kws:
-            cover += "\n\n---\n**Keyword Alignment (ATS-safe):** " + ", ".join(jd_kws) + "\n"
+        # Optionally, you could append ATS keywords at the bottom for your own debugging,
+        # but we leave covers as-is now to avoid any “Targeted …” text.
         with open(os.path.join(OUTBOX_MD, cover_fname), 'w') as f: f.write(cover)
         j['cover_path'] = f"outbox/{cover_fname}"
 
@@ -296,28 +244,16 @@ def main(top: int, user: str | None):
         out_docx = os.path.join(RESUMES_MD, out_docx_name)
         doc = Document(BASE_RESUME)
 
-        summary_change = None
-        if summary_sentence:
-            try:
-                summary_change = _insert_targeted_summary_paragraph(doc, summary_sentence)
-            except Exception:
-                summary_change = None
-
-        # document metadata for ATS
+        # document metadata for ATS (keywords only from JD)
         try:
             cp = doc.core_properties
             cp.comments = f"job-copilot:{slug}:{jd_hash}"
             cp.subject = j.get("title","")
-            kws = []
-            for k in (jd_kws + extra_keywords):
-                lk = (k or "").strip().lower()
-                if lk and lk not in kws:
-                    kws.append(lk)
-            cp.keywords = ", ".join(kws[:16])
+            cp.keywords = ", ".join([k for k in jd_kws if k][:16])
         except Exception:
             pass
 
-        # *** tailor bullets in the doc itself ***
+        # Tailor bullets inside the doc (injections handled in resume.py)
         granular_changes = tailor_docx_in_place(
             doc,
             jd_keywords=jd_kws,
@@ -328,25 +264,20 @@ def main(top: int, user: str | None):
         j['resume_docx'] = f"resumes/{out_docx_name}"
         j['resume_docx_hash'] = jd_hash
 
-        # Build changes JSON (summary first so it shows as Change 1)
-        changes_list = []
-        if summary_change: changes_list.append(summary_change)
-        for it in granular_changes or []:
-            changes_list.append(it)
-
+        # Build changes JSON (only granular bullet changes now)
         explain = {
             "company": j.get("company",""),
             "title": j.get("title",""),
             "ats_keywords": jd_kws,
-            "llm_keywords": extra_keywords[:12],
-            "changes": changes_list,
+            "llm_keywords": [],   # none; we are not adding a summary anymore
+            "changes": list(granular_changes or []),
             "jd_hash": jd_hash
         }
         with open(os.path.join(CHANGES_DIR, f"{slug}.json"), 'w') as f:
             json.dump(explain, f, indent=2)
         j['changes_path'] = f"changes/{slug}.json"
 
-        llm_summary["jobs"].append({"slug": slug, "injected": bool(summary_sentence), "changes": len(changes_list)})
+        llm_summary["jobs"].append({"slug": slug, "injected": False, "changes": len(explain["changes"])})
         drafted_covers += 1; drafted_resumes += 1
 
     with open(DATA_JSON, 'w') as f: json.dump(jobs, f, indent=2)
