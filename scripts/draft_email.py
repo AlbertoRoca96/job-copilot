@@ -1,5 +1,6 @@
 # scripts/draft_email.py
 import os, sys, json, re, yaml, hashlib
+from typing import Tuple  # <-- fix: needed for _insert_targeted_summary_paragraph
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.tailor.render import render_cover
@@ -197,27 +198,20 @@ def _insert_targeted_summary_paragraph(doc: Document, sentence: str) -> Tuple[bo
     if not sentence:
         return (False, -1)
 
-    # Try to find a 'Summary' paragraph
+    import re as _re
     idx = None
     for i, p in enumerate(doc.paragraphs):
-        if re.search(r"\bsummary\b", (p.text or "").lower()):
+        if _re.search(r"\bsummary\b", (p.text or "").lower()):
             idx = i + 1
             break
 
     if idx is None:
-        # Insert at top by pre-pending
         p = doc.paragraphs[0] if doc.paragraphs else doc.add_paragraph("")
-        # python-docx cannot directly insert before first paragraph, so add at start:
         newp = doc.add_paragraph(sentence)
-        # Swap texts to simulate insert-at-top
         p.text, newp.text = newp.text, p.text
         return (True, 0)
 
-    # Insert after the located position
-    # python-docx has limited direct insert API; simplest approach:
-    # duplicate at end, then swap text contents to target index
     tail = doc.add_paragraph(sentence)
-    # Move content by swapping text
     doc.paragraphs[idx].text, tail.text = tail.text, doc.paragraphs[idx].text
     return (True, idx)
 
@@ -293,7 +287,7 @@ def main(top: int, user: str | None):
         write_jd_artifacts(slug=slug, jd_text=jd_text[:20000], out_dir=CHANGES_DIR)
         jd_hash = jd_sha(jd_text)
 
-        # --- LLM tailored snippet (summary + keywords) ---
+        # LLM tailored snippet
         crafted = craft_tailored_snippets(
             api_key=api_key,
             model=model,
@@ -322,19 +316,16 @@ def main(top: int, user: str | None):
         out_docx = os.path.join(RESUMES_MD, out_docx_name)
         doc = Document(BASE_RESUME)
 
-        # Insert targeted summary sentence near top
         inserted_idx = -1
         try:
             ok, inserted_idx = _insert_targeted_summary_paragraph(doc, summary_sentence)
         except Exception:
             ok = False
 
-        # Update core properties / keywords
         try:
             cp = doc.core_properties
             cp.comments = f"job-copilot:{slug}:{jd_hash}"
             cp.subject = j.get("title","")
-            # Merge dedup keywords: extracted + extra from LLM (capped)
             kws = []
             for k in (jd_kws + extra_keywords):
                 lk = (k or "").strip().lower()
@@ -344,7 +335,6 @@ def main(top: int, user: str | None):
         except Exception:
             pass
 
-        # Let your existing routine still do formatting/other tweaks
         targets = {"projects": [], "work_experience": [], "workshops": []}
         changes = tailor_docx_in_place(
             doc,
@@ -357,7 +347,6 @@ def main(top: int, user: str | None):
         j['resume_docx'] = f"resumes/{out_docx_name}"
         j['resume_docx_hash'] = jd_hash
 
-        # Record a concrete change block for the UI
         explain = {
             "company": j.get("company",""),
             "title": j.get("title",""),
