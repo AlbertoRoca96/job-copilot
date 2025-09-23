@@ -35,19 +35,18 @@
     <button id="forgot" class="btn row">Forgot password</button>
 
     <div id="msg" class="muted center" style="margin-top:10px;"></div>
-    <div class="rowlink"><a href="./">← Back to dashboard</a></div>
+    <div class="rowlink"><a href="./">← Back to start</a></div>
   </div>
 
   <script>
-    // Supabase client for this page (your real project values)
     window.addEventListener('load', async () => {
       const supabase = window.supabase.createClient(
         'https://imozfqawxpsasjdmgdkh.supabase.co',
         'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc'
       );
 
-      // --- Complete redirect sessions (magic link or PKCE code) ---
-      function parseHashParams() {
+      // --- complete redirect sessions (magic link or PKCE) ---
+      function parseHash() {
         const h = (location.hash || '').replace(/^#/, '');
         const out = {};
         h.split('&').forEach(kv => {
@@ -57,7 +56,7 @@
         return out;
       }
       async function finishRedirect() {
-        const hash = parseHashParams();
+        const hash = parseHash();
         if (hash.access_token && hash.refresh_token) {
           await supabase.auth.setSession({ access_token: hash.access_token, refresh_token: hash.refresh_token });
           history.replaceState({}, '', location.pathname);
@@ -76,25 +75,24 @@
       const emailEl = document.getElementById('email');
       const passEl  = document.getElementById('password');
 
-      async function toDashboard() { setTimeout(() => { window.location.href = './'; }, 250); }
+      const goHome = () => setTimeout(() => (window.location.href = './'), 250);
 
       document.getElementById('signin').onclick = async () => {
         const email = emailEl.value.trim(), password = passEl.value;
         if (!email || !password) { msg.textContent = 'Provide email & password.'; return; }
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         msg.textContent = error ? ('Error: ' + error.message) : 'Signed in!';
-        if (!error) toDashboard();
+        if (!error) goHome();
       };
 
       document.getElementById('signup').onclick = async () => {
         const email = emailEl.value.trim(), password = passEl.value;
         if (!email || !password) { msg.textContent = 'Provide email & password.'; return; }
         const { error } = await supabase.auth.signUp({
-          email,
-          password,
+          email, password,
           options: { emailRedirectTo: 'https://albertoroca96.github.io/job-copilot/login.html' }
         });
-        msg.textContent = error ? ('Error: ' + error.message) : 'Check your email to confirm your account.';
+        msg.textContent = error ? ('Error: ' + error.message) : 'Check your email to confirm.';
       };
 
       document.getElementById('magic').onclick = async () => {
@@ -118,7 +116,7 @@
       };
 
       const { data: { user } } = await supabase.auth.getUser();
-      if (user) { msg.textContent = 'You are signed in. Redirecting…'; toDashboard(); }
+      if (user) { msg.textContent = 'You are signed in. Redirecting…'; goHome(); }
     });
   </script>
 </body>
