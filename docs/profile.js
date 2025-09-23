@@ -1,4 +1,3 @@
-// docs/profile.js
 (async function () {
   await new Promise((r) => window.addEventListener("load", r));
 
@@ -7,7 +6,7 @@
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc"
   );
 
-  // UI refs
+  // --------- DOM refs ---------
   const who = document.getElementById("who");
   const signinOnly = document.getElementById("signinOnly");
   const profBox = document.getElementById("profile");
@@ -16,173 +15,282 @@
   const genBtn = document.getElementById("genBtn");
   const genMsg = document.getElementById("genMsg");
   const topN = document.getElementById("topN");
-
   const draftTable = document.getElementById("draftTable");
   const draftBody = draftTable.querySelector("tbody");
   const noDrafts = document.getElementById("noDrafts");
 
-  // -------- small helpers --------
+  // --------- helpers ---------
   function pills(arr) {
     if (!Array.isArray(arr) || arr.length === 0) return "—";
-    return arr.map((x) => `<span class="pill">${String(x)}</span>`).join(" ");
+    return arr
+      .map((x) => `<span class="pill">${String(x)}</span>`)
+      .join(" ");
   }
 
-  function fmtDate(x) {
-    try {
-      return new Date(x).toISOString();
-    } catch {
-      return String(x || "—");
-    }
+  function escapeHTML(s) {
+    return String(s || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
   }
 
-  // Modal (lazy create once)
-  let modal, modalContent, modalTabs;
-  function ensureModal() {
-    if (modal) return;
-    modal = document.createElement("dialog");
-    modal.style.maxWidth = "900px";
-    modal.style.width = "90%";
-    modal.style.borderRadius = "12px";
-    modal.style.padding = "0";
-    modal.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #eee;">
-        <strong id="chgTitle">Changes</strong>
-        <button id="chgClose" class="btn" style="min-width:64px">Close</button>
-      </div>
-      <div style="padding:12px 16px">
-        <div id="chgTabs" style="display:flex;gap:8px;margin:0 0 10px 0">
-          <button data-tab="summary" class="btn" aria-pressed="true">Summary</button>
-          <button data-tab="raw" class="btn" aria-pressed="false">Raw JSON</button>
-        </div>
-        <div id="chgContent"></div>
-      </div>
-    `;
-    document.body.appendChild(modal);
-    modalContent = modal.querySelector("#chgContent");
-    modalTabs = modal.querySelector("#chgTabs");
-    modal.querySelector("#chgClose").onclick = () => modal.close();
-    modal.addEventListener("close", () => {
-      // clear to free memory if someone opens many
-      modalContent.textContent = "";
+  function ensureModalRoot() {
+    let root = document.getElementById("modal-root");
+    if (root) return root;
+    root = document.createElement("div");
+    root.id = "modal-root";
+    root.style.position = "fixed";
+    root.style.inset = "0";
+    root.style.display = "none";
+    root.style.alignItems = "center";
+    root.style.justifyContent = "center";
+    root.style.background = "rgba(0,0,0,0.35)";
+    root.style.zIndex = "9999";
+    document.body.appendChild(root);
+    // click outside to close
+    root.addEventListener("click", (e) => {
+      if (e.target === root) closeModal();
     });
-    // tab handling
-    modalTabs.addEventListener("click", (e) => {
-      const b = e.target.closest("button[data-tab]");
-      if (!b) return;
-      const chosen = b.getAttribute("data-tab");
-      [...modalTabs.querySelectorAll("button")].forEach((btn) =>
-        btn.setAttribute("aria-pressed", String(btn === b))
-      );
-      [...modalContent.children].forEach((sec) => {
-        sec.style.display = sec.dataset.tab === chosen ? "block" : "none";
-      });
-    });
+    return root;
   }
 
-  async function showChangesViewer(signedUrl, fileLabel) {
-    ensureModal();
-    const title = modal.querySelector("#chgTitle");
-    title.textContent = `Changes — ${fileLabel || ""}`;
+  function closeModal() {
+    const root = ensureModalRoot();
+    root.style.display = "none";
+    root.innerHTML = "";
+  }
 
-    // fetch JSON
-    let data = null;
-    try {
-      const r = await fetch(signedUrl, { cache: "no-cache" });
-      if (r.ok) data = await r.json();
-    } catch {}
+  function openModal(title, innerEl) {
+    const root = ensureModalRoot();
+    root.innerHTML = "";
+    const box = document.createElement("div");
+    box.style.width = "min(900px, 92vw)";
+    box.style.maxHeight = "86vh";
+    box.style.overflow = "auto";
+    box.style.background = "#fff";
+    box.style.borderRadius = "12px";
+    box.style.boxShadow = "0 10px 28px rgba(0,0,0,0.2)";
+    box.style.padding = "14px";
 
-    // Build two tabs
-    modalContent.textContent = "";
-    const summary = document.createElement("div");
-    summary.dataset.tab = "summary";
+    const header = document.createElement("div");
+    header.style.display = "flex";
+    header.style.alignItems = "center";
+    header.style.justifyContent = "space-between";
+    header.style.gap = "12px";
+    header.style.marginBottom = "10px";
 
-    const raw = document.createElement("pre");
-    raw.dataset.tab = "raw";
-    raw.style.whiteSpace = "pre-wrap";
-    raw.style.wordBreak = "break-word";
-    raw.style.fontSize = "12px";
-    raw.textContent = data ? JSON.stringify(data, null, 2) : "(no data)";
+    const h = document.createElement("h3");
+    h.textContent = title;
+    h.style.margin = "0";
 
-    // ----- Summary renderer -----
+    const btn = document.createElement("button");
+    btn.textContent = "Close";
+    btn.className = "btn";
+    btn.onclick = closeModal;
+
+    header.appendChild(h);
+    header.appendChild(btn);
+    box.appendChild(header);
+    box.appendChild(innerEl);
+    root.appendChild(box);
+    root.style.display = "flex";
+  }
+
+  function makeBadge(text) {
+    const b = document.createElement("span");
+    b.textContent = text;
+    b.style.display = "inline-block";
+    b.style.padding = "2px 8px";
+    b.style.margin = "2px 6px 2px 0";
+    b.style.border = "1px solid #e0e0e0";
+    b.style.borderRadius = "999px";
+    b.style.background = "#f6f6f6";
+    b.style.fontSize = "12px";
+    return b;
+  }
+
+  // Render the Comparison + Raw JSON viewer for a changes JSON
+  function renderChangesViewer(json, signedUrl, filename) {
     const wrap = document.createElement("div");
-    wrap.innerHTML = `
-      <div style="margin-bottom:10px">
-        <div class="muted" style="margin:2px 0">Company</div>
-        <div><strong>${(data && (data.company || "—")) || "—"}</strong></div>
+
+    // Tabs
+    const tabs = document.createElement("div");
+    tabs.style.display = "flex";
+    tabs.style.gap = "6px";
+    tabs.style.marginBottom = "8px";
+
+    const tabCmp = document.createElement("button");
+    tabCmp.textContent = "Comparison";
+    tabCmp.className = "btn";
+    const tabRaw = document.createElement("button");
+    tabRaw.textContent = "Raw JSON";
+    tabRaw.className = "btn";
+
+    tabs.appendChild(tabCmp);
+    tabs.appendChild(tabRaw);
+
+    // Meta
+    const meta = document.createElement("div");
+    meta.style.margin = "6px 0 12px 0";
+    meta.innerHTML = `
+      <div style="margin-bottom:6px">
+        <div><strong>Company</strong></div>
+        <div>${escapeHTML(json?.company || "—")}</div>
       </div>
-      <div style="margin-bottom:10px">
-        <div class="muted" style="margin:2px 0">Title</div>
-        <div>${(data && (data.title || "—")) || "—"}</div>
+      <div style="margin-bottom:6px">
+        <div><strong>Title</strong></div>
+        <div>${escapeHTML(json?.title || "—")}</div>
       </div>
-      <div style="margin-bottom:10px">
-        <div class="muted" style="margin:2px 0">ATS keywords</div>
-        <div>${Array.isArray(data?.ats_keywords) && data.ats_keywords.length
-          ? data.ats_keywords.map((k) => `<span class="pill">${k}</span>`).join(" ")
-          : "—"
-        }</div>
+      <div style="margin-bottom:6px">
+        <div><strong>ATS keywords</strong></div>
+        <div id="kwRow"></div>
       </div>
-      <div style="margin-bottom:10px">
-        <div class="muted" style="margin:2px 0">JD hash</div>
-        <div><code>${(data && (data.jd_hash || "—")) || "—"}</code></div>
+      <div style="margin-bottom:6px;color:#666">
+        <div><strong>JD hash</strong></div>
+        <div>${escapeHTML(json?.jd_hash || "—")}</div>
       </div>
-      <div style="margin-top:14px">
-        <div class="muted" style="margin:2px 0">Applied changes</div>
-        <div id="chgList"></div>
+      <div style="margin-bottom:8px">
+        <a href="${signedUrl}" target="_blank" rel="noopener">Download</a>
       </div>
     `;
-    summary.appendChild(wrap);
 
-    const list = summary.querySelector("#chgList");
-    // We don't know the exact schema of `changes`; try a few options gracefully.
-    const changes = Array.isArray(data?.changes) ? data.changes : [];
-    if (!changes.length) {
-      list.innerHTML = `<div class="muted">No granular changes recorded for this job.</div>`;
-    } else {
-      const ul = document.createElement("ul");
-      ul.style.paddingLeft = "18px";
-      for (const c of changes) {
-        // Common possibilities: strings, or {action, before, after, path}
-        let line = "";
-        if (typeof c === "string") {
-          line = c;
-        } else if (c && typeof c === "object") {
-          const a = c.action || c.op || "change";
-          const path = c.path ? ` @ ${c.path}` : "";
-          const before = c.before ?? c.from;
-          const after = c.after ?? c.to;
-          if (before !== undefined || after !== undefined) {
-            line = `${a}${path}: "${String(before ?? "")}" → "${String(after ?? "")}"`;
-          } else {
-            line = `${a}${path}`;
-          }
-        } else {
-          line = String(c);
-        }
-        const li = document.createElement("li");
-        li.textContent = line;
-        ul.appendChild(li);
+    // add keyword pills
+    const kwRow = meta.querySelector("#kwRow");
+    (json?.ats_keywords || []).forEach((k) => kwRow.appendChild(makeBadge(String(k))));
+
+    // Comparison panel
+    const cmp = document.createElement("div");
+
+    function makeCompareCard(item, idx) {
+      const card = document.createElement("div");
+      card.style.border = "1px solid #eee";
+      card.style.borderRadius = "10px";
+      card.style.padding = "10px";
+      card.style.margin = "10px 0";
+
+      const head = document.createElement("div");
+      head.style.display = "flex";
+      head.style.justifyContent = "space-between";
+      head.style.alignItems = "center";
+      head.style.gap = "8px";
+      head.style.marginBottom = "8px";
+      const label = document.createElement("div");
+      label.innerHTML = `<strong>Change ${idx + 1}</strong>${
+        item?.anchor_section ? ` — ${escapeHTML(item.anchor_section)}` : ""
+      }`;
+      head.appendChild(label);
+      card.appendChild(head);
+
+      const grid = document.createElement("div");
+      grid.style.display = "grid";
+      grid.style.gridTemplateColumns = "1fr 1fr";
+      grid.style.gap = "10px";
+
+      const left = document.createElement("div");
+      const right = document.createElement("div");
+
+      function boxify(title, html) {
+        const outer = document.createElement("div");
+        const t = document.createElement("div");
+        t.textContent = title;
+        t.style.fontWeight = "600";
+        t.style.marginBottom = "4px";
+        const body = document.createElement("div");
+        body.style.whiteSpace = "pre-wrap";
+        body.style.border = "1px solid #f0f0f0";
+        body.style.borderRadius = "8px";
+        body.style.padding = "8px";
+        body.style.background = "#fcfcfc";
+        body.innerHTML = html;
+        outer.appendChild(t);
+        outer.appendChild(body);
+        return outer;
       }
-      list.appendChild(ul);
+
+      const originalText = item?.original_paragraph_text || "";
+      const inserted = item?.inserted_sentence || "";
+      const modifiedFromInserted = inserted
+        ? `${originalText?.trim()} ${inserted}`.trim()
+        : "";
+
+      const modifiedText =
+        item?.modified_paragraph_text ||
+        modifiedFromInserted ||
+        originalText;
+
+      // highlight the inserted sentence when we synthesized it
+      const rightHTML =
+        inserted && !item?.modified_paragraph_text
+          ? `${escapeHTML(originalText)} <mark>${escapeHTML(inserted)}</mark>`
+          : escapeHTML(modifiedText);
+
+      left.appendChild(
+        boxify("Original paragraph", escapeHTML(originalText || "—"))
+      );
+      right.appendChild(boxify("Modified paragraph", rightHTML || "—"));
+
+      grid.appendChild(left);
+      grid.appendChild(right);
+      card.appendChild(grid);
+
+      // If we only had an original with no changes, note that
+      if (!inserted && !item?.modified_paragraph_text) {
+        const note = document.createElement("div");
+        note.style.color = "#666";
+        note.style.marginTop = "6px";
+        note.textContent =
+          "No granular diff available for this item (showing original on both sides).";
+        card.appendChild(note);
+      }
+
+      return card;
     }
 
-    // attach tabs
-    modalContent.appendChild(summary);
-    modalContent.appendChild(raw);
+    const items = Array.isArray(json?.changes) ? json.changes : [];
+    if (items.length === 0) {
+      const empty = document.createElement("div");
+      empty.style.color = "#666";
+      empty.textContent = "No granular changes recorded for this job.";
+      cmp.appendChild(empty);
+    } else {
+      items.forEach((it, i) => cmp.appendChild(makeCompareCard(it, i)));
+    }
 
-    // default active = summary
-    [...modalTabs.querySelectorAll("button")].forEach((btn) =>
-      btn.setAttribute("aria-pressed", btn.dataset.tab === "summary")
-    );
-    [...modalContent.children].forEach(
-      (sec) => (sec.style.display = sec.dataset.tab === "summary" ? "block" : "none")
-    );
+    // Raw JSON panel
+    const pre = document.createElement("pre");
+    pre.style.border = "1px solid #eee";
+    pre.style.borderRadius = "10px";
+    pre.style.padding = "10px";
+    pre.style.background = "#fcfcfc";
+    pre.style.whiteSpace = "pre-wrap";
+    pre.textContent = JSON.stringify(json || {}, null, 2);
 
-    modal.showModal();
+    // tab switching
+    function showCmp() {
+      cmp.style.display = "";
+      pre.style.display = "none";
+    }
+    function showRaw() {
+      cmp.style.display = "none";
+      pre.style.display = "";
+    }
+    tabCmp.onclick = showCmp;
+    tabRaw.onclick = showRaw;
+
+    // initial state
+    showCmp();
+
+    wrap.appendChild(tabs);
+    wrap.appendChild(meta);
+    wrap.appendChild(cmp);
+    wrap.appendChild(pre);
+
+    openModal(`Changes — ${filename}`, wrap);
   }
 
-  // -------- Auth + profile --------
-  const { data: authData } = await supabase.auth.getUser();
-  const user = authData.user;
+  // --------- auth + profile ---------
+  const { data: userRes } = await supabase.auth.getUser();
+  const user = userRes?.user;
   if (!user) {
     signinOnly.classList.remove("hidden");
     return;
@@ -199,11 +307,14 @@
   matBox.classList.remove("hidden");
 
   if (!profErr && prof) {
-    document.getElementById("full_name").textContent = prof?.full_name || "—";
+    document.getElementById("full_name").textContent =
+      prof?.full_name || "—";
     document.getElementById("email").textContent = prof?.email || "—";
     document.getElementById("phone").textContent = prof?.phone || "—";
     document.getElementById("skills").innerHTML = pills(prof?.skills || []);
-    document.getElementById("titles").innerHTML = pills(prof?.target_titles || []);
+    document.getElementById("titles").innerHTML = pills(
+      prof?.target_titles || []
+    );
     document.getElementById("locs").innerHTML = pills(prof?.locations || []);
     const pol = prof?.search_policy || {};
     const s = [
@@ -212,16 +323,16 @@
       `remote_only=${!!pol.remote_only}`,
     ].join(", ");
     document.getElementById("policy").textContent = s;
-    document.getElementById("updated").textContent = fmtDate(
+    document.getElementById("updated").textContent = (
       prof?.updated_at || prof?.created_at || "—"
-    );
+    ).toString();
   } else {
     document.getElementById("full_name").textContent = `Error: ${
       profErr?.message || "profile not found"
     }`;
   }
 
-  // -------- Actions --------
+  // --------- Generate materials (Edge Function) ---------
   async function generateDrafts() {
     genMsg.textContent = "Queuing…";
     const session = (await supabase.auth.getSession()).data.session;
@@ -240,7 +351,10 @@
           Authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
-          top: Math.max(1, Math.min(20, parseInt(topN.value || "5", 10) || 5)),
+          top: Math.max(
+            1,
+            Math.min(20, parseInt(topN.value || "5", 10) || 5)
+          ),
         }),
       });
       const out = (await resp.json().catch(() => ({}))) || {};
@@ -249,12 +363,13 @@
         return;
       }
       genMsg.textContent = `Queued request ${out.request_id}. Refresh in a bit.`;
-      startPolling();
+      pollDrafts();
     } catch (e) {
       genMsg.textContent = "Error: " + String(e);
     }
   }
 
+  // --------- List drafts via signed URLs ---------
   async function loadDrafts() {
     draftBody.innerHTML = "";
     const key = `${user.id}/drafts_index.json`;
@@ -266,7 +381,6 @@
       noDrafts.classList.remove("hidden");
       return;
     }
-
     let idx = null;
     try {
       const r = await fetch(signed.signedUrl, { cache: "no-cache" });
@@ -275,7 +389,6 @@
 
     const rows = [];
     function push(type, file) {
-      if (!file) return;
       rows.push([type, file]);
     }
     (idx?.outbox || []).forEach((f) => push("cover", `outbox/${f}`));
@@ -301,34 +414,40 @@
       tr.appendChild(tdT);
 
       const tdF = document.createElement("td");
-      const name = rel.split("/").slice(-1)[0];
 
       if (type === "changes") {
-        // Open in modal viewer
-        const view = document.createElement("button");
-        view.className = "btn";
-        view.textContent = `View ${name}`;
-        view.onclick = (e) => {
+        // "View" button -> in-app modal comparison
+        const viewBtn = document.createElement("button");
+        viewBtn.textContent = `View ${rel.split("/").slice(-1)[0]}`;
+        viewBtn.className = "btn";
+        viewBtn.style.marginRight = "8px";
+        viewBtn.onclick = async (e) => {
           e.preventDefault();
-          showChangesViewer(s2?.signedUrl || "#", name);
+          try {
+            const r = await fetch(s2?.signedUrl, { cache: "no-cache" });
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            const j = await r.json();
+            renderChangesViewer(j, s2?.signedUrl, rel.split("/").slice(-1)[0]);
+          } catch (err) {
+            alert("Failed to load changes JSON: " + String(err));
+          }
         };
-        tdF.appendChild(view);
+        tdF.appendChild(viewBtn);
 
-        // Also add a small download anchor
-        const dl = document.createElement("a");
-        dl.href = s2?.signedUrl || "#";
-        dl.target = "_blank";
-        dl.rel = "noopener";
-        dl.textContent = " download";
-        dl.style.marginLeft = "6px";
-        tdF.appendChild(dl);
-      } else {
-        // Regular download link for covers/resumes
+        // keep a small download link too
         const a = document.createElement("a");
         a.href = s2?.signedUrl || "#";
         a.target = "_blank";
         a.rel = "noopener";
-        a.textContent = name;
+        a.textContent = "download";
+        tdF.appendChild(a);
+      } else {
+        // regular link for covers/resumes
+        const a = document.createElement("a");
+        a.href = s2?.signedUrl || "#";
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.textContent = rel.split("/").slice(-1)[0];
         tdF.appendChild(a);
       }
 
@@ -340,23 +459,11 @@
     noDrafts.classList.add("hidden");
   }
 
-  // Polling after queue (once every 5s, stop after 3 minutes)
+  // --------- Polling after queue ---------
   let pollTimer = null;
-  let pollTicks = 0;
-  function startPolling() {
-    stopPolling();
-    pollTicks = 0;
-    pollTimer = setInterval(async () => {
-      pollTicks += 1;
-      await loadDrafts();
-      if (pollTicks >= 36) stopPolling(); // 36 * 5s = 3min
-    }, 5000);
-  }
-  function stopPolling() {
-    if (pollTimer) {
-      clearInterval(pollTimer);
-      pollTimer = null;
-    }
+  function pollDrafts() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(loadDrafts, 5000);
   }
 
   genBtn.onclick = generateDrafts;
