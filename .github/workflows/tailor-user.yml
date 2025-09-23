@@ -37,7 +37,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt python-docx requests pyyaml beautifulsoup4
 
-      # Optional but helpful: mark request running at the start
+      # Mark request as running early (better UX)
       - name: Mark job_requests as running
         run: |
           set -euo pipefail
@@ -61,6 +61,26 @@ jobs:
       - name: Rank jobs
         run: python scripts/rank.py --user "${{ github.event.inputs.user_id }}"
 
+      # ---------- Export & Upload Profile JSON for the Profile page ----------
+      - name: Export profile JSON (service role)
+        run: |
+          set -euo pipefail
+          mkdir -p docs/data
+          curl -sS \
+            "${SUPABASE_URL%/}/rest/v1/profiles?id=eq.${{ github.event.inputs.user_id }}&select=*" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -o docs/data/profile.json
+          # Normalize: the REST response is an array; keep the first object
+          python - << 'PY'
+import json, sys
+p = "docs/data/profile.json"
+arr = json.load(open(p)) if open(p).read().strip() else []
+obj = (arr[0] if isinstance(arr, list) and arr else {})
+json.dump(obj, open(p, "w"), indent=2)
+print(f"Wrote {p} ({'empty' if not obj else 'ok'})")
+PY
+
       - name: Upload shortlist to outputs/<uid>/scores.json
         run: |
           set -euo pipefail
@@ -75,6 +95,33 @@ jobs:
             -H "Content-Type: application/json" \
             -H "x-upsert: true" \
             --data-binary @"$OUT_JSON"
+
+      - name: Upload profile to outputs/<uid>/profile.json
+        run: |
+          set -euo pipefail
+          PROF_JSON="docs/data/profile.json"
+          if [ ! -f "$PROF_JSON" ]; then
+            echo "profile.json not found at $PROF_JSON"; exit 1
+          fi
+          curl -sS -X POST \
+            "${SUPABASE_URL%/}/storage/v1/object/outputs/${{ github.event.inputs.user_id }}/profile.json" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            -H "x-upsert: true" \
+            --data-binary @"$PROF_JSON"
+
+      # ---------- Debug artifacts so you can inspect each run ----------
+      - name: Upload run artifacts (jobs.jsonl, scores.json, profile.json)
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-artifacts-${{ github.event.inputs.user_id }}
+          path: |
+            data/jobs.jsonl
+            docs/data/scores.json
+            docs/data/profile.json
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Mark job_requests as done
         if: ${{ success() }}
