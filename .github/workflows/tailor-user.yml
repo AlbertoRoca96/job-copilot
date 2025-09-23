@@ -10,7 +10,6 @@ on:
         description: job_requests id
         required: true
 
-# We don't commit anything here anymore, so read-only is fine.
 permissions:
   contents: read
 
@@ -38,23 +37,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt python-docx requests pyyaml beautifulsoup4
 
-      # Pull the user's latest private DOCX from Storage (resumes/<uid>/current.docx)
       - name: Fetch user's latest resume
         run: python scripts/fetch_user_assets.py --user "${{ github.event.inputs.user_id }}"
 
-      # Parse the DOCX and upsert into public.profiles (service role, server-side)
       - name: Parse resume -> upsert profile
         run: python scripts/parse_resume.py --user "${{ github.event.inputs.user_id }}"
 
-      # Crawl the configured targets (targets.yaml) into data/jobs.jsonl
       - name: Crawl targets
         run: python scripts/crawl.py
 
-      # Rank jobs using the standard profile.yaml (or the parsed profile signals)
-      - name: Rank for this user
+      - name: Rank jobs
         run: python scripts/rank.py
 
-      # Upload the per-user shortlist to Storage: outputs/<uid>/scores.json
       - name: Upload shortlist to outputs/<uid>/scores.json
         run: |
           set -euo pipefail
@@ -70,7 +64,6 @@ jobs:
             -H "x-upsert: true" \
             --data-binary @"$OUT_JSON"
 
-      # Mark the request row as done (job_requests.status = 'done')
       - name: Mark job_requests as done
         run: |
           set -euo pipefail
