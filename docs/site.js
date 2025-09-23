@@ -1,8 +1,17 @@
 // docs/site.js
-// Dashboard + shortlist + robust Supabase auth handling for magic-link redirects.
+// 1) Renders the shortlist table from docs/data/scores.json
+// 2) If a Supabase session exists, shows a compact profile/upload panel
+//    and wires the "Tailor my application" button to your Edge Function.
 
 (async function () {
-  // ---------- Jobs shortlist ----------
+  // ====== 0) Supabase client (your real project values) ======
+  await new Promise(r => window.addEventListener('load', r));
+  const supabase = window.supabase.createClient(
+    'https://imozfqawxpsasjdmgdkh.supabase.co',
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc'
+  );
+
+  // ====== 1) Shortlist table ======
   const statusEl = document.getElementById('status');
   const table = document.getElementById('jobs');
   const tbody = table ? table.querySelector('tbody') : null;
@@ -16,9 +25,8 @@
     const res = await fetch('data/scores.json', { cache: 'no-cache' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     jobs = await res.json();
-  } catch {
-    showStatus('Failed to load scores.json');
-    return;
+  } catch (e) {
+    showStatus('Failed to load scores.json'); console.error(e); return;
   }
 
   jobs.sort((a, b) => (b.score || 0) - (a.score || 0));
@@ -27,53 +35,39 @@
     for (const j of jobs) {
       const tr = document.createElement('tr');
 
-      const tdScore = document.createElement('td');
-      tdScore.textContent = (j.score ?? 0).toFixed(3);
-      tr.appendChild(tdScore);
+      const tdScore = document.createElement('td'); tdScore.textContent = (j.score ?? 0).toFixed(3); tr.appendChild(tdScore);
 
       const tdTitle = document.createElement('td');
       const aJD = document.createElement('a');
       aJD.href = j.url || '#'; aJD.target = '_blank'; aJD.rel = 'noopener';
       aJD.textContent = j.title || '(no title)';
-      tdTitle.appendChild(aJD);
-      tr.appendChild(tdTitle);
+      tdTitle.appendChild(aJD); tr.appendChild(tdTitle);
 
       const tdCompany = document.createElement('td'); tdCompany.textContent = j.company || ''; tr.appendChild(tdCompany);
+
       const tdLoc = document.createElement('td'); tdLoc.textContent = (j.location || '').trim(); tr.appendChild(tdLoc);
 
-      const tdPosted = document.createElement('td');
-      tdPosted.textContent = j.posted_at ? String(j.posted_at).slice(0, 10) : '—';
-      tr.appendChild(tdPosted);
+      const tdPosted = document.createElement('td'); tdPosted.textContent = j.posted_at ? String(j.posted_at).slice(0,10) : '—'; tr.appendChild(tdPosted);
 
       const tdCover = document.createElement('td');
-      if (j.cover_path) {
-        const a = document.createElement('a'); a.href = j.cover_path; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Open';
-        tdCover.appendChild(a);
-      } else tdCover.textContent = '—';
-      tr.appendChild(tdCover);
+      if (j.cover_path) { const a=document.createElement('a'); a.href=j.cover_path; a.target='_blank'; a.rel='noopener'; a.textContent='Open'; tdCover.appendChild(a); }
+      else tdCover.textContent = '—'; tr.appendChild(tdCover);
 
       const tdResume = document.createElement('td');
-      if (j.resume_docx) {
-        const hash = j.resume_docx_hash ? `?v=${j.resume_docx_hash}` : `?t=${Date.now()}`;
-        const a = document.createElement('a'); a.href = j.resume_docx + hash; a.textContent = 'DOCX';
-        tdResume.appendChild(a);
-      } else tdResume.textContent = '—';
-      tr.appendChild(tdResume);
+      if (j.resume_docx) { const hash=j.resume_docx_hash?`?v=${j.resume_docx_hash}`:`?t=${Date.now()}`; const a=document.createElement('a'); a.href=j.resume_docx+hash; a.textContent='DOCX'; tdResume.appendChild(a); }
+      else tdResume.textContent = '—'; tr.appendChild(tdResume);
 
       const tdExplain = document.createElement('td');
-      if (j.changes_path) {
-        const b = document.createElement('button'); b.className = 'btn'; b.textContent = 'Explain'; b.onclick = () => openExplain(j);
-        tdExplain.appendChild(b);
-      } else tdExplain.textContent = '—';
-      tr.appendChild(tdExplain);
+      if (j.changes_path) { const b=document.createElement('button'); b.className='btn'; b.textContent='Explain'; b.onclick=()=>openExplain(j); tdExplain.appendChild(b); }
+      else tdExplain.textContent = '—'; tr.appendChild(tdExplain);
 
       tbody.appendChild(tr);
     }
   }
-  hideStatus();
-  showTable();
 
-  // -------- Explain modal ----------
+  hideStatus(); showTable();
+
+  // ====== 2) Explain modal ======
   const modal = document.getElementById('explainModal');
   const closeBtn = document.getElementById('closeExplain');
   const titleEl = document.getElementById('explainTitle');
@@ -85,7 +79,7 @@
 
     keywordsEl.innerHTML = '';
     const kws = Array.isArray(job.ats_keywords) ? job.ats_keywords : (job.keywords || []);
-    kws.slice(0, 24).forEach(k => { const s = document.createElement('span'); s.className = 'pill'; s.textContent = k; keywordsEl.appendChild(s); });
+    (kws || []).slice(0, 24).forEach(k => { const s=document.createElement('span'); s.className='pill'; s.textContent=k; keywordsEl.appendChild(s); });
 
     changesEl.innerHTML = '';
     try {
@@ -94,49 +88,35 @@
         const data = await res.json();
         const changes = Array.isArray(data.changes) ? data.changes : [];
         changes.forEach(ch => {
-          const row = document.createElement('div'); row.className = 'diffrow';
-          const L = document.createElement('div'); L.className = 'diffcol'; L.innerHTML = `<strong>${ch.section || ''} — before</strong>\n\n${ch.before || ''}`;
-          const R = document.createElement('div'); R.className = 'diffcol'; R.innerHTML = `<strong>${ch.section || ''} — after</strong>\n\n${ch.after || ''}`;
-          const reason = document.createElement('div'); reason.className = 'muted'; reason.style.fontSize = '12px'; reason.style.marginTop = '4px'; reason.textContent = `Reason: ${ch.reason || ''}`;
+          const row=document.createElement('div'); row.className='diffrow';
+          const L=document.createElement('div'); L.className='diffcol'; L.innerHTML = `<strong>${ch.section||''} — before</strong>\n\n${ch.before||''}`;
+          const R=document.createElement('div'); R.className='diffcol'; R.innerHTML = `<strong>${ch.section||''} — after</strong>\n\n${ch.after||''}`;
+          const reason=document.createElement('div'); reason.className='muted'; reason.style.fontSize='12px'; reason.style.marginTop='4px'; reason.textContent=`Reason: ${ch.reason || ''}`;
           changesEl.appendChild(row); row.appendChild(L); row.appendChild(R); changesEl.appendChild(reason);
         });
       }
-    } catch {}
-    modal.style.display = 'block';
-    document.body.classList.add('modal-open');
+    } catch (e) { console.error(e); }
+
+    modal.style.display='block'; document.body.classList.add('modal-open');
   }
-  function closeExplain() { modal.style.display = 'none'; document.body.classList.remove('modal-open'); }
+  function closeExplain(){ modal.style.display='none'; document.body.classList.remove('modal-open'); }
   closeBtn?.addEventListener('click', closeExplain);
-  modal?.addEventListener('click', (e) => { if (e.target === modal) closeExplain(); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && modal.style.display === 'block') closeExplain(); });
+  modal?.addEventListener('click', e => { if (e.target===modal) closeExplain(); });
+  document.addEventListener('keydown', e => { if (e.key==='Escape' && modal.style.display==='block') closeExplain(); });
 
-  // ---------- Auth + user panel ----------
-  await new Promise(r => window.addEventListener('load', r));
+  // ====== 3) Signed-in panel ======
+  const authPanel = document.getElementById('authPanel');
+  const signinHint = document.getElementById('signinHint');
 
-  const supabase = window.supabase.createClient(
-    'https://imozfqawxpsasjdmgdkh.supabase.co',
-    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc'
-  );
-
-  const loginLink = document.getElementById('loginLink');
-  const logoutBtn = document.getElementById('logout');
-  const who = document.getElementById('whoami');
-  const profileBox = document.getElementById('profile');
-
-  // 1) Finalize magic-link sessions & strip hash
-  await supabase.auth.getSession(); // parses #access_token if present
-  if (location.hash.includes('access_token=')) {
-    history.replaceState({}, '', location.pathname); // clean URL once stored
-  }
-
-  async function refresh() {
+  async function refreshSignedInPanel() {
     const { data: { user } } = await supabase.auth.getUser();
-    logoutBtn.style.display = user ? '' : 'none';
-    if (loginLink) loginLink.style.display = user ? 'none' : '';
-    who.textContent = user ? `Signed in as ${user.email || user.id}` : '';
-    profileBox.style.display = user ? '' : 'none';
+    if (!user) { authPanel.style.display = 'none'; signinHint.style.display = ''; return; }
 
-    if (user) {
+    authPanel.style.display = ''; signinHint.style.display = 'none';
+    document.getElementById('whoami').textContent = `Signed in as ${user.email || user.id}`;
+
+    // pull profile
+    try {
       const r = await fetch(`${supabase.storage.url.replace('/storage/v1','')}/rest/v1/profiles?id=eq.${user.id}&select=*`, {
         headers: { apikey: supabase.headers().apikey, Authorization: supabase.headers().Authorization }
       });
@@ -147,18 +127,13 @@
         document.getElementById('phone').value = p.phone || '';
         document.getElementById('skills').value = (p.skills || []).join(', ');
       }
-    }
+    } catch (e) { console.error(e); }
   }
+  await refreshSignedInPanel();
 
-  // 2) React to auth changes (e.g., immediately after redirect)
-  supabase.auth.onAuthStateChange((_evt, _sess) => { refresh(); });
-
-  // Initial draw
-  refresh();
-
-  logoutBtn.onclick = async () => {
+  document.getElementById('logout').onclick = async () => {
     await supabase.auth.signOut();
-    location.href = './login.html';
+    await refreshSignedInPanel();
   };
 
   document.getElementById('saveProfile').onclick = async () => {
@@ -167,7 +142,7 @@
       id: user.id,
       full_name: document.getElementById('full_name').value || null,
       phone: document.getElementById('phone').value || null,
-      skills: (document.getElementById('skills').value || '').split(',').map(s => s.trim()).filter(Boolean)
+      skills: (document.getElementById('skills').value || '').split(',').map(s=>s.trim()).filter(Boolean)
     };
     await fetch(`${supabase.storage.url.replace('/storage/v1','')}/rest/v1/profiles`, {
       method: 'POST',
@@ -197,15 +172,14 @@
   };
 
   document.getElementById('runTailor').onclick = async () => {
-    const { data: { session } } = await supabase.auth.getSession(); if (!session) return alert('Sign in first.');
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return alert('Sign in first.');
     const resp = await fetch(`${supabase.storage.url.replace('/storage/v1','')}/functions/v1/request-run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}`, apikey: supabase.headers().apikey },
       body: JSON.stringify({ note: 'user run from dashboard' })
     });
-    const out = await resp.json().catch(() => ({}));
-    document.getElementById('runMsg').textContent =
-      resp.ok ? `Queued: ${out.request_id}` :
-      `Error: ${out.error || resp.status}${out.detail ? ' — ' + String(out.detail).slice(0,140) : ''}`;
+    const out = await resp.json().catch(()=>({}));
+    document.getElementById('runMsg').textContent = resp.ok ? `Queued: ${out.request_id}` : `Error: ${out.error || resp.status}`;
   };
 })();
