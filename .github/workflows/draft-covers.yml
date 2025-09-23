@@ -21,7 +21,6 @@ env:
   PYTHONPATH: ${{ github.workspace }}
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-  # flip to "0" to suppress LLM even if key exists
   USE_LLM: "1"
 
 jobs:
@@ -55,13 +54,12 @@ jobs:
             -H "Prefer: return=minimal" \
             --data '{"status":"running"}'
 
-      # ---------- CLEANUP (remote + local) ----------
+      # -------- CLEANUP (remote + local) --------
       - name: Clean previous objects in outputs/<uid>/*
         shell: bash
         run: |
           set -euo pipefail
           uid="${{ github.event.inputs.user_id }}"
-          # Remove previous artifacts so only fresh ones show on the dashboard
           curl -sS -X DELETE \
             "${SUPABASE_URL%/}/storage/v1/object/outputs" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
@@ -82,12 +80,11 @@ jobs:
           rm -f  docs/data/drafts_index.json
           mkdir -p docs/outbox docs/resumes docs/changes docs/data
 
-      # ---------- PIPELINE ----------
+      # -------- PIPELINE --------
       - name: Download shortlist scores.json from Storage
         shell: bash
         run: |
           set -euo pipefail
-          # Server-to-server: use SRK directly (no signed URL needed)
           curl -sS -f \
             "${SUPABASE_URL%/}/storage/v1/object/outputs/${{ github.event.inputs.user_id }}/scores.json" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
@@ -109,31 +106,24 @@ jobs:
           set -euo pipefail
           python scripts/draft_email.py --top "${{ github.event.inputs.top }}" --user "${{ github.event.inputs.user_id }}"
 
-      - name: Build drafts_index.json (list of generated files)
+      - name: Build drafts_index.json (only uploaded file types)
         shell: bash
         run: |
           set -euo pipefail
-
           mkdir -p docs/data
-
-          # Only include things we truly upload:
-          # - covers: markdown
-          # - resumes: docx (primary) and md (if you keep text versions)
-          # - changes: JSON summaries (exclude *.jd.txt)
-          #
-          # Each glob may produce no matches; handle that without failing.
           shopt -s nullglob
 
           OUTBOX_LIST=()
           for f in docs/outbox/*.md; do OUTBOX_LIST+=("$(basename "$f")"); done
 
+          # IMPORTANT: only .docx resumes (we don't upload .md)
           RESUME_LIST=()
-          for f in docs/resumes/*.docx docs/resumes/*.md; do RESUME_LIST+=("$(basename "$f")"); done || true
+          for f in docs/resumes/*.docx; do RESUME_LIST+=("$(basename "$f")"); done
 
+          # IMPORTANT: only JSON change logs (exclude *.jd.txt)
           CHANGES_LIST=()
           for f in docs/changes/*.json; do CHANGES_LIST+=("$(basename "$f")"); done
 
-          # Convert bash arrays -> JSON arrays
           jq -n \
             --argjson outbox  "$(printf '%s\n' "${OUTBOX_LIST[@]:-}"  | jq -R . | jq -s .)" \
             --argjson resumes "$(printf '%s\n' "${RESUME_LIST[@]:-}" | jq -R . | jq -s .)" \
@@ -144,8 +134,8 @@ jobs:
           echo "Built drafts_index.json:"
           cat docs/data/drafts_index.json
 
-      # ---------- UPLOADS ----------
-      - name: Upload covers (markdown) to outputs/<uid>/outbox/
+      # -------- UPLOADS --------
+      - name: Upload covers (markdown)
         if: ${{ always() }}
         shell: bash
         run: |
@@ -162,7 +152,7 @@ jobs:
               --data-binary @"$f"
           done
 
-      - name: Upload resumes (docx) to outputs/<uid>/resumes/
+      - name: Upload resumes (docx)
         if: ${{ always() }}
         shell: bash
         run: |
@@ -179,7 +169,7 @@ jobs:
               --data-binary @"$f"
           done
 
-      - name: Upload change logs (json) to outputs/<uid>/changes/
+      - name: Upload change logs (json)
         if: ${{ always() }}
         shell: bash
         run: |
@@ -222,7 +212,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      # ---------- STATUS ----------
+      # -------- STATUS --------
       - name: Mark job_requests done
         if: ${{ success() }}
         shell: bash
