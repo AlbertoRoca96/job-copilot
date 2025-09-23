@@ -1,9 +1,4 @@
 // docs/site.js
-// Multi-user onboarding:
-// - If no session: show Sign in link only
-// - If signed in: show upload + run buttons
-// - Shortlist loads from private Storage outputs/<uid>/scores.json via a signed URL
-
 (async function () {
   await new Promise(r => window.addEventListener('load', r));
 
@@ -57,28 +52,31 @@
 
     const path = `${user.id}/current.docx`;
 
-    // Upload private file
     const { error: upErr } = await supabase.storage.from('resumes').upload(path, file, { upsert: true });
     if (upErr) { upMsg.textContent = 'Upload error: ' + upErr.message; return; }
 
-    // Insert metadata INTO public.resumes using PostgREST client (sends JWT automatically)
-    const { error: metaErr } = await supabase
-      .from('resumes')
-      .insert({ user_id: user.id, bucket: 'resumes', path });
+    const { error: metaErr } = await supabase.from('resumes').insert({ user_id: user.id, bucket: 'resumes', path });
     if (metaErr) { upMsg.textContent = 'Upload metadata error: ' + metaErr.message; return; }
 
     upMsg.textContent = 'Uploaded.';
   }
 
-  // 2) Trigger Edge Function -> GH Action
+  // 2) Trigger Edge Function -> GH Action (sending preferences)
   async function runTailor() {
     const session = await getSession();
     if (!session) return alert('Sign in first.');
-
     runMsg.textContent = 'Queuing…';
 
+    // collect preferences from UI
+    const titlesVal = (document.getElementById('desiredTitles')?.value || '')
+      .split(',').map(s => s.trim()).filter(Boolean);
+    const locsVal   = (document.getElementById('desiredLocs')?.value || '')
+      .split(',').map(s => s.trim()).filter(Boolean);
+    const recencyDays = Math.max(0, parseInt(document.getElementById('recencyDays')?.value || '0', 10) || 0);
+    const remoteOnly  = !!document.getElementById('remoteOnly')?.checked;
+    const requirePosted = !!document.getElementById('requirePosted')?.checked;
+
     try {
-      // Call your deployed Edge Function
       const restBase = 'https://imozfqawxpsasjdmgdkh.supabase.co';
       const resp = await fetch(`${restBase}/functions/v1/request-run`, {
         method: 'POST',
@@ -87,7 +85,18 @@
           apikey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc',
           Authorization: `Bearer ${session.access_token}`
         },
-        body: JSON.stringify({ note: 'user run from onboarding' })
+        body: JSON.stringify({
+          note: 'user run from onboarding',
+          preferences: {
+            target_titles: titlesVal,
+            locations: locsVal,
+            search_policy: {
+              recency_days: recencyDays,
+              require_posted_date: requirePosted,
+              remote_only: remoteOnly
+            }
+          }
+        })
       });
       const out = await resp.json().catch(() => ({}));
       runMsg.textContent = resp.ok ? `Queued: ${out.request_id}` : `Error: ${out.error || resp.status}`;
