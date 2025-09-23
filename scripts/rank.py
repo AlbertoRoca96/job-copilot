@@ -1,16 +1,25 @@
-import os, sys, json, yaml, requests, argparse
+# scripts/rank.py
+import os, sys, json, requests, argparse
 from datetime import datetime, timedelta
 
 # import scoring
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from src.core.scoring import score_job, tokenize, contains_any
+from src.core.scoring import score_job, tokenize, contains_any  # tokenize used in compute_parts
 
 DATA_JOBS = os.path.join(os.path.dirname(__file__), '..', 'data', 'jobs.jsonl')
-OUT_DIR   = os.path.join(os.path.dirname(__file__), '..', 'run')
+OUT_DIR   = os.path.join(os.path.dirname(__file__), '..', 'docs', 'data')
 OUT_JSON  = os.path.join(OUT_DIR, 'scores.json')
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL","").rstrip("/")
 SRK          = os.environ.get("SUPABASE_SERVICE_ROLE_KEY","")
+
+def _as_list(v):
+    if v is None: return []
+    if isinstance(v, (list, tuple, set)): return list(v)
+    return [v]
+
+def _lower_set(v):
+    return {str(x).lower() for x in _as_list(v) if x is not None}
 
 def get_profile(user_id: str) -> dict:
     if not (SUPABASE_URL and SRK and user_id):
@@ -22,15 +31,15 @@ def get_profile(user_id: str) -> dict:
     return (arr[0] if arr else {}) or {}
 
 def compute_parts(job, profile):
-    title = job.get('title','')
-    desc  = job.get('description','')
-    loc   = job.get('location','')
+    title = job.get('title','') or ''
+    desc  = job.get('description','') or ''
+    loc   = job.get('location','') or ''
     tokens = tokenize(title) | tokenize(desc)
 
-    skills = set(map(str.lower, (profile.get('skills') or [])))
+    skills = _lower_set(profile.get('skills'))
     skill_overlap = len(skills & tokens) / max(1, len(skills))
 
-    target_titles = set(map(str.lower, (profile.get('target_titles') or [])))
+    target_titles = _lower_set(profile.get('target_titles'))
     title_tokens = tokenize(title)
     title_similarity = len(target_titles & title_tokens) / max(1, len(target_titles))
 
@@ -80,7 +89,7 @@ def main(user_id: str):
         j['score'] = score_job(j, profile)
         out.append(j)
 
-    out.sort(key=lambda x: x['score'], reverse=True)
+    out.sort(key=lambda x: x.get('score', 0), reverse=True)
     os.makedirs(OUT_DIR, exist_ok=True)
     with open(OUT_JSON, 'w') as f:
         json.dump(out, f, indent=2)
