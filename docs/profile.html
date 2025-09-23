@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>job-copilot — Profile</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js" defer></script>
+  <style>
+    .wrap { max-width: 920px; margin: 20px auto; }
+    .card { border:1px solid #e5e5e5; border-radius:10px; padding:14px; background:#fcfcfc; }
+    .muted { color:#666; } .hidden { display:none; }
+    .pill { display:inline-block; padding:2px 8px; margin:2px; border:1px solid #e0e0e0; border-radius:999px; font-size:12px; background:#f6f6f6; }
+    dt { font-weight:600; } dd { margin:0 0 10px 0; }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>Your profile</h1>
+    <p class="muted">Parsed from your latest resume + your saved targets.</p>
+
+    <p id="signinOnly"><a href="login.html">Sign in</a> to view your profile.</p>
+
+    <section id="profile" class="card hidden" aria-live="polite">
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
+        <span id="who"></span>
+        <a class="pill" href="./">← Back</a>
+      </div>
+
+      <dl>
+        <dt>Full name</dt><dd id="full_name">—</dd>
+        <dt>Email</dt><dd id="email">—</dd>
+        <dt>Phone</dt><dd id="phone">—</dd>
+        <dt>Skills</dt><dd id="skills">—</dd>
+        <dt>Desired titles</dt><dd id="titles">—</dd>
+        <dt>Locations</dt><dd id="locs">—</dd>
+        <dt>Search policy</dt>
+        <dd id="policy" class="muted">—</dd>
+        <dt>Updated</dt><dd id="updated">—</dd>
+      </dl>
+    </section>
+  </main>
+
+  <script src="profile.js" defer></script>
+</body>
+</html>
