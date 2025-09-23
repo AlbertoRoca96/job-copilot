@@ -21,6 +21,7 @@ env:
   PYTHONPATH: ${{ github.workspace }}
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+  # flip to "0" to suppress LLM even if key exists
   USE_LLM: "1"
 
 jobs:
@@ -60,6 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           uid="${{ github.event.inputs.user_id }}"
+          # Delete previous artifacts so only fresh ones appear
           curl -sS -X DELETE \
             "${SUPABASE_URL%/}/storage/v1/object/outputs" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
@@ -85,6 +87,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Server-to-server: use SRK directly (no signed URL needed)
           curl -sS -f \
             "${SUPABASE_URL%/}/storage/v1/object/outputs/${{ github.event.inputs.user_id }}/scores.json" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
@@ -116,11 +119,11 @@ jobs:
           OUTBOX_LIST=()
           for f in docs/outbox/*.md; do OUTBOX_LIST+=("$(basename "$f")"); done
 
-          # IMPORTANT: only .docx resumes (we don't upload .md)
+          # Only .docx resumes (we upload .docx, not .md)
           RESUME_LIST=()
           for f in docs/resumes/*.docx; do RESUME_LIST+=("$(basename "$f")"); done
 
-          # IMPORTANT: only JSON change logs (exclude *.jd.txt)
+          # Only JSON change logs (exclude *.jd.txt)
           CHANGES_LIST=()
           for f in docs/changes/*.json; do CHANGES_LIST+=("$(basename "$f")"); done
 
@@ -191,6 +194,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # If the index doesn't exist (e.g., earlier step failed), create a minimal one
+          test -f docs/data/drafts_index.json || echo '{"outbox":[],"resumes":[],"changes":[]}' > docs/data/drafts_index.json
+
           key="outputs/${{ github.event.inputs.user_id }}/drafts_index.json"
           curl -sS -X POST \
             "${SUPABASE_URL%/}/storage/v1/object/$key" \
