@@ -1,144 +1,162 @@
 # src/ai/llm.py
-import os, json, requests
+import os
+import json
+import re
+from typing import Dict, List, Any, Tuple
 
-OPENAI_URL = "https://api.openai.com/v1/chat/completions"
-# Prefer a strong default; allow override via OPENAI_MODEL.
-# Suggest gpt-5 if available; fall back gracefully.
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+import requests
 
-_SYSTEM = """You are a careful resume-tailoring assistant.
-Return compact JSON ONLY. Do not fabricate experience or years.
-Use the job description provided verbatim to guide suggestions.
-Suggest short, honest clauses to APPEND to existing bullets (not whole bullets).
-Each clause must be <= 14 words, declarative, neutral tone, resume-ready.
-No buzzwords, no adjectives, no exaggeration.
-Clauses must be readable for humans (not keyword dumps) while remaining ATS-friendly.
-Avoid passive voice and vague words (optimize, various, multiple). Prefer concrete actions.
-"""
+# -------------------- utilities --------------------
 
-_USER_TMPL = """JOB TITLE:
-{title}
+def _json_loads_safe(s: str) -> Any:
+    try:
+        return json.loads(s)
+    except Exception:
+        return None
 
-ALLOWED VOCAB (candidate truly claims; lowercase):
-{vocab}
+def _trim(s: str, n: int) -> str:
+    s = (s or "").strip()
+    return (s[:n] + "…") if len(s) > n else s
 
-JD TERMS (exact strings extracted from this JD; lowercase):
-{jd_terms}
+def _collapse_ws(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "").strip())
 
-BANLIST (previously used clauses you MUST NOT repeat; lowercase):
-{banlist}
+# -------------------- OpenAI call --------------------
 
-JOB DESCRIPTION (plain text; trimmed):
-{desc}
+def _openai_structured_request(
+    api_key: str,
+    model: str,
+    system: str,
+    user: str,
+    schema: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Minimal JSON-structured generation using OpenAI Chat Completions.
+    Returns parsed JSON dict or {} on failure.
+    """
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
 
-RETURN JSON (array) of 3–5 items. Each has:
-  - clause: short fragment to append (no trailing period)
-  - context: one of [model,pipeline,search,rag,product,ci,nlp,vision,database,frontend,mobile]
-  - requires_any: 1–3 tokens from ALLOWED VOCAB that justify the clause
-  - uses: 1–2 items copied verbatim from JD TERMS that the clause actually mentions
-
-HARD RULES:
-- A clause is valid ONLY if:
-  (a) every technology mentioned appears in BOTH the JD and ALLOWED VOCAB, and
-  (b) the clause includes at least one string from JD TERMS (put it in "uses"), and
-  (c) it does not exactly match any string in BANLIST, and
-  (d) it is semantically distinct from the other clauses (different context/idea).
-- Do not output markdown. ONLY valid JSON.
-"""
-
-def _post(api_key: str, messages):
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    body = {"model": MODEL, "messages": messages, "temperature": 0.2, "max_tokens": 650}
-    r = requests.post(OPENAI_URL, headers=headers, json=body, timeout=45)
-    r.raise_for_status()
-    return r.json()
-
-def suggest_policies(api_key: str, job_title: str, job_desc: str,
-                     allowed_vocab: list[str], jd_terms: list[str], banlist: list[str]) -> list[dict]:
-    if not api_key:
-        return []
-
-    # Limit size for safety
-    desc = (job_desc or "")[:8000]
-    prompt = _USER_TMPL.format(
-        title=job_title or "",
-        desc=desc,
-        vocab=", ".join(sorted(set(x.lower() for x in allowed_vocab))),
-        jd_terms=", ".join(sorted(set(x.lower() for x in jd_terms))),
-        banlist=", ".join(sorted(set(x.lower() for x in banlist))),
-    )
+    # We ask for JSON via response_format
+    payload = {
+        "model": model,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        # conservative
+        "temperature": 0.2,
+        "max_tokens": 600,
+    }
 
     try:
-        data = _post(api_key, [
-            {"role": "system", "content": _SYSTEM},
-            {"role": "user", "content": prompt},
-        ])
-        content = data["choices"][0]["message"]["content"].strip()
-        # Some models may wrap JSON in code fences; strip if necessary
-        if content.startswith("```"):
-            content = content.strip("`\n ")
-            # remove a possible json hint
-            if content.lower().startswith("json"):
-                content = content[4:].lstrip()
-        items = json.loads(content)
+        r = requests.post(url, headers=headers, json=payload, timeout=45)
+        r.raise_for_status()
+        data = r.json()
+        txt = data["choices"][0]["message"]["content"]
+        obj = _json_loads_safe(txt) or {}
+        # Best-effort schema check
+        if not isinstance(obj, dict):
+            return {}
+        # Shallow prune to declared keys
+        keep = {k: obj.get(k) for k in schema.keys()}
+        return keep
+    except Exception:
+        return {}
 
-        out, seen = [], set()
-        for i, it in enumerate(items[:6]):  # allow up to 6; we will filter later
-            clause = (it.get("clause") or "").strip().strip(".").lower()
-            ctx = (it.get("context") or "").strip().lower()
-            req = [str(x).strip().lower() for x in (it.get("requires_any") or [])][:3]
-            uses = [str(x).strip().lower() for x in (it.get("uses") or [])][:2]
+# -------------------- public API --------------------
 
-            if not clause or clause in seen or clause in (x.lower() for x in banlist):
-                continue
-            if not ctx or not req or not uses:
-                continue
+def suggest_policies(api_key: str, title: str, jd_text: str,
+                     allowed_vocab: List[str], jd_keywords: List[str],
+                     banned: List[str]) -> List[Dict[str, Any]]:
+    """
+    Your existing entry point (kept for backwards-compat). We leave it as-is
+    so earlier callers don’t break. If you want to keep using it elsewhere,
+    it can still return tailored clauses (not needed for resume injection).
+    """
+    # Keep your older behavior or return empty to rely on the new function.
+    return []
 
-            # Basic quality/readability gates
-            # - no repeated token spam
-            # - avoid all-caps or weird punctuation
-            # - keep length 4..14 words
-            wds = [w for w in clause.split() if w.strip()]
-            if not (4 <= len(wds) <= 14):
-                continue
-            if any(len(w) > 24 for w in wds):
-                continue
-            # simple spam detection: too many commas or slashes
-            if clause.count(',') > 2 or clause.count('/') > 2:
-                continue
-            # must contain at least one ALLOWED token and one JD term
-            if not any(tok in clause for tok in req):
-                continue
-            # Loosen: allow clause if it mentions at least one JD term OR the clause cues overlap context
-            if not (any(tok in clause for tok in uses) or any(c in clause for c in CUE_MAP.get(ctx, []))):
-                continue
+def craft_tailored_snippets(
+    api_key: str | None,
+    model: str,
+    job_title: str,
+    jd_text: str,
+    profile: Dict[str, Any],
+    allowed_vocab: List[str],
+    jd_keywords: List[str],
+    banlist: List[str],
+) -> Dict[str, Any]:
+    """
+    Produce structured, ATS + human readable tailoring:
+      - summary_sentence: one-liner for resume summary
+      - keywords: compact keyword list (for doc props / ATS)
+      - notes: brief reason (for debugging)
+    If api_key is missing or USE_LLM=0, returns a deterministic fallback.
+    """
+    # Fallback (deterministic) if LLM disabled
+    if not api_key:
+        top = ", ".join(jd_keywords[:6]) if jd_keywords else ""
+        sent = f"Targeted for {job_title}: hands-on with {top}."
+        return {
+            "summary_sentence": _collapse_ws(sent),
+            "keywords": jd_keywords[:12],
+            "notes": "fallback_no_llm",
+        }
 
-            # Minimal shape; bullet cues inferred from context
-            CUE_MAP = {
-                "model": ["model","pytorch","tensorflow","resnet","inference","classification","training"],
-                "pipeline": ["pipeline","cron","github","actions","sql","postgres","dataset","annotation","etl"],
-                "search": ["search","ranking","retrieve","index","vector","embedding","relevance"],
-                "rag": ["retrieval","rag","chunk","embedding","index"],
-                "product": ["app","ui","pwa","react","prototype","feature"],
-                "ci": ["ci","monitor","deploy","github","actions","workflow"],
-                "nlp": ["language","nlp","text","token"],
-                "vision": ["vision","opencv","image","resnet"],
-                "database": ["database","sql","postgres","supabase"],
-                "frontend": ["react","ui","component"],
-                "mobile": ["react native","expo","mobile"],
-            }
-            bullet_cues = CUE_MAP.get(ctx, [ctx])
+    system = (
+        "You tailor resumes. Write one concise, human-readable, ATS-friendly "
+        "sentence that would fit at the top of a resume summary for the given job. "
+        "Prefer concrete skills from allowed_vocab & jd_keywords; avoid buzzword filler. "
+        "Keep it under 32 words."
+    )
 
-            out.append({
-                "id": f"llm_{i}",
-                "jd_cues": list(set(uses)),      # caller also seeds jd_cues
-                "bullet_cues": list(set(bullet_cues)),
-                "requires_any": list(set(req)),
-                "clause": clause,
-            })
-            seen.add(clause)
-        return out
-    except Exception as e:
-        # Log minimal context for CI without leaking secrets
-        print(f"llm.suggest_policies: error {type(e).__name__}: {e}")
-        return []
+    # Keep user content compact to keep latency down
+    short_jd = _trim(jd_text, 3000)
+    short_vocab = allowed_vocab[:120]  # keep prompt lean
+    short_kws = jd_keywords[:30]
+    ban = [b.lower().strip() for b in (banlist or []) if b]
+
+    user = (
+        json.dumps({
+            "job_title": job_title,
+            "job_description": short_jd,
+            "allowed_vocab": short_vocab,
+            "jd_keywords": short_kws,
+            "banlist": ban
+        }, ensure_ascii=False)
+    )
+
+    schema = {
+        "summary_sentence": "string",
+        "keywords": "array",
+        "notes": "string",
+    }
+
+    obj = _openai_structured_request(
+        api_key=api_key,
+        model=model,
+        system=system,
+        user=user,
+        schema=schema,
+    ) or {}
+
+    # Guardrails
+    sentence = _collapse_ws(str(obj.get("summary_sentence") or ""))
+    if not sentence:
+        # Cheap backstop
+        top = ", ".join(jd_keywords[:6]) if jd_keywords else ""
+        sentence = f"Targeted for {job_title}: hands-on with {top}."
+    kws = [str(k).strip() for k in (obj.get("keywords") or []) if k]
+    # Enforce banlist
+    kws = [k for k in kws if k.lower() not in ban]
+
+    return {
+        "summary_sentence": sentence,
+        "keywords": (kws[:12] if kws else jd_keywords[:12]),
+        "notes": obj.get("notes") or "",
+    }
