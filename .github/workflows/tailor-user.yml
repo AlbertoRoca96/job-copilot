@@ -37,6 +37,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt python-docx requests pyyaml beautifulsoup4
 
+      # Optional but helpful: mark request running at the start
+      - name: Mark job_requests as running
+        run: |
+          set -euo pipefail
+          curl -sS -X PATCH \
+            "${SUPABASE_URL%/}/rest/v1/job_requests?id=eq.${{ github.event.inputs.request_id }}" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            --data '{"status":"running"}'
+
       - name: Fetch user's latest resume
         run: python scripts/fetch_user_assets.py --user "${{ github.event.inputs.user_id }}"
 
@@ -47,7 +59,7 @@ jobs:
         run: python scripts/crawl.py
 
       - name: Rank jobs
-        run: python scripts/rank.py
+        run: python scripts/rank.py --user "${{ github.event.inputs.user_id }}"
 
       - name: Upload shortlist to outputs/<uid>/scores.json
         run: |
@@ -65,6 +77,7 @@ jobs:
             --data-binary @"$OUT_JSON"
 
       - name: Mark job_requests as done
+        if: ${{ success() }}
         run: |
           set -euo pipefail
           curl -sS -X PATCH \
@@ -73,4 +86,17 @@ jobs:
             -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "Content-Type: application/json" \
             -H "Prefer: return=minimal" \
-            --data '{"status":"done"}' || true
+            --data '{"status":"done"}'
+
+      - name: Mark job_requests as error (with message)
+        if: ${{ failure() }}
+        run: |
+          set -euo pipefail
+          MSG=$(jq -n --arg m "worker failed; check GH logs" '{"status":"error","message":$m}')
+          curl -sS -X PATCH \
+            "${SUPABASE_URL%/}/rest/v1/job_requests?id=eq.${{ github.event.inputs.request_id }}" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            --data "$MSG"
