@@ -7,10 +7,8 @@ from src.tailor.render import render_cover
 from src.tailor.resume import tailor_docx_in_place
 from docx import Document
 
-# LLM (new richer helper)
-from src.ai.llm import craft_tailored_snippets
+from src.ai.llm import craft_tailored_snippets, suggest_policies
 
-# JD fetching
 import requests
 from bs4 import BeautifulSoup
 
@@ -175,7 +173,6 @@ def write_profile_yaml_from_dict(d: dict):
     with open(PROFILE_YAML, "w") as f:
         yaml.safe_dump({k:v for k,v in y.items() if v is not None}, f)
 
-# Keep dashboard order + dedup by url
 def _dedup_by_url_keep_order(items):
     seen = set()
     out = []
@@ -188,66 +185,74 @@ def _dedup_by_url_keep_order(items):
         out.append(j)
     return out
 
-def _insert_targeted_summary_paragraph(doc: Document, sentence: str):
+def _insert_targeted_summary_paragraph(doc: Document, sentence: str) -> dict | None:
     """
-    Insert a concise targeted sentence near the top and return a UI-ready change item:
-      {
-        "anchor_section": "Summary",
-        "original_paragraph_text": "...",
-        "modified_paragraph_text": "...",
-        "inserted_sentence": "..."
-      }
-    For simple insertion we create/swap text as python-docx has no direct
-    "insert at index" API; swapping text is the common workaround.
+    Insert a Summary heading + targeted sentence AFTER the first paragraph (preserves name),
+    or after an existing 'Summary' heading if present. Return a UI-ready change object.
     """
     if not sentence:
         return None
 
     import re as _re
-    idx = None
+
+    # Look for an existing Summary heading
+    idx_summary = None
     for i, p in enumerate(doc.paragraphs):
-        if _re.search(r"\bsummary\b", (p.text or "").lower()):
-            idx = i + 1
+        if _re.search(r"\b(professional\s+summary|summary)\b", (p.text or "").lower()):
+            idx_summary = i
             break
 
-    if idx is None:
-        # Insert at very top by swapping with a new first paragraph
-        p0 = doc.paragraphs[0] if doc.paragraphs else doc.add_paragraph("")
-        original = p0.text
-        newp = doc.add_paragraph(sentence)
-        # swap texts so the new content is effectively at index 0
-        p0.text, newp.text = newp.text, p0.text
+    if idx_summary is not None:
+        # Insert right after the Summary heading
+        insert_at = min(idx_summary + 1, len(doc.paragraphs))
+        tail = doc.add_paragraph(sentence)
+        original = doc.paragraphs[insert_at].text if insert_at < len(doc.paragraphs) else ""
+        # swap to land it at insert_at
+        doc.paragraphs[insert_at].text, tail.text = tail.text, doc.paragraphs[insert_at].text
         return {
             "anchor_section": "Summary",
             "original_paragraph_text": original,
-            "modified_paragraph_text": p0.text,
+            "modified_paragraph_text": doc.paragraphs[insert_at].text,
             "inserted_sentence": sentence
         }
 
-    tail = doc.add_paragraph(sentence)
-    original = doc.paragraphs[idx].text
-    # swap to place “tail” content at idx
-    doc.paragraphs[idx].text, tail.text = tail.text, doc.paragraphs[idx].text
+    # No Summary heading: create a new heading paragraph + sentence, placed after the first paragraph (name)
+    name_idx = 0
+    # Add the heading and the sentence at the end, then bubble them up by swapping
+    heading = doc.add_paragraph("Summary")
+    para = doc.add_paragraph(sentence)
+
+    # Move heading to index 1 (after name) by swapping
+    if len(doc.paragraphs) >= 2:
+        doc.paragraphs[1].text, heading.text = heading.text, doc.paragraphs[1].text
+        # Move the sentence to index 2
+        if len(doc.paragraphs) >= 3:
+            doc.paragraphs[2].text, para.text = para.text, doc.paragraphs[2].text
+            original = ""  # new paragraph
+            return {
+                "anchor_section": "Summary",
+                "original_paragraph_text": original,
+                "modified_paragraph_text": doc.paragraphs[2].text,
+                "inserted_sentence": sentence
+            }
+    # Fallback: if document was tiny, just return the new sentence change
     return {
         "anchor_section": "Summary",
-        "original_paragraph_text": original,
-        "modified_paragraph_text": doc.paragraphs[idx].text,
+        "original_paragraph_text": "",
+        "modified_paragraph_text": sentence,
         "inserted_sentence": sentence
     }
 
 def main(top: int, user: str | None):
-    # Load per-user profile (and materialize profile.yaml)
     prof = load_profile_for_user(user) if user else {}
     if prof:
         write_profile_yaml_from_dict(prof)
 
-    # Ensure portfolio placeholders
     if not os.path.exists(PORTFOLIO_YAML):
         os.makedirs(os.path.dirname(PORTFOLIO_YAML), exist_ok=True)
         with open(PORTFOLIO_YAML, "w") as f:
             yaml.safe_dump({"projects": [], "work_experience": [], "workshops": []}, f)
 
-    # profile for allowed vocab
     with open(PROFILE_YAML, 'r') as f: profile = yaml.safe_load(f) or {}
     portfolio = {}
     if os.path.exists(PORTFOLIO_YAML):
@@ -255,7 +260,6 @@ def main(top: int, user: str | None):
 
     allowed = set(allowed_vocab(profile, portfolio))
 
-    # --- Source the SAME shortlist as dashboard (no re-sort) ---
     jobs = []
     if os.path.exists(DATA_JSON):
         with open(DATA_JSON) as f:
@@ -271,13 +275,11 @@ def main(top: int, user: str | None):
     jobs = _dedup_by_url_keep_order(jobs)
     jobs = jobs[: max(1, min(20, int(top or 5)))]
 
-    # dirs
     os.makedirs(OUTBOX_MD, exist_ok=True)
     os.makedirs(RESUMES_MD, exist_ok=True)
     os.makedirs(CHANGES_DIR, exist_ok=True)
     os.makedirs(DATA_DIR, exist_ok=True)
 
-    # banlist
     try:
         with open(BANLIST_JSON, 'r') as bf: banlist = json.load(bf)
         if not isinstance(banlist, list): banlist = []
@@ -297,8 +299,8 @@ def main(top: int, user: str | None):
     llm_summary = {"used": bool(api_key), "model": model if api_key else None, "jobs": []}
 
     for j in jobs:
-        safe_company = safe_name(j.get('company',''))
-        safe_title   = safe_name(j.get('title',''))
+        safe_company = ''.join(c for c in (j.get('company','') or '') if c.isalnum() or c in ('-','_')).strip()
+        safe_title   = ''.join(c for c in (j.get('title','') or '')   if c.isalnum() or c in ('-','_')).strip()
         slug = f"{safe_company}_{safe_title}"[:150]
 
         jd_text = pick_jd_text(j) or (j.get("description") or "")
@@ -307,7 +309,7 @@ def main(top: int, user: str | None):
         write_jd_artifacts(slug=slug, jd_text=jd_text[:20000], out_dir=CHANGES_DIR)
         jd_hash = jd_sha(jd_text)
 
-        # LLM tailored snippet (summary + extra keywords)
+        # ---- LLM: targeted summary + runtime bullet policies ----
         crafted = craft_tailored_snippets(
             api_key=api_key,
             model=model,
@@ -321,7 +323,29 @@ def main(top: int, user: str | None):
         summary_sentence = (crafted.get("summary_sentence") or "").strip()
         extra_keywords = crafted.get("keywords") or []
 
-        # COVER
+        runtime_policies = []
+        if api_key:
+            runtime_policies = suggest_policies(
+                api_key,
+                j.get("title",""),
+                jd_text,
+                list(allowed),
+                jd_kws,
+                list(banset),
+            ) or []
+            # write runtime policy file consumed by load_policies()
+            try:
+                with open(RUNTIME_POL, "w") as rf:
+                    yaml.safe_dump(runtime_policies, rf)
+            except Exception:
+                pass
+            # extend banlist with newly used clauses
+            for it in runtime_policies:
+                clause = (it.get("clause") or "").strip().lower()
+                if clause:
+                    banset.add(clause)
+
+        # ---- COVER ----
         cover_fname = f"{slug}.md"
         cover = render_cover(j, PROFILE_YAML, TMPL_DIR)
         if summary_sentence:
@@ -331,7 +355,7 @@ def main(top: int, user: str | None):
         with open(os.path.join(OUTBOX_MD, cover_fname), 'w') as f: f.write(cover)
         j['cover_path'] = f"outbox/{cover_fname}"
 
-        # RESUME
+        # ---- RESUME ----
         out_docx_name = f"{slug}_{jd_hash}.docx"
         out_docx = os.path.join(RESUMES_MD, out_docx_name)
         doc = Document(BASE_RESUME)
@@ -364,17 +388,14 @@ def main(top: int, user: str | None):
             allowed_vocab_list=sorted(allowed),
         )
 
-        # Save the file after modifications
         doc.save(out_docx)
         j['resume_docx'] = f"resumes/{out_docx_name}"
         j['resume_docx_hash'] = jd_hash
 
-        # Build the UI JSON (now with real granular diffs)
+        # ---- UI JSON (granular diffs) ----
         changes_list = []
         if summary_change:
             changes_list.append(summary_change)
-
-        # Map tailor_docx_in_place entries (already UI-shaped)
         for it in granular_changes or []:
             changes_list.append(it)
 
@@ -391,7 +412,12 @@ def main(top: int, user: str | None):
             json.dump(explain, f, indent=2)
         j['changes_path'] = f"changes/{changes_fname}"
 
-        llm_summary["jobs"].append({"slug": slug, "injected": bool(summary_sentence), "changes": len(changes_list)})
+        llm_summary["jobs"].append({
+            "slug": slug,
+            "injected": bool(summary_sentence),
+            "runtime_policy_count": len(runtime_policies),
+            "changes": len(changes_list)
+        })
         drafted_covers += 1; drafted_resumes += 1
 
     with open(DATA_JSON, 'w') as f: json.dump(jobs, f, indent=2)
