@@ -1,185 +1,138 @@
 // docs/site.js
-// 1) Renders the shortlist table from docs/data/scores.json
-// 2) If a Supabase session exists, shows a compact profile/upload panel
-//    and wires the "Tailor my application" button to your Edge Function.
+// Multi-user onboarding page:
+// - If no session: show Sign in link only
+// - If signed in: show upload + run buttons
+// - Shortlist loads from Supabase Storage outputs/<uid>/scores.json after a run
 
 (async function () {
-  // ====== 0) Supabase client (your real project values) ======
   await new Promise(r => window.addEventListener('load', r));
   const supabase = window.supabase.createClient(
     'https://imozfqawxpsasjdmgdkh.supabase.co',
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc'
   );
 
-  // ====== 1) Shortlist table ======
-  const statusEl = document.getElementById('status');
+  const signinOnly = document.getElementById('signinOnly');
+  const onboard = document.getElementById('onboard');
+  const who = document.getElementById('who');
+  const logout = document.getElementById('logout');
+  const uploadBtn = document.getElementById('uploadResume');
+  const upMsg = document.getElementById('upMsg');
+  const runBtn = document.getElementById('runTailor');
+  const runMsg = document.getElementById('runMsg');
+  const refreshBtn = document.getElementById('refresh');
+
   const table = document.getElementById('jobs');
-  const tbody = table ? table.querySelector('tbody') : null;
+  const tbody = table.querySelector('tbody');
+  const shortlist = document.getElementById('shortlist');
+  const noData = document.getElementById('noData');
 
-  function showStatus(msg) { if (statusEl) statusEl.textContent = msg; }
-  function hideStatus() { if (statusEl) statusEl.classList.add('hidden'); }
-  function showTable() { if (table) table.classList.remove('hidden'); }
-
-  let jobs = [];
-  try {
-    const res = await fetch('data/scores.json', { cache: 'no-cache' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    jobs = await res.json();
-  } catch (e) {
-    showStatus('Failed to load scores.json'); console.error(e); return;
-  }
-
-  jobs.sort((a, b) => (b.score || 0) - (a.score || 0));
-
-  if (tbody) {
-    for (const j of jobs) {
-      const tr = document.createElement('tr');
-
-      const tdScore = document.createElement('td'); tdScore.textContent = (j.score ?? 0).toFixed(3); tr.appendChild(tdScore);
-
-      const tdTitle = document.createElement('td');
-      const aJD = document.createElement('a');
-      aJD.href = j.url || '#'; aJD.target = '_blank'; aJD.rel = 'noopener';
-      aJD.textContent = j.title || '(no title)';
-      tdTitle.appendChild(aJD); tr.appendChild(tdTitle);
-
-      const tdCompany = document.createElement('td'); tdCompany.textContent = j.company || ''; tr.appendChild(tdCompany);
-
-      const tdLoc = document.createElement('td'); tdLoc.textContent = (j.location || '').trim(); tr.appendChild(tdLoc);
-
-      const tdPosted = document.createElement('td'); tdPosted.textContent = j.posted_at ? String(j.posted_at).slice(0,10) : '—'; tr.appendChild(tdPosted);
-
-      const tdCover = document.createElement('td');
-      if (j.cover_path) { const a=document.createElement('a'); a.href=j.cover_path; a.target='_blank'; a.rel='noopener'; a.textContent='Open'; tdCover.appendChild(a); }
-      else tdCover.textContent = '—'; tr.appendChild(tdCover);
-
-      const tdResume = document.createElement('td');
-      if (j.resume_docx) { const hash=j.resume_docx_hash?`?v=${j.resume_docx_hash}`:`?t=${Date.now()}`; const a=document.createElement('a'); a.href=j.resume_docx+hash; a.textContent='DOCX'; tdResume.appendChild(a); }
-      else tdResume.textContent = '—'; tr.appendChild(tdResume);
-
-      const tdExplain = document.createElement('td');
-      if (j.changes_path) { const b=document.createElement('button'); b.className='btn'; b.textContent='Explain'; b.onclick=()=>openExplain(j); tdExplain.appendChild(b); }
-      else tdExplain.textContent = '—'; tr.appendChild(tdExplain);
-
-      tbody.appendChild(tr);
-    }
-  }
-
-  hideStatus(); showTable();
-
-  // ====== 2) Explain modal ======
-  const modal = document.getElementById('explainModal');
-  const closeBtn = document.getElementById('closeExplain');
-  const titleEl = document.getElementById('explainTitle');
-  const keywordsEl = document.getElementById('explainKeywords');
-  const changesEl = document.getElementById('explainChanges');
-
-  async function openExplain(job) {
-    titleEl.textContent = `${job.title || ''} @ ${job.company || ''}`;
-
-    keywordsEl.innerHTML = '';
-    const kws = Array.isArray(job.ats_keywords) ? job.ats_keywords : (job.keywords || []);
-    (kws || []).slice(0, 24).forEach(k => { const s=document.createElement('span'); s.className='pill'; s.textContent=k; keywordsEl.appendChild(s); });
-
-    changesEl.innerHTML = '';
-    try {
-      const res = await fetch(job.changes_path, { cache: 'no-cache' });
-      if (res.ok) {
-        const data = await res.json();
-        const changes = Array.isArray(data.changes) ? data.changes : [];
-        changes.forEach(ch => {
-          const row=document.createElement('div'); row.className='diffrow';
-          const L=document.createElement('div'); L.className='diffcol'; L.innerHTML = `<strong>${ch.section||''} — before</strong>\n\n${ch.before||''}`;
-          const R=document.createElement('div'); R.className='diffcol'; R.innerHTML = `<strong>${ch.section||''} — after</strong>\n\n${ch.after||''}`;
-          const reason=document.createElement('div'); reason.className='muted'; reason.style.fontSize='12px'; reason.style.marginTop='4px'; reason.textContent=`Reason: ${ch.reason || ''}`;
-          changesEl.appendChild(row); row.appendChild(L); row.appendChild(R); changesEl.appendChild(reason);
-        });
-      }
-    } catch (e) { console.error(e); }
-
-    modal.style.display='block'; document.body.classList.add('modal-open');
-  }
-  function closeExplain(){ modal.style.display='none'; document.body.classList.remove('modal-open'); }
-  closeBtn?.addEventListener('click', closeExplain);
-  modal?.addEventListener('click', e => { if (e.target===modal) closeExplain(); });
-  document.addEventListener('keydown', e => { if (e.key==='Escape' && modal.style.display==='block') closeExplain(); });
-
-  // ====== 3) Signed-in panel ======
-  const authPanel = document.getElementById('authPanel');
-  const signinHint = document.getElementById('signinHint');
-
-  async function refreshSignedInPanel() {
+  async function currentUser() {
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { authPanel.style.display = 'none'; signinHint.style.display = ''; return; }
-
-    authPanel.style.display = ''; signinHint.style.display = 'none';
-    document.getElementById('whoami').textContent = `Signed in as ${user.email || user.id}`;
-
-    // pull profile
-    try {
-      const r = await fetch(`${supabase.storage.url.replace('/storage/v1','')}/rest/v1/profiles?id=eq.${user.id}&select=*`, {
-        headers: { apikey: supabase.headers().apikey, Authorization: supabase.headers().Authorization }
-      });
-      if (r.ok) {
-        const rows = await r.json();
-        const p = rows[0] || {};
-        document.getElementById('full_name').value = p.full_name || '';
-        document.getElementById('phone').value = p.phone || '';
-        document.getElementById('skills').value = (p.skills || []).join(', ');
-      }
-    } catch (e) { console.error(e); }
+    return user || null;
   }
-  await refreshSignedInPanel();
 
-  document.getElementById('logout').onclick = async () => {
-    await supabase.auth.signOut();
-    await refreshSignedInPanel();
-  };
+  async function showState() {
+    const user = await currentUser();
+    if (!user) {
+      signinOnly.classList.remove('hidden');
+      onboard.classList.add('hidden');
+      shortlist.classList.add('hidden');
+      return;
+    }
+    signinOnly.classList.add('hidden');
+    onboard.classList.remove('hidden');
+    who.textContent = `Signed in as ${user.email || user.id}`;
+    await loadShortlist(); // try to show any previous run
+  }
 
-  document.getElementById('saveProfile').onclick = async () => {
-    const { data: { user } } = await supabase.auth.getUser(); if (!user) return;
-    const body = {
-      id: user.id,
-      full_name: document.getElementById('full_name').value || null,
-      phone: document.getElementById('phone').value || null,
-      skills: (document.getElementById('skills').value || '').split(',').map(s=>s.trim()).filter(Boolean)
-    };
-    await fetch(`${supabase.storage.url.replace('/storage/v1','')}/rest/v1/profiles`, {
+  async function uploadResume() {
+    const user = await currentUser(); if (!user) return alert('Sign in first.');
+    const file = document.getElementById('resume').files[0]; if (!file) return alert('Choose a .docx file');
+    const path = `${user.id}/current.docx`;
+    const { error } = await supabase.storage.from('resumes').upload(path, file, { upsert: true });
+    if (error) { upMsg.textContent = 'Upload error: ' + error.message; return; }
+    // Also insert metadata row (RLS permits own insert)
+    await fetch(`${supabase.storage.url.replace('/storage/v1','')}/rest/v1/resumes`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         apikey: supabase.headers().apikey,
-        Authorization: supabase.headers().Authorization,
-        Prefer: 'resolution=merge-duplicates'
+        Authorization: supabase.headers().Authorization
       },
-      body: JSON.stringify(body)
-    });
-    alert('Saved!');
-  };
-
-  document.getElementById('uploadResume').onclick = async () => {
-    const { data: { user } } = await supabase.auth.getUser(); if (!user) return alert('Sign in first.');
-    const file = document.getElementById('resume').files[0]; if (!file) return alert('Choose a .docx file');
-    const path = `${user.id}/current.docx`;
-    const { error } = await supabase.storage.from('resumes').upload(path, file, { upsert: true });
-    if (error) return alert('Upload error: ' + error.message);
-    await fetch(`${supabase.storage.url.replace('/storage/v1','')}/rest/v1/resumes`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', apikey: supabase.headers().apikey, Authorization: supabase.headers().Authorization },
       body: JSON.stringify({ user_id: user.id, path })
-    });
-    alert('Uploaded.');
-  };
+    }).catch(()=>{});
+    upMsg.textContent = 'Uploaded.';
+  }
 
-  document.getElementById('runTailor').onclick = async () => {
+  async function runTailor() {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return alert('Sign in first.');
+    runMsg.textContent = 'Queuing…';
     const resp = await fetch(`${supabase.storage.url.replace('/storage/v1','')}/functions/v1/request-run`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}`, apikey: supabase.headers().apikey },
-      body: JSON.stringify({ note: 'user run from dashboard' })
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+        apikey: supabase.headers().apikey
+      },
+      body: JSON.stringify({ note: 'user run from onboarding' })
     });
     const out = await resp.json().catch(()=>({}));
-    document.getElementById('runMsg').textContent = resp.ok ? `Queued: ${out.request_id}` : `Error: ${out.error || resp.status}`;
-  };
+    runMsg.textContent = resp.ok ? `Queued: ${out.request_id}` : `Error: ${out.error || resp.status}`;
+    if (resp.ok) {
+      // poll for outputs for a bit
+      pollForShortlist();
+    }
+  }
+
+  async function downloadOutputsJSON(path) {
+    const { data, error } = await supabase.storage.from('outputs').download(path);
+    if (error) return null;
+    try {
+      const txt = await data.text();
+      return JSON.parse(txt);
+    } catch {
+      return null;
+    }
+  }
+
+  async function loadShortlist() {
+    const user = await currentUser(); if (!user) return;
+    const arr = await downloadOutputsJSON(`${user.id}/scores.json`);
+    if (!arr || !Array.isArray(arr) || arr.length === 0) {
+      shortlist.classList.remove('hidden');
+      table.classList.add('hidden');
+      noData.classList.remove('hidden');
+      return;
+    }
+    // render
+    tbody.innerHTML = '';
+    arr.sort((a,b) => (b.score||0) - (a.score||0));
+    for (const j of arr) {
+      const tr = document.createElement('tr');
+      const tdScore = document.createElement('td'); tdScore.textContent = (j.score ?? 0).toFixed(3); tr.appendChild(tdScore);
+      const tdTitle = document.createElement('td'); const a=document.createElement('a'); a.href=j.url||'#'; a.target='_blank'; a.rel='noopener'; a.textContent=j.title||'(no title)'; tdTitle.appendChild(a); tr.appendChild(tdTitle);
+      const tdCompany = document.createElement('td'); tdCompany.textContent = j.company||''; tr.appendChild(tdCompany);
+      const tdLoc = document.createElement('td'); tdLoc.textContent = (j.location||'').trim(); tr.appendChild(tdLoc);
+      const tdPosted = document.createElement('td'); tdPosted.textContent = j.posted_at ? String(j.posted_at).slice(0,10) : '—'; tr.appendChild(tdPosted);
+      tbody.appendChild(tr);
+    }
+    shortlist.classList.remove('hidden');
+    table.classList.remove('hidden');
+    noData.classList.add('hidden');
+  }
+
+  let pollTimer = null;
+  function pollForShortlist() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(loadShortlist, 5000);
+  }
+
+  // wire up
+  uploadBtn.onclick = uploadResume;
+  runBtn.onclick = runTailor;
+  refreshBtn.onclick = loadShortlist;
+  logout.onclick = async () => { await supabase.auth.signOut(); location.reload(); };
+
+  await showState();
 })();
