@@ -7,19 +7,21 @@
   <link rel="stylesheet" href="style.css" />
   <script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js" defer></script>
   <style>
-    .wrap { max-width: 920px; margin: 20px auto; }
+    .wrap { max-width: 980px; margin: 20px auto; }
     .card { border:1px solid #e5e5e5; border-radius:10px; padding:14px; background:#fcfcfc; }
     .muted { color:#666; } .hidden { display:none; }
     .pill { display:inline-block; padding:2px 8px; margin:2px; border:1px solid #e0e0e0; border-radius:999px; font-size:12px; background:#f6f6f6; }
     dt { font-weight:600; } dd { margin:0 0 10px 0; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom:1px solid #eee; padding:6px 8px; text-align:left; }
   </style>
 </head>
 <body>
   <main class="wrap">
     <h1>Your profile</h1>
-    <p class="muted">Parsed from your latest resume + your saved targets.</p>
+    <p class="muted">Parsed from your latest resume + saved targets. This page updates after each run.</p>
 
-    <p id="signinOnly"><a href="login.html">Sign in</a> to view your profile.</p>
+    <p id="signinOnly"><a class="pill" href="login.html">Sign in</a> to view your profile.</p>
 
     <section id="profile" class="card hidden" aria-live="polite">
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
@@ -34,10 +36,26 @@
         <dt>Skills</dt><dd id="skills">—</dd>
         <dt>Desired titles</dt><dd id="titles">—</dd>
         <dt>Locations</dt><dd id="locs">—</dd>
-        <dt>Search policy</dt>
-        <dd id="policy" class="muted">—</dd>
+        <dt>Search policy</dt><dd id="policy" class="muted">—</dd>
         <dt>Updated</dt><dd id="updated">—</dd>
       </dl>
+    </section>
+
+    <section id="shortlist" class="card hidden" style="margin-top:16px">
+      <h2>Your shortlist</h2>
+      <table id="jobs" class="hidden">
+        <thead>
+          <tr>
+            <th>Score</th>
+            <th>Title</th>
+            <th>Company</th>
+            <th>Location</th>
+            <th>Posted</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div id="noData" class="muted">No shortlist yet. It’ll appear here when the run finishes.</div>
     </section>
   </main>
 
