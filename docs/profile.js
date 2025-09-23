@@ -10,30 +10,28 @@
   const who = document.getElementById('who');
   const signinOnly = document.getElementById('signinOnly');
   const profBox = document.getElementById('profile');
+  const draftsBox = document.getElementById('drafts');
+  const logout = document.getElementById('logout');
 
-  const shortlist = document.getElementById('shortlist');
-  const table = document.getElementById('jobs');
-  const tbody = table.querySelector('tbody');
-  const noData = document.getElementById('noData');
+  const coversDiv = document.getElementById('covers');
+  const resumesDiv = document.getElementById('resumes');
+  const draftMsg = document.getElementById('draftMsg');
 
   function pills(arr) {
     if (!Array.isArray(arr) || arr.length === 0) return '—';
     return arr.map(x => `<span class="pill">${String(x)}</span>`).join(' ');
   }
 
+  // auth
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) { signinOnly.classList.remove('hidden'); return; }
-
   who.textContent = `Signed in as ${user.email || user.id}`;
+  logout.onclick = async () => { await supabase.auth.signOut(); location.href = './'; };
 
-  // ---- Load profile row (RLS: id = auth.uid()) ----
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', user.id)
-    .single();
-
+  // load profile (RLS)
+  const { data, error } = await supabase.from('profiles').select('*').eq('id', user.id).single();
   profBox.classList.remove('hidden');
+  draftsBox.classList.remove('hidden');
   if (error) {
     document.getElementById('full_name').textContent = `Error: ${error.message}`;
   } else {
@@ -43,7 +41,6 @@
     document.getElementById('skills').innerHTML      = pills(data?.skills || []);
     document.getElementById('titles').innerHTML      = pills(data?.target_titles || []);
     document.getElementById('locs').innerHTML        = pills(data?.locations || []);
-
     const pol = data?.search_policy || {};
     const s = [
       `recency_days=${pol.recency_days ?? 0}`,
@@ -54,53 +51,62 @@
     document.getElementById('updated').textContent = (data?.updated_at || data?.created_at || '—').toString();
   }
 
-  // ---- Load shortlist from outputs/<uid>/scores.json via signed URL ----
-  async function loadShortlist() {
-    const key = `${user.id}/scores.json`;
-    const { data, error } = await supabase.storage.from('outputs').createSignedUrl(key, 60);
-    if (error || !data?.signedUrl) {
-      shortlist.classList.remove('hidden');
-      table.classList.add('hidden');
-      noData.classList.remove('hidden');
-      return;
+  // helper to list + link files in Storage via signed URLs
+  async function listFiles(prefix) {
+    const { data: files, error } = await supabase.storage.from('outputs').list(`${user.id}/${prefix}`, { limit: 100, sortBy: { column: 'name', order: 'desc' } });
+    if (error) return [];
+    const items = [];
+    for (const f of files) {
+      const key = `${user.id}/${prefix}/${f.name}`;
+      const { data: signed } = await supabase.storage.from('outputs').createSignedUrl(key, 60);
+      if (signed?.signedUrl) items.push({ name: f.name, url: signed.signedUrl });
     }
-    let arr = [];
-    try {
-      const res = await fetch(data.signedUrl, { cache: 'no-cache' });
-      if (res.ok) arr = await res.json();
-    } catch {}
-
-    if (!Array.isArray(arr) || arr.length === 0) {
-      shortlist.classList.remove('hidden');
-      table.classList.add('hidden');
-      noData.classList.remove('hidden');
-      return;
-    }
-
-    tbody.innerHTML = '';
-    arr.sort((a, b) => (b.score || 0) - (a.score || 0));
-    for (const j of arr) {
-      const tr = document.createElement('tr');
-      const tdScore = document.createElement('td'); tdScore.textContent = (j.score ?? 0).toFixed(3); tr.appendChild(tdScore);
-      const tdTitle = document.createElement('td');
-      const a = document.createElement('a'); a.href = j.url || '#'; a.target = '_blank'; a.rel = 'noopener'; a.textContent = j.title || '(no title)';
-      tdTitle.appendChild(a); tr.appendChild(tdTitle);
-      const tdCompany = document.createElement('td'); tdCompany.textContent = j.company || ''; tr.appendChild(tdCompany);
-      const tdLoc = document.createElement('td'); tdLoc.textContent = (j.location || '').trim(); tr.appendChild(tdLoc);
-      const tdPosted = document.createElement('td'); tdPosted.textContent = j.posted_at ? String(j.posted_at).slice(0,10) : '—'; tr.appendChild(tdPosted);
-      tbody.appendChild(tr);
-    }
-    shortlist.classList.remove('hidden');
-    table.classList.remove('hidden');
-    noData.classList.add('hidden');
+    return items;
   }
 
-  // Poll shortlist for a couple of minutes (new users)
-  await loadShortlist();
-  let tries = 0;
-  const timer = setInterval(async () => {
-    tries += 1;
-    await loadShortlist();
-    if (tries > 24) clearInterval(timer); // ~2 minutes @5s
-  }, 5000);
+  async function refreshDraftLists() {
+    coversDiv.innerHTML = ''; resumesDiv.innerHTML = '';
+    for (const item of await listFiles('outbox')) {
+      const a = document.createElement('a'); a.href = item.url; a.textContent = item.name; a.className='file'; a.target='_blank';
+      coversDiv.appendChild(a);
+    }
+    for (const item of await listFiles('resumes')) {
+      const a = document.createElement('a'); a.href = item.url; a.textContent = item.name; a.className='file'; a.target='_blank';
+      resumesDiv.appendChild(a);
+    }
+  }
+
+  // run drafts (Edge Function -> dispatch GH workflow)
+  document.getElementById('runDrafts').onclick = async () => {
+    draftMsg.textContent = 'Queuing…';
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      const top = Math.max(1, Math.min(25, parseInt(document.getElementById('topN').value || '5', 10) || 5));
+      const resp = await fetch('https://imozfqawxpsasjdmgdkh.supabase.co/functions/v1/request-draft', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc',
+          Authorization: `Bearer ${session.session?.access_token || ''}`
+        },
+        body: JSON.stringify({ top, note: 'user triggered from profile' })
+      });
+      const out = await resp.json().catch(()=> ({}));
+      draftMsg.textContent = resp.ok ? `Queued (top=${top})` : `Error: ${out.detail || out.error || resp.status}`;
+      if (resp.ok) {
+        // start polling list for new files
+        const t = setInterval(async () => {
+          await refreshDraftLists();
+        }, 5000);
+        // initial refresh
+        await refreshDraftLists();
+        // stop polling after 2 minutes to avoid running forever
+        setTimeout(()=> clearInterval(t), 120000);
+      }
+    } catch (e) {
+      draftMsg.textContent = 'Error: ' + String(e);
+    }
+  };
+
+  await refreshDraftLists();
 })();
