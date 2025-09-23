@@ -4,16 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       user_id:
-        description: Supabase user id
+        description: "Supabase user id"
+        required: true
+      request_id:
+        description: "job_requests id"
         required: true
       top:
         description: "Number of top roles to draft"
         required: false
         default: "5"
-      request_id:
-        description: Optional job_requests id for bookkeeping
-        required: false
-        default: ""
 
 permissions:
   contents: read
@@ -22,7 +21,7 @@ env:
   PYTHONPATH: ${{ github.workspace }}
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-  # LLM toggle (0 disables even if key exists)
+  # flip to "0" to suppress LLM even if key exists
   USE_LLM: "1"
 
 jobs:
@@ -37,98 +36,149 @@ jobs:
         uses: actions/setup-python@v5
         with: { python-version: '3.11' }
 
-      - name: Install dependencies
+      - name: Install deps
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
           pip install -r requirements.txt python-docx requests pyyaml beautifulsoup4
 
-      - name: Prepare per-user inputs (scores + profile)
+      - name: Mark job_requests running
+        shell: bash
         run: |
           set -euo pipefail
-          mkdir -p docs/data src/core
+          curl -sS -X PATCH \
+            "${SUPABASE_URL%/}/rest/v1/job_requests?id=eq.${{ github.event.inputs.request_id }}" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            --data '{"status":"running"}'
 
-          # 1) Download user's shortlist (scores.json) from Storage -> docs/data/scores.json
-          curl -sS -X GET \
+      - name: Ensure work dirs
+        shell: bash
+        run: |
+          mkdir -p docs/outbox docs/resumes docs/changes docs/data
+
+      - name: Download shortlist scores.json from Storage
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Signed URL is not needed here (server->server). We can POST directly to storage with SRK.
+          curl -sS -f \
             "${SUPABASE_URL%/}/storage/v1/object/outputs/${{ github.event.inputs.user_id }}/scores.json" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-            -o docs/data/scores.json || echo "[]">docs/data/scores.json
+            -o docs/data/scores.json || echo "No scores.json found; proceeding"
 
-          # 2) Fetch live profile row -> src/core/profile.yaml (renderers expect YAML file)
-          curl -sS \
-            "${SUPABASE_URL%/}/rest/v1/profiles?id=eq.${{ github.event.inputs.user_id }}&select=*" \
-            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
-            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-            -o docs/data/profile.json
+      - name: Fetch user's latest resume
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/fetch_user_assets.py --user "${{ github.event.inputs.user_id }}"
 
-          python - << 'PY'
-import json, yaml, sys, os
-p = "docs/data/profile.json"
-raw = open(p, "r", encoding="utf-8").read().strip()
-arr = json.loads(raw) if raw else []
-obj = (arr[0] if isinstance(arr, list) and arr else {})
-# write YAML the cover renderer expects
-os.makedirs("src/core", exist_ok=True)
-with open("src/core/profile.yaml", "w", encoding="utf-8") as f:
-    yaml.safe_dump(obj, f, sort_keys=False, allow_unicode=True)
-print("Wrote src/core/profile.yaml")
-PY
-
-      - name: Draft cover letters & resumes
+      - name: Run drafting (covers + tailored resumes)
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           USE_LLM: ${{ env.USE_LLM }}
+        shell: bash
         run: |
-          python scripts/draft_email.py --top ${{ github.event.inputs.top }}
+          set -euo pipefail
+          python scripts/draft_email.py --top "${{ github.event.inputs.top }}"
 
-      - name: Upload generated covers to Storage (outputs/<uid>/outbox)
+      - name: Build drafts_index.json (list of generated files)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '{}' > docs/data/drafts_index.json
+          test -d docs/outbox  && find docs/outbox  -type f -maxdepth 1 -printf '%P\n' | jq -R . | jq -s '{outbox: .}'  > /tmp/idx1.json || echo '{"outbox":[]}' > /tmp/idx1.json
+          test -d docs/resumes && find docs/resumes -type f -maxdepth 1 -printf '%P\n' | jq -R . | jq -s '{resumes: .}' > /tmp/idx2.json || echo '{"resumes":[]}' > /tmp/idx2.json
+          test -d docs/changes && find docs/changes -type f -maxdepth 1 -printf '%P\n' | jq -R . | jq -s '{changes: .}' > /tmp/idx3.json || echo '{"changes":[]}' > /tmp/idx3.json
+          jq -s '.[0] * .[1] * .[2]' /tmp/idx1.json /tmp/idx2.json /tmp/idx3.json > docs/data/drafts_index.json
+          cat docs/data/drafts_index.json
+
+      - name: Upload covers (markdown) to outputs/<uid>/outbox/
+        if: ${{ always() }}
+        shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
           for f in docs/outbox/*.md; do
-            bn=$(basename "$f")
+            key="outputs/${{ github.event.inputs.user_id }}/outbox/$(basename "$f")"
             curl -sS -X POST \
-              "${SUPABASE_URL%/}/storage/v1/object/outputs/${{ github.event.inputs.user_id }}/outbox/${bn}" \
+              "${SUPABASE_URL%/}/storage/v1/object/$key" \
               -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
               -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
               -H "Content-Type: text/markdown" \
               -H "x-upsert: true" \
-              --data-binary @"$f" >/dev/null
+              --data-binary @"$f"
           done
 
-      - name: Upload tailored resumes to Storage (outputs/<uid>/resumes)
+      - name: Upload resumes (docx) to outputs/<uid>/resumes/
+        if: ${{ always() }}
+        shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
           for f in docs/resumes/*.docx; do
-            bn=$(basename "$f")
+            key="outputs/${{ github.event.inputs.user_id }}/resumes/$(basename "$f")"
             curl -sS -X POST \
-              "${SUPABASE_URL%/}/storage/v1/object/outputs/${{ github.event.inputs.user_id }}/resumes/${bn}" \
+              "${SUPABASE_URL%/}/storage/v1/object/$key" \
               -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
               -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
               -H "Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document" \
               -H "x-upsert: true" \
-              --data-binary @"$f" >/dev/null
+              --data-binary @"$f"
           done
 
-      - name: Upload change logs to Storage (outputs/<uid>/changes)
+      - name: Upload change logs (json) to outputs/<uid>/changes/
+        if: ${{ always() }}
+        shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
           for f in docs/changes/*.json; do
-            bn=$(basename "$f")
+            key="outputs/${{ github.event.inputs.user_id }}/changes/$(basename "$f")"
             curl -sS -X POST \
-              "${SUPABASE_URL%/}/storage/v1/object/outputs/${{ github.event.inputs.user_id }}/changes/${bn}" \
+              "${SUPABASE_URL%/}/storage/v1/object/$key" \
               -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
               -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
               -H "Content-Type: application/json" \
               -H "x-upsert: true" \
-              --data-binary @"$f" >/dev/null
+              --data-binary @"$f"
           done
 
-      - name: Mark job_requests as done
-        if: ${{ success() && github.event.inputs.request_id != '' }}
+      - name: Upload drafts_index.json
+        if: ${{ always() }}
+        shell: bash
         run: |
+          set -euo pipefail
+          key="outputs/${{ github.event.inputs.user_id }}/drafts_index.json"
+          curl -sS -X POST \
+            "${SUPABASE_URL%/}/storage/v1/object/$key" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            -H "x-upsert: true" \
+            --data-binary @docs/data/drafts_index.json
+
+      - name: Upload run artifacts (debug)
+        uses: actions/upload-artifact@v4
+        with:
+          name: drafts-run-${{ github.event.inputs.user_id }}
+          path: |
+            docs/outbox/
+            docs/resumes/
+            docs/changes/
+            docs/data/drafts_index.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Mark job_requests done
+        if: ${{ success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
           curl -sS -X PATCH \
             "${SUPABASE_URL%/}/rest/v1/job_requests?id=eq.${{ github.event.inputs.request_id }}" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
@@ -137,9 +187,11 @@ PY
             -H "Prefer: return=minimal" \
             --data '{"status":"done"}'
 
-      - name: Mark job_requests as error
-        if: ${{ failure() && github.event.inputs.request_id != '' }}
+      - name: Mark job_requests error
+        if: ${{ failure() }}
+        shell: bash
         run: |
+          set -euo pipefail
           MSG=$(jq -n --arg m "draft-covers failed; check GH logs" '{"status":"error","message":$m}')
           curl -sS -X PATCH \
             "${SUPABASE_URL%/}/rest/v1/job_requests?id=eq.${{ github.event.inputs.request_id }}" \
