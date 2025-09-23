@@ -40,14 +40,22 @@ CANON = {
 # --------------------- helpers & utilities ---------------------
 
 class ChangeLog:
+    """
+    Collects granular changes in the exact shape the UI expects.
+    Each item includes: original_paragraph_text, modified_paragraph_text,
+    optional inserted_sentence, and anchor_section (where the change occurred).
+    """
     def __init__(self):
         self.items = []
 
-    def add(self, section: str, before: str, after: str, reason: str):
+    def add(self, section: str, before: str, after: str,
+            reason: str, inserted_sentence: Optional[str] = None,
+            anchor: Optional[str] = None):
         self.items.append({
-            "section": section,
-            "before": (before or "").strip(),
-            "after": (after or "").strip(),
+            "anchor_section": (anchor or section or "").strip(),
+            "original_paragraph_text": (before or "").strip(),
+            "modified_paragraph_text": (after or "").strip(),
+            "inserted_sentence": (inserted_sentence or "").strip() or None,
             "reason": reason
         })
 
@@ -101,9 +109,8 @@ def copy_format(from_run: Run, to_run: Run):
         to_run.font.bold = from_run.font.bold
         to_run.font.italic = from_run.font.italic
         to_run.font.underline = from_run.font.underline
-        # copy run style (avoids default 'Normal' look)
         try:
-            to_run.style = from_run.style
+            to_run.style = from_run.style  # keep run style if possible
         except Exception:
             pass
     except Exception:
@@ -114,7 +121,6 @@ def _dominant_nonlink_run(p: Paragraph) -> Optional[Run]:
     best, best_len = None, -1
     for r in p.runs:
         txt = (r.text or "")
-        # skip empty & hyperlink-styled runs
         style_name = (getattr(r.style, "name", "") or "").lower()
         if not txt.strip():
             continue
@@ -123,7 +129,6 @@ def _dominant_nonlink_run(p: Paragraph) -> Optional[Run]:
         L = len(txt.strip())
         if L > best_len:
             best, best_len = r, L
-    # fallback: last non-empty run
     if best is None:
         for r in reversed(p.runs):
             if (r.text or "").strip():
@@ -133,39 +138,44 @@ def _dominant_nonlink_run(p: Paragraph) -> Optional[Run]:
 def canonicalize_clause(clause: str) -> str:
     """Replace lowercased tech tokens with canonical casing."""
     s = clause or ""
-    # Longer keys first (e.g., 'react native' before 'react')
     for k in sorted(CANON.keys(), key=len, reverse=True):
         pattern = re.compile(rf"\b{re.escape(k)}\b", flags=re.IGNORECASE)
         s = pattern.sub(CANON[k], s)
     return s
 
-def append_clause(p: Paragraph, clause: str):
+def build_added_sentence_from_clause(clause: str) -> str:
     """
-    Add a JD-aligned phrase without using a semicolon.
-    Heuristic: convert the clause to a short "Using/With ..." sentence to keep ATS-safe tokens
-    while sounding natural. This avoids awkward "; ..." suffixes.
+    Convert a clause into a short, natural sentence that’s ATS-safe.
+    Avoid semicolons; prefer “Using …”.
     """
     if not clause:
-        return
+        return ""
     raw = (clause or "").strip().rstrip(".")
     canon = canonicalize_clause(raw)
 
-    # Try to extract a technology-focused phrase
-    m = re.match(r"^(built|improved|optimized|implemented|designed|delivered|shipped|reduced|increased|created|developed|automated|migrated|refactored|scaled)\s+(.+)$", canon, flags=re.IGNORECASE)
+    m = re.match(
+        r"^(built|improved|optimized|implemented|designed|delivered|shipped|reduced|increased|created|developed|automated|migrated|refactored|scaled)\s+(.+)$",
+        canon, flags=re.IGNORECASE
+    )
     phrase = m.group(2) if m else canon
-    # If it already starts with 'using/with', strip that and we'll re-add consistently
     phrase = re.sub(r"^(using|with)\s+", "", phrase, flags=re.IGNORECASE)
+    return f" Using {phrase}."
 
-    # Construct an additional short sentence. No semicolons.
-    add = f" Using {phrase}."
-
-    # choose the base run to inherit formatting from
+def append_clause_and_return_sentence(p: Paragraph, clause: str) -> str:
+    """
+    Add a JD-aligned natural sentence to the paragraph and return exactly
+    what was added (so the UI can highlight it).
+    """
+    if not clause:
+        return ""
+    add = build_added_sentence_from_clause(clause)
     base = _dominant_nonlink_run(p)
     if base is None:
         p.add_run(add)
-        return
+        return add
     r = p.add_run(add)
     copy_format(base, r)
+    return add
 
 # --------------------- policy scoring & selection ---------------------
 
@@ -184,13 +194,11 @@ def _readability_ok(clause: str) -> bool:
     s = (clause or "").strip()
     if not s:
         return False
-    # 4..18 words, avoid spammy punctuation
     w = [w for w in s.split() if w.strip()]
     if not (4 <= len(w) <= 18):
         return False
     if s.count(',') > 2 or s.count('/') > 2:
         return False
-    # avoid vague filler words dominating the clause
     VAGUE = {"various","multiple","numerous","optimize","synergy","innovative"}
     toks = tokens(s)
     if len(VAGUE & toks) >= 2:
@@ -213,8 +221,6 @@ def choose_policy_for_sentence(sentence: str,
         lc_clause = clause.lower()
         if lc_clause in used_clauses:
             continue
-
-        # readability guard (human-digestible but ATS-safe)
         if not _readability_ok(clause):
             continue
 
@@ -226,7 +232,6 @@ def choose_policy_for_sentence(sentence: str,
         if bullet_cues and not (stoks & bullet_cues):
             continue
 
-        # reject clauses that are too similar to the sentence already
         if difflib.SequenceMatcher(None, normalize_ws(sentence.lower()), normalize_ws(lc_clause)).ratio() > 0.85:
             continue
 
@@ -271,8 +276,11 @@ def rewrite_bullets_in_section(paragraphs: List[Paragraph],
             continue
         if len(before) > 350:
             continue
-        append_clause(p, clause)
-        logger.add(section_label, before, p.text, reason=f"Aligned to JD via clause: “{canonicalize_clause(clause)}”")
+        added = append_clause_and_return_sentence(p, clause)
+        logger.add(section_label, before, p.text,
+                   reason=f"Aligned to JD via clause: “{canonicalize_clause(clause)}”",
+                   inserted_sentence=added,
+                   anchor=f"{section_label} • bullet #{j+1}")
         rewrites += 1
 
 def reorder_or_annotate_skills(paragraphs: List[Paragraph],
@@ -360,4 +368,5 @@ def tailor_docx_in_place(doc: Document,
             "Work Experience", max_rewrites=3, used_clauses=used_clauses
         )
 
+    # Return **UI-ready** list of change objects
     return logger.items
