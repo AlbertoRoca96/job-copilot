@@ -6,8 +6,8 @@ from src.tailor.render import render_cover
 from src.tailor.resume import tailor_docx_in_place
 from docx import Document
 
-# LLM (optional)
-from src.ai.llm import suggest_policies
+# LLM (new richer helper)
+from src.ai.llm import craft_tailored_snippets, suggest_policies
 
 # JD fetching
 import requests
@@ -163,7 +163,6 @@ def load_profile_for_user(user_id: str) -> dict:
     return (arr[0] if arr else {}) or {}
 
 def write_profile_yaml_from_dict(d: dict):
-    # render_cover expects this shape; include common keys
     y = {
         "full_name": d.get("full_name"),
         "email": d.get("email"),
@@ -176,11 +175,11 @@ def write_profile_yaml_from_dict(d: dict):
     with open(PROFILE_YAML, "w") as f:
         yaml.safe_dump({k:v for k,v in y.items() if v is not None}, f)
 
+# NEW: keep dashboard order + dedup by url
 def _dedup_by_url_keep_order(items):
-    """Keep first occurrence for each job (URL preferred), preserving input order."""
     seen = set()
     out = []
-    for j in items or []:
+    for j in items:
         u = (j.get("url") or "").strip().lower()
         key = u or f"no-url::{j.get('company','')}::{j.get('title','')}"
         if key in seen:
@@ -189,13 +188,46 @@ def _dedup_by_url_keep_order(items):
         out.append(j)
     return out
 
+def _insert_targeted_summary_paragraph(doc: Document, sentence: str) -> Tuple[bool, int]:
+    """
+    Insert a brief targeted summary near the top. If a heading/paragraph containing
+    'Summary' exists, insert after it; else insert at very top.
+    Returns (inserted, index).
+    """
+    if not sentence:
+        return (False, -1)
+
+    # Try to find a 'Summary' paragraph
+    idx = None
+    for i, p in enumerate(doc.paragraphs):
+        if re.search(r"\bsummary\b", (p.text or "").lower()):
+            idx = i + 1
+            break
+
+    if idx is None:
+        # Insert at top by pre-pending
+        p = doc.paragraphs[0] if doc.paragraphs else doc.add_paragraph("")
+        # python-docx cannot directly insert before first paragraph, so add at start:
+        newp = doc.add_paragraph(sentence)
+        # Swap texts to simulate insert-at-top
+        p.text, newp.text = newp.text, p.text
+        return (True, 0)
+
+    # Insert after the located position
+    # python-docx has limited direct insert API; simplest approach:
+    # duplicate at end, then swap text contents to target index
+    tail = doc.add_paragraph(sentence)
+    # Move content by swapping text
+    doc.paragraphs[idx].text, tail.text = tail.text, doc.paragraphs[idx].text
+    return (True, idx)
+
 def main(top: int, user: str | None):
-    # Load per-user profile (and materialize profile.yaml for template code)
+    # Load per-user profile (and materialize profile.yaml)
     prof = load_profile_for_user(user) if user else {}
     if prof:
         write_profile_yaml_from_dict(prof)
 
-    # Portfolio stays optional (leave as-is if present)
+    # Ensure portfolio placeholders
     if not os.path.exists(PORTFOLIO_YAML):
         os.makedirs(os.path.dirname(PORTFOLIO_YAML), exist_ok=True)
         with open(PORTFOLIO_YAML, "w") as f:
@@ -209,7 +241,7 @@ def main(top: int, user: str | None):
 
     allowed = set(allowed_vocab(profile, portfolio))
 
-    # 🔽 Source the SAME shortlist the dashboard uses
+    # --- Source the SAME shortlist as dashboard (no re-sort) ---
     jobs = []
     if os.path.exists(DATA_JSON):
         with open(DATA_JSON) as f:
@@ -222,17 +254,16 @@ def main(top: int, user: str | None):
         print('No scores found; run scripts/rank.py first.')
         return
 
-    # IMPORTANT: do NOT resort; trust dashboard’s order
     jobs = _dedup_by_url_keep_order(jobs)
-    top = max(1, min(20, int(top or 5)))
-    jobs = jobs[:top]
+    jobs = jobs[: max(1, min(20, int(top or 5)))]
 
-    # ----------------------------------------------------------------
+    # dirs
     os.makedirs(OUTBOX_MD, exist_ok=True)
     os.makedirs(RESUMES_MD, exist_ok=True)
     os.makedirs(CHANGES_DIR, exist_ok=True)
     os.makedirs(DATA_DIR, exist_ok=True)
 
+    # banlist
     try:
         with open(BANLIST_JSON, 'r') as bf: banlist = json.load(bf)
         if not isinstance(banlist, list): banlist = []
@@ -240,16 +271,16 @@ def main(top: int, user: str | None):
         banlist = []
     banset = {x.strip().lower() for x in banlist}
 
-    drafted_covers = drafted_resumes = 0
-
     use_llm = os.getenv("USE_LLM","0") == "1" and bool(os.getenv("OPENAI_API_KEY"))
+    api_key = os.getenv("OPENAI_API_KEY") if use_llm else None
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-
-    llm_summary = {"used": bool(use_llm), "model": model if use_llm else None, "jobs": []}
-    print(f"LLM: {'using model ' + model if use_llm else 'disabled or missing OPENAI_API_KEY (fallback to deterministic)'}")
+    print(f"LLM: {'using model ' + model if api_key else 'disabled (fallback)'}")
 
     def jd_sha(s: str) -> str:
         return hashlib.sha1((s or "").encode("utf-8")).hexdigest()[:8]
+
+    drafted_covers = drafted_resumes = 0
+    llm_summary = {"used": bool(api_key), "model": model if api_key else None, "jobs": []}
 
     for j in jobs:
         safe_company = safe_name(j.get('company',''))
@@ -262,32 +293,25 @@ def main(top: int, user: str | None):
         write_jd_artifacts(slug=slug, jd_text=jd_text[:20000], out_dir=CHANGES_DIR)
         jd_hash = jd_sha(jd_text)
 
-        # Optional LLM clauses w/ banlist
-        job_llm_count = 0
-        if use_llm:
-            llm_items = suggest_policies(
-                os.getenv("OPENAI_API_KEY"),
-                j.get("title",""), jd_text,
-                list(allowed), jd_kws, list(banset),
-            )
-            cleaned = []
-            for it in llm_items:
-                clause = (it.get("clause") or "").strip().lower()
-                if not clause or clause in banset:
-                    continue
-                if not it.get("jd_cues"):
-                    it["jd_cues"] = jd_kws[:8]
-                cleaned.append(it)
-                banset.add(clause)
-            llm_items = cleaned
-            with open(RUNTIME_POL, "w") as rf:
-                yaml.safe_dump(llm_items, rf)
-            job_llm_count = len(llm_items)
-            print(f"LLM: generated {job_llm_count} runtime policies for {slug}")
+        # --- LLM tailored snippet (summary + keywords) ---
+        crafted = craft_tailored_snippets(
+            api_key=api_key,
+            model=model,
+            job_title=j.get("title",""),
+            jd_text=jd_text,
+            profile=profile,
+            allowed_vocab=sorted(list(allowed)),
+            jd_keywords=jd_kws,
+            banlist=sorted(list(banset)),
+        )
+        summary_sentence = crafted.get("summary_sentence") or ""
+        extra_keywords = crafted.get("keywords") or []
 
         # COVER
         cover_fname = f"{slug}.md"
         cover = render_cover(j, PROFILE_YAML, TMPL_DIR)
+        if summary_sentence:
+            cover += f"\n\n**Targeted Summary:** {summary_sentence}\n"
         if jd_kws:
             cover += "\n\n---\n**Keyword Alignment (ATS-safe):** " + ", ".join(jd_kws) + "\n"
         with open(os.path.join(OUTBOX_MD, cover_fname), 'w') as f: f.write(cover)
@@ -297,14 +321,30 @@ def main(top: int, user: str | None):
         out_docx_name = f"{slug}_{jd_hash}.docx"
         out_docx = os.path.join(RESUMES_MD, out_docx_name)
         doc = Document(BASE_RESUME)
+
+        # Insert targeted summary sentence near top
+        inserted_idx = -1
+        try:
+            ok, inserted_idx = _insert_targeted_summary_paragraph(doc, summary_sentence)
+        except Exception:
+            ok = False
+
+        # Update core properties / keywords
         try:
             cp = doc.core_properties
             cp.comments = f"job-copilot:{slug}:{jd_hash}"
             cp.subject = j.get("title","")
-            cp.keywords = ", ".join(jd_kws[:12])
+            # Merge dedup keywords: extracted + extra from LLM (capped)
+            kws = []
+            for k in (jd_kws + extra_keywords):
+                lk = (k or "").strip().lower()
+                if lk and lk not in kws:
+                    kws.append(lk)
+            cp.keywords = ", ".join(kws[:16])
         except Exception:
             pass
 
+        # Let your existing routine still do formatting/other tweaks
         targets = {"projects": [], "work_experience": [], "workshops": []}
         changes = tailor_docx_in_place(
             doc,
@@ -312,14 +352,22 @@ def main(top: int, user: str | None):
             jd_keywords=jd_kws,
             allowed_vocab_list=sorted(allowed),
         )
+
         doc.save(out_docx)
         j['resume_docx'] = f"resumes/{out_docx_name}"
         j['resume_docx_hash'] = jd_hash
 
+        # Record a concrete change block for the UI
         explain = {
             "company": j.get("company",""),
             "title": j.get("title",""),
             "ats_keywords": jd_kws,
+            "llm_keywords": extra_keywords[:12],
+            "injected": {
+                "summary_sentence": summary_sentence,
+                "position": "after Summary heading" if inserted_idx > 0 else "top_of_document",
+                "paragraph_index": inserted_idx
+            },
             "changes": changes,
             "jd_hash": jd_hash
         }
@@ -328,7 +376,7 @@ def main(top: int, user: str | None):
             json.dump(explain, f, indent=2)
         j['changes_path'] = f"changes/{changes_fname}"
 
-        llm_summary["jobs"].append({"slug": slug, "runtime_policy_count": job_llm_count})
+        llm_summary["jobs"].append({"slug": slug, "injected": bool(summary_sentence)})
         drafted_covers += 1; drafted_resumes += 1
 
     with open(DATA_JSON, 'w') as f: json.dump(jobs, f, indent=2)
