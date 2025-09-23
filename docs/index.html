@@ -16,12 +16,14 @@
     table { width: 100%; border-collapse: collapse; }
     th, td { border-bottom:1px solid #eee; padding:6px 8px; text-align:left; }
     .pill { display:inline-block; padding:2px 8px; margin:2px; border:1px solid #e0e0e0; border-radius:999px; font-size:12px; background:#f6f6f6; }
+    .ctl { margin:6px 8px 0 0; min-width:280px; }
+    label small { color:#666; font-weight:400; }
   </style>
 </head>
 <body>
   <main class="wrap" style="max-width:980px">
     <h1>job-copilot</h1>
-    <p class="muted">Sign in, upload your resume, we’ll parse your profile and run the crawl/rank for you. Your shortlist is private to your account.</p>
+    <p class="muted">Sign in, upload your resume, set targets, then run. Your shortlist is private and per-user.</p>
 
     <p id="signinOnly"><a class="btn" href="login.html">Sign in</a></p>
 
@@ -37,6 +39,19 @@
           <input type="file" id="resume" accept=".docx" />
           <button id="uploadResume" class="btn">Upload</button>
           <span id="upMsg" class="muted"></span>
+        </li>
+        <li>
+          <strong>Targets</strong><br/>
+          <label>Desired titles <small>(comma-separated)</small></label><br/>
+          <input id="desiredTitles" class="ctl" type="text" placeholder="Software Engineer, Data Engineer" />
+          <label>Locations <small>(comma-separated)</small></label><br/>
+          <input id="desiredLocs" class="ctl" type="text" placeholder="Remote, Virginia, East Coast" />
+          <div class="row" style="margin-top:6px">
+            <label>Recency days</label>
+            <input id="recencyDays" class="ctl" type="number" min="0" value="0" style="max-width:120px" />
+            <label><input id="remoteOnly" type="checkbox" /> Remote-only</label>
+            <label><input id="requirePosted" type="checkbox" /> Require posted date</label>
+          </div>
         </li>
         <li>
           <strong>Run crawl & rank</strong><br/>
