@@ -1,4 +1,9 @@
 // docs/site.js
+// Multi-user onboarding:
+// - If no session: show Sign in link only
+// - If signed in: show upload + targets + run buttons
+// - Shortlist loads from private Storage outputs/<uid>/scores.json via a signed URL
+
 (async function () {
   await new Promise(r => window.addEventListener('load', r));
 
@@ -52,22 +57,24 @@
 
     const path = `${user.id}/current.docx`;
 
+    // Upload private file
     const { error: upErr } = await supabase.storage.from('resumes').upload(path, file, { upsert: true });
     if (upErr) { upMsg.textContent = 'Upload error: ' + upErr.message; return; }
 
+    // Insert metadata row
     const { error: metaErr } = await supabase.from('resumes').insert({ user_id: user.id, bucket: 'resumes', path });
     if (metaErr) { upMsg.textContent = 'Upload metadata error: ' + metaErr.message; return; }
 
     upMsg.textContent = 'Uploaded.';
   }
 
-  // 2) Trigger Edge Function -> GH Action (sending preferences)
+  // 2) Trigger Edge Function -> GH Action (with preferences)
   async function runTailor() {
     const session = await getSession();
     if (!session) return alert('Sign in first.');
     runMsg.textContent = 'Queuing…';
 
-    // collect preferences from UI
+    // collect preferences
     const titlesVal = (document.getElementById('desiredTitles')?.value || '')
       .split(',').map(s => s.trim()).filter(Boolean);
     const locsVal   = (document.getElementById('desiredLocs')?.value || '')
@@ -98,9 +105,15 @@
           }
         })
       });
-      const out = await resp.json().catch(() => ({}));
-      runMsg.textContent = resp.ok ? `Queued: ${out.request_id}` : `Error: ${out.error || resp.status}`;
-      if (resp.ok) pollForShortlist();
+
+      let detail = '';
+      try { const out = await resp.json(); detail = out?.detail || out?.error || ''; } catch {}
+      if (!resp.ok) {
+        runMsg.textContent = `Error: ${detail || resp.status}`;
+        return;
+      }
+      runMsg.textContent = `Queued: ${(detail && detail.request_id) || 'ok'}`;
+      pollForShortlist();
     } catch (e) {
       runMsg.textContent = 'Error: ' + String(e);
     }
