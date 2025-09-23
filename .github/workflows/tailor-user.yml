@@ -1,9 +1,18 @@
 name: tailor-user
+
 on:
   workflow_dispatch:
     inputs:
-      user_id:    { description: "Supabase user id", required: true }
-      request_id: { description: "job_requests id", required: true }
+      user_id:
+        description: Supabase user id
+        required: true
+      request_id:
+        description: job_requests id
+        required: true
+
+# We don't commit anything here anymore, so read-only is fine.
+permissions:
+  contents: read
 
 env:
   PYTHONPATH: ${{ github.workspace }}
@@ -14,40 +23,59 @@ jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-      - name: Install deps
-        run: pip install -r requirements.txt python-docx requests pyyaml beautifulsoup4
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt python-docx requests pyyaml beautifulsoup4
 
+      # Pull the user's latest private DOCX from Storage (resumes/<uid>/current.docx)
       - name: Fetch user's latest resume
         run: python scripts/fetch_user_assets.py --user "${{ github.event.inputs.user_id }}"
 
-      - name: Parse resume -> upsert profiles row
+      # Parse the DOCX and upsert into public.profiles (service role, server-side)
+      - name: Parse resume -> upsert profile
         run: python scripts/parse_resume.py --user "${{ github.event.inputs.user_id }}"
 
+      # Crawl the configured targets (targets.yaml) into data/jobs.jsonl
       - name: Crawl targets
         run: python scripts/crawl.py
 
+      # Rank jobs using the standard profile.yaml (or the parsed profile signals)
       - name: Rank for this user
-        run: python scripts/rank.py --user "${{ github.event.inputs.user_id }}"
+        run: python scripts/rank.py
 
-      - name: Upload shortlist to Supabase Storage (outputs/<uid>/scores.json)
+      # Upload the per-user shortlist to Storage: outputs/<uid>/scores.json
+      - name: Upload shortlist to outputs/<uid>/scores.json
         run: |
+          set -euo pipefail
+          OUT_JSON="docs/data/scores.json"
+          if [ ! -f "$OUT_JSON" ]; then
+            echo "scores.json not found at $OUT_JSON"; exit 1
+          fi
           curl -sS -X POST \
-            "${SUPABASE_URL}/storage/v1/object/outputs/${{ github.event.inputs.user_id }}/scores.json" \
+            "${SUPABASE_URL%/}/storage/v1/object/outputs/${{ github.event.inputs.user_id }}/scores.json" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "Content-Type: application/json" \
             -H "x-upsert: true" \
-            --data-binary @run/scores.json
+            --data-binary @"$OUT_JSON"
 
+      # Mark the request row as done (job_requests.status = 'done')
       - name: Mark job_requests as done
         run: |
+          set -euo pipefail
           curl -sS -X PATCH \
-            "${SUPABASE_URL}/rest/v1/job_requests?id=eq.${{ github.event.inputs.request_id }}" \
+            "${SUPABASE_URL%/}/rest/v1/job_requests?id=eq.${{ github.event.inputs.request_id }}" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "Content-Type: application/json" \
