@@ -176,6 +176,19 @@ def write_profile_yaml_from_dict(d: dict):
     with open(PROFILE_YAML, "w") as f:
         yaml.safe_dump({k:v for k,v in y.items() if v is not None}, f)
 
+def _dedup_by_url_keep_order(items):
+    """Keep first occurrence for each job (URL preferred), preserving input order."""
+    seen = set()
+    out = []
+    for j in items or []:
+        u = (j.get("url") or "").strip().lower()
+        key = u or f"no-url::{j.get('company','')}::{j.get('title','')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(j)
+    return out
+
 def main(top: int, user: str | None):
     # Load per-user profile (and materialize profile.yaml for template code)
     prof = load_profile_for_user(user) if user else {}
@@ -196,17 +209,25 @@ def main(top: int, user: str | None):
 
     allowed = set(allowed_vocab(profile, portfolio))
 
+    # 🔽 Source the SAME shortlist the dashboard uses
     jobs = []
     if os.path.exists(DATA_JSON):
-        with open(DATA_JSON) as f: jobs = json.load(f)
+        with open(DATA_JSON) as f:
+            jobs = json.load(f)
     elif os.path.exists(DATA_JSONL):
         with open(DATA_JSONL) as f:
-            for line in f: jobs.append(json.loads(line))
+            for line in f:
+                jobs.append(json.loads(line))
     else:
-        print('No scores found; run scripts/rank.py first.'); return
+        print('No scores found; run scripts/rank.py first.')
+        return
 
-    jobs.sort(key=lambda x: x.get('score', 0), reverse=True)
+    # IMPORTANT: do NOT resort; trust dashboard’s order
+    jobs = _dedup_by_url_keep_order(jobs)
+    top = max(1, min(20, int(top or 5)))
+    jobs = jobs[:top]
 
+    # ----------------------------------------------------------------
     os.makedirs(OUTBOX_MD, exist_ok=True)
     os.makedirs(RESUMES_MD, exist_ok=True)
     os.makedirs(CHANGES_DIR, exist_ok=True)
@@ -230,7 +251,7 @@ def main(top: int, user: str | None):
     def jd_sha(s: str) -> str:
         return hashlib.sha1((s or "").encode("utf-8")).hexdigest()[:8]
 
-    for j in jobs[:top]:
+    for j in jobs:
         safe_company = safe_name(j.get('company',''))
         safe_title   = safe_name(j.get('title',''))
         slug = f"{safe_company}_{safe_title}"[:150]
