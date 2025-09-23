@@ -31,7 +31,6 @@
     <section id="profile" class="card hidden" aria-live="polite">
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
         <span id="who"></span>
-        <!-- keep a back link if you like; index is now a simple landing -->
         <a class="pill" href="./">← Back</a>
       </div>
 
@@ -48,7 +47,7 @@
       </dl>
     </section>
 
-    <!-- Dashboard controls MOVED HERE -->
+    <!-- Dashboard controls (moved here) -->
     <section id="onboard" class="card hidden" style="margin-top:16px">
       <div class="row">
         <strong>Update & run</strong>
@@ -104,7 +103,7 @@
       <div id="noData" class="muted">No shortlist yet.</div>
     </section>
 
-    <!-- Keep materials + drafts viewer -->
+    <!-- Materials / Drafts viewer -->
     <section id="materials" class="card hidden" style="margin-top:16px">
       <h2>Generate materials</h2>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -123,8 +122,7 @@
     </section>
   </main>
 
-  <!-- Load the reusable dashboard logic first, then page-specific JS -->
-  <script src="site.js" defer></script>
-  <script src="profile.js" defer></script>
+  <!-- IMPORTANT: absolute path for GitHub Pages project sites -->
+  <script src="/job-copilot/profile.js?v=2025-09-23-4" defer></script>
 </body>
 </html>
