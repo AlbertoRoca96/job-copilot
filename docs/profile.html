@@ -15,6 +15,9 @@
     .btn { padding:6px 10px; border:1px solid #ccc; background:#fff; border-radius:6px; cursor:pointer; }
     table { width: 100%; border-collapse: collapse; }
     th, td { border-bottom:1px solid #eee; padding:6px 8px; text-align:left; }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .ctl { margin:6px 8px 0 0; min-width:280px; }
+    label small { color:#666; font-weight:400; }
   </style>
 </head>
 <body>
@@ -24,9 +27,11 @@
 
     <p id="signinOnly"><a href="login.html">Sign in</a> to view your profile.</p>
 
+    <!-- Profile info -->
     <section id="profile" class="card hidden" aria-live="polite">
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
         <span id="who"></span>
+        <!-- keep a back link if you like; index is now a simple landing -->
         <a class="pill" href="./">← Back</a>
       </div>
 
@@ -43,6 +48,63 @@
       </dl>
     </section>
 
+    <!-- Dashboard controls MOVED HERE -->
+    <section id="onboard" class="card hidden" style="margin-top:16px">
+      <div class="row">
+        <strong>Update & run</strong>
+        <button id="logout" class="btn">Sign out</button>
+      </div>
+
+      <ol style="margin-top:8px">
+        <li style="margin:10px 0">
+          <strong>Upload your resume (.docx)</strong><br/>
+          <input type="file" id="resume" accept=".docx" />
+          <button id="uploadResume" class="btn">Upload</button>
+          <span id="upMsg" class="muted"></span>
+        </li>
+        <li style="margin:10px 0">
+          <strong>Targets</strong><br/>
+          <label>Desired titles <small>(comma-separated)</small></label><br/>
+          <input id="desiredTitles" class="ctl" type="text" placeholder="Software Engineer, Data Engineer" />
+          <label>Locations <small>(comma-separated)</small></label><br/>
+          <input id="desiredLocs" class="ctl" type="text" placeholder="Remote, Virginia, East Coast" />
+          <div class="row" style="margin-top:6px">
+            <label>Recency days</label>
+            <input id="recencyDays" class="ctl" type="number" min="0" value="0" style="max-width:120px" />
+            <label><input id="remoteOnly" type="checkbox" /> Remote-only</label>
+            <label><input id="requirePosted" type="checkbox" /> Require posted date</label>
+          </div>
+        </li>
+        <li style="margin:10px 0">
+          <strong>Run crawl & rank</strong><br/>
+          <button id="runTailor" class="btn">Run my shortlist</button>
+          <span id="runMsg" class="muted"></span>
+        </li>
+      </ol>
+    </section>
+
+    <!-- Shortlist (appears after the run finishes) -->
+    <section id="shortlist" class="card hidden" style="margin-top:16px">
+      <h2>Your shortlist</h2>
+      <div class="row" style="margin:6px 0">
+        <button id="refresh" class="btn">Refresh</button>
+      </div>
+      <table id="jobs" class="hidden">
+        <thead>
+          <tr>
+            <th>Score</th>
+            <th>Title</th>
+            <th>Company</th>
+            <th>Location</th>
+            <th>Posted</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div id="noData" class="muted">No shortlist yet.</div>
+    </section>
+
+    <!-- Keep materials + drafts viewer -->
     <section id="materials" class="card hidden" style="margin-top:16px">
       <h2>Generate materials</h2>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -61,7 +123,8 @@
     </section>
   </main>
 
-  <!-- Bump the version string whenever profile.js changes to bust caches -->
-  <script src="profile.js?v=2025-09-23-2" defer></script>
+  <!-- Load the reusable dashboard logic first, then page-specific JS -->
+  <script src="site.js" defer></script>
+  <script src="profile.js?v=2025-09-23-3" defer></script>
 </body>
 </html>
