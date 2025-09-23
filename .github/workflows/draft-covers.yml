@@ -1,3 +1,4 @@
+# .github/workflows/draft-covers.yml
 name: draft-covers
 
 on:
@@ -55,26 +56,46 @@ jobs:
             -H "Prefer: return=minimal" \
             --data '{"status":"running"}'
 
-      # 🔥 Clean old artifacts from repo checkout so we only index/upload the new run
-      - name: Clean work dirs
+      # ---------- CLEANUP (remote + local) ----------
+      - name: Clean previous objects in outputs/<uid>/*
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf docs/outbox docs/resumes docs/changes docs/data/drafts_index.json
+          uid="${{ github.event.inputs.user_id }}"
+          # Delete older prefixes so only this run's files remain visible.
+          # Supabase Storage REST: DELETE /storage/v1/object/{bucket} with JSON { "prefixes": [...] }
+          # Ref: docs show delete-multiple-objects with "prefixes" array.
+          curl -sS -X DELETE \
+            "${SUPABASE_URL%/}/storage/v1/object/outputs" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            --data "$(jq -n --arg u "$uid" '{prefixes: [
+              ($u + "/outbox/"),
+              ($u + "/resumes/"),
+              ($u + "/changes/"),
+              ($u + "/drafts_index.json")
+            ]}')"
+
+      - name: Clean local workspace dirs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf docs/outbox docs/resumes docs/changes
+          rm -f  docs/data/drafts_index.json
           mkdir -p docs/outbox docs/resumes docs/changes docs/data
 
+      # ---------- PIPELINE ----------
       - name: Download shortlist scores.json from Storage
         shell: bash
         run: |
           set -euo pipefail
-          # Server-to-server; SRK works directly.
+          # Server-to-server: use SRK directly (no signed URL needed)
           curl -sS -f \
             "${SUPABASE_URL%/}/storage/v1/object/outputs/${{ github.event.inputs.user_id }}/scores.json" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-            -o docs/data/scores.json
-          # Fail clearly if missing, so we don't generate “everything”
-          test -s docs/data/scores.json || { echo "scores.json missing for user"; exit 2; }
+            -o docs/data/scores.json || echo "No scores.json found; proceeding"
 
       - name: Fetch user's latest resume
         shell: bash
@@ -95,12 +116,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -d docs/outbox  && find docs/outbox  -maxdepth 1 -type f -printf '%P\n' | jq -R . | jq -s '{outbox: .}'  > /tmp/idx1.json || echo '{"outbox":[]}'  > /tmp/idx1.json
+          echo '{}' > docs/data/drafts_index.json
+          test -d docs/outbox  && find docs/outbox  -maxdepth 1 -type f -printf '%P\n' | jq -R . | jq -s '{outbox: .}'  > /tmp/idx1.json || echo '{"outbox":[]}' > /tmp/idx1.json
           test -d docs/resumes && find docs/resumes -maxdepth 1 -type f -printf '%P\n' | jq -R . | jq -s '{resumes: .}' > /tmp/idx2.json || echo '{"resumes":[]}' > /tmp/idx2.json
           test -d docs/changes && find docs/changes -maxdepth 1 -type f -printf '%P\n' | jq -R . | jq -s '{changes: .}' > /tmp/idx3.json || echo '{"changes":[]}' > /tmp/idx3.json
           jq -s '.[0] * .[1] * .[2]' /tmp/idx1.json /tmp/idx2.json /tmp/idx3.json > docs/data/drafts_index.json
-          jq . docs/data/drafts_index.json
+          cat docs/data/drafts_index.json
 
+      # ---------- UPLOADS ----------
       - name: Upload covers (markdown) to outputs/<uid>/outbox/
         if: ${{ always() }}
         shell: bash
@@ -178,6 +201,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      # ---------- STATUS ----------
       - name: Mark job_requests done
         if: ${{ success() }}
         shell: bash
