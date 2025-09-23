@@ -5,95 +5,21 @@
   <title>job-copilot — Start</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="style.css" />
-  <script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js" defer></script>
   <style>
-    .btn { padding:6px 10px; border:1px solid #ccc; background:#fff; border-radius:6px; cursor:pointer; }
-    .muted { color:#666; }
-    .hidden { display:none; }
+    .wrap { max-width: 980px; margin: 40px auto; }
+    .btn { padding:8px 12px; border:1px solid #ccc; background:#fff; border-radius:6px; cursor:pointer; text-decoration:none; }
     .card { border:1px solid #e5e5e5; border-radius:10px; padding:14px; background:#fcfcfc; }
-    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-    #steps li { margin:10px 0; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { border-bottom:1px solid #eee; padding:6px 8px; text-align:left; }
-    .pill { display:inline-block; padding:2px 8px; margin:2px; border:1px solid #e0e0e0; border-radius:999px; font-size:12px; background:#f6f6f6; }
-    .ctl { margin:6px 8px 0 0; min-width:280px; }
-    label small { color:#666; font-weight:400; }
-    /* small header bar with Profile link */
-    .topbar { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:10px 0; }
-    .topbar h1 { margin:0; }
-    .topnav a { text-decoration:none; }
+    .muted { color:#666; }
   </style>
 </head>
 <body>
-  <main class="wrap" style="max-width:980px">
-    <header class="topbar">
-      <h1>job-copilot</h1>
-      <nav class="topnav">
-        <a class="pill" href="profile.html">Profile</a>
-      </nav>
-    </header>
-
-    <p class="muted">Sign in, upload your resume, set targets, then run. Your shortlist is private and per-user.</p>
-
-    <p id="signinOnly"><a class="btn" href="login.html">Sign in</a></p>
-
-    <section id="onboard" class="card hidden">
-      <div class="row">
-        <span id="who"></span>
-        <a class="btn" href="profile.html">Profile</a>
-        <button id="logout" class="btn">Sign out</button>
-      </div>
-
-      <ol id="steps">
-        <li>
-          <strong>Upload your resume (.docx)</strong><br/>
-          <input type="file" id="resume" accept=".docx" />
-          <button id="uploadResume" class="btn">Upload</button>
-          <span id="upMsg" class="muted"></span>
-        </li>
-        <li>
-          <strong>Targets</strong><br/>
-          <label>Desired titles <small>(comma-separated)</small></label><br/>
-          <input id="desiredTitles" class="ctl" type="text" placeholder="Software Engineer, Data Engineer" />
-          <label>Locations <small>(comma-separated)</small></label><br/>
-          <input id="desiredLocs" class="ctl" type="text" placeholder="Remote, Virginia, East Coast" />
-          <div class="row" style="margin-top:6px">
-            <label>Recency days</label>
-            <input id="recencyDays" class="ctl" type="number" min="0" value="0" style="max-width:120px" />
-            <label><input id="remoteOnly" type="checkbox" /> Remote-only</label>
-            <label><input id="requirePosted" type="checkbox" /> Require posted date</label>
-          </div>
-        </li>
-        <li>
-          <strong>Run crawl & rank</strong><br/>
-          <button id="runTailor" class="btn">Run my shortlist</button>
-          <span id="runMsg" class="muted"></span>
-        </li>
-        <li>
-          <strong>Your shortlist</strong> (appears after the run finishes)<br/>
-          <button id="refresh" class="btn">Refresh</button>
-        </li>
-      </ol>
-    </section>
-
-    <section id="shortlist" class="hidden" style="margin-top:16px">
-      <h2>Your shortlist</h2>
-      <table id="jobs" class="hidden">
-        <thead>
-          <tr>
-            <th>Score</th>
-            <th>Title</th>
-            <th>Company</th>
-            <th>Location</th>
-            <th>Posted</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-      <div id="noData" class="muted">No shortlist yet.</div>
-    </section>
+  <main class="wrap">
+    <h1>job-copilot</h1>
+    <p class="muted">The dashboard has moved. Manage your resume, targets, and run your shortlist from your <strong>Profile</strong> page.</p>
+    <p><a class="btn" href="profile.html">Go to Profile</a></p>
+    <div class="card" style="margin-top:16px">
+      <p class="muted" style="margin:0">Tip: Sign in on the Profile page to see your private shortlist and generated materials.</p>
+    </div>
   </main>
-
-  <script src="site.js" defer></script>
 </body>
 </html>
