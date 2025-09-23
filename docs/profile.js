@@ -1,4 +1,3 @@
-// docs/profile.js
 (async function () {
   await new Promise(r => window.addEventListener('load', r));
 
@@ -29,7 +28,7 @@
 
   who.textContent = `Signed in as ${user.email || user.id}`;
 
-  // Read own profile row (RLS: id = auth.uid())
+  // Read own profile row
   const { data, error } = await supabase
     .from('profiles')
     .select('*')
@@ -58,14 +57,14 @@
     document.getElementById('full_name').textContent = `Error: ${error?.message || 'profile not found'}`;
   }
 
-  // Generate materials -> call Edge Function request-drafts
+  // Generate materials -> call Edge Function request-draft (singular)
   async function generateDrafts() {
     genMsg.textContent = 'Queuing…';
     const session = (await supabase.auth.getSession()).data.session;
     if (!session) { genMsg.textContent = 'Sign in first.'; return; }
     try {
       const restBase = 'https://imozfqawxpsasjdmgdkh.supabase.co';
-      const resp = await fetch(`${restBase}/functions/v1/request-drafts`, {
+      const resp = await fetch(`${restBase}/functions/v1/request-draft`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
