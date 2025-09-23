@@ -1,3 +1,5 @@
+<!-- docs/profile.js -->
+<script>
 (async function () {
   await new Promise((r) => window.addEventListener("load", r));
 
@@ -32,7 +34,6 @@
   }
 
   // ---- word-level diff (LCS) ----
-  // LCS-based diff for word arrays; returns array of {type:'eq'|'ins'|'del', text}
   function diffWords(a, b) {
     const A = (a || "").trim().split(/\s+/);
     const B = (b || "").trim().split(/\s+/);
@@ -60,7 +61,6 @@
   }
   function renderWordDiffHTML(original, modified) {
     const chunks = diffWords(original || "", modified || "");
-    // coalesce adjacent same-type chunks
     const coalesced = [];
     for (const c of chunks) {
       const last = coalesced[coalesced.length - 1];
@@ -73,7 +73,7 @@
       if (type === "ins") return `<ins style="background:#e6ffe6;text-decoration:none">${t}</ins>`;
       if (type === "del") return `<del style="background:#ffecec">${t}</del>`;
       return t;
-    }).join(" ").replace(/\s+(<\/(ins|del)>)/g, "$1"); // tidy spaces before closers
+    }).join(" ").replace(/\s+(<\/(ins|del)>)/g, "$1");
   }
 
   // ---- modal helpers ----
@@ -150,7 +150,6 @@
   function renderChangesViewer(json, signedUrl, filename) {
     const wrap = document.createElement("div");
 
-    // Tabs
     const tabs = document.createElement("div");
     tabs.style.display = "flex";
     tabs.style.gap = "6px";
@@ -159,7 +158,6 @@
     const tabRaw = document.createElement("button"); tabRaw.textContent = "Raw JSON"; tabRaw.className = "btn";
     tabs.appendChild(tabCmp); tabs.appendChild(tabRaw);
 
-    // Meta
     const meta = document.createElement("div");
     meta.style.margin = "6px 0 12px 0";
     meta.innerHTML = `
@@ -172,7 +170,6 @@
     const kwRow = meta.querySelector("#kwRow");
     (json?.ats_keywords || []).forEach((k) => kwRow.appendChild(makeBadge(String(k))));
 
-    // Comparison panel
     const cmp = document.createElement("div");
 
     function boxify(title, html) {
@@ -222,11 +219,10 @@
       const modifiedText = item?.modified_paragraph_text || originalText;
       const inserted = item?.inserted_sentence || "";
 
-      // Prefer highlighting a specifically inserted sentence if provided
       let rightHTML;
       if (inserted && !originalText.includes(inserted) && modifiedText.includes(inserted)) {
         rightHTML = escapeHTML(modifiedText).replace(
-          new RegExp(`(${inserted.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "i"),
+          new RegExp(`(${inserted.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")})`, "i"),
           "<mark>$1</mark>"
         );
       } else {
@@ -255,7 +251,6 @@
       items.forEach((it, i) => cmp.appendChild(makeCompareCard(it, i)));
     }
 
-    // Raw JSON panel
     const pre = document.createElement("pre");
     pre.style.border = "1px solid #eee";
     pre.style.borderRadius = "10px";
@@ -264,10 +259,12 @@
     pre.style.whiteSpace = "pre-wrap";
     pre.textContent = JSON.stringify(json || {}, null, 2);
 
-    // Tabs
     function showCmp() { cmp.style.display = ""; pre.style.display = "none"; }
     function showRaw() { cmp.style.display = "none"; pre.style.display = ""; }
-    tabCmp.onclick = showCmp; tabRaw.onclick = showRaw; showCmp();
+    const tabs = document.createElement("div");
+    tabs.style.display = "flex"; tabs.style.gap = "6px"; tabs.style.marginBottom = "8px";
+    const tabCmp = document.createElement("button"); tabCmp.textContent = "Comparison"; tabCmp.className = "btn"; tabCmp.onclick = showCmp;
+    const tabRaw = document.createElement("button"); tabRaw.textContent = "Raw JSON"; tabRaw.className = "btn"; tabRaw.onclick = showRaw;
 
     const wrap2 = document.createElement("div");
     wrap2.appendChild(tabs);
@@ -275,20 +272,21 @@
     wrap2.appendChild(cmp);
     wrap2.appendChild(pre);
 
+    showCmp();
     openModal(`Changes — ${filename}`, wrap2);
   }
 
   // --------- auth + profile ---------
   const { data: userRes } = await supabase.auth.getUser();
   const user = userRes?.user;
-  if (!user) { signinOnly.classList.remove("hidden"); return; }
+  if (!user) { document.getElementById("signinOnly").classList.remove("hidden"); return; }
   who.textContent = `Signed in as ${user.email || user.id}`;
 
   const { data: prof, error: profErr } = await supabase
     .from("profiles").select("*").eq("id", user.id).single();
 
-  profBox.classList.remove("hidden");
-  matBox.classList.remove("hidden");
+  document.getElementById("profile").classList.remove("hidden");
+  document.getElementById("materials").classList.remove("hidden");
 
   if (!profErr && prof) {
     document.getElementById("full_name").textContent = prof?.full_name || "—";
@@ -309,7 +307,7 @@
     document.getElementById("full_name").textContent = `Error: ${profErr?.message || "profile not found"}`;
   }
 
-  // --------- Generate materials ---------
+  // --------- Generate materials (unchanged) ---------
   async function generateDrafts() {
     genMsg.textContent = "Queuing…";
     const session = (await supabase.auth.getSession()).data.session;
@@ -334,18 +332,19 @@
     }
   }
 
-  // --------- List drafts via signed URLs ---------
   async function loadDrafts() {
-    draftBody.innerHTML = "";
     const { user } = (await supabase.auth.getUser()).data || {};
     if (!user) return;
     const key = `${user.id}/drafts_index.json`;
-    const { data: signed, error } = await supabase.storage.from("outputs").createSignedUrl(key, 60);
-    if (error || !signed?.signedUrl) {
+    const { data: signed } = await supabase.storage.from("outputs").createSignedUrl(key, 60);
+    draftBody.innerHTML = "";
+
+    if (!signed?.signedUrl) {
       draftTable.classList.add("hidden");
       noDrafts.classList.remove("hidden");
       return;
     }
+
     let idx = null;
     try {
       const r = await fetch(signed.signedUrl, { cache: "no-cache" });
@@ -406,10 +405,16 @@
     noDrafts.classList.add("hidden");
   }
 
-  // --------- Polling ---------
+  // Poll drafts while the page is open
   let pollTimer = null;
   function pollDrafts() { if (pollTimer) clearInterval(pollTimer); pollTimer = setInterval(loadDrafts, 5000); }
 
   genBtn.onclick = generateDrafts;
   await loadDrafts();
+
+  // ---- IMPORTANT: bring the dashboard controls to this page only ----
+  if (window.initOnboardControls) {
+    await window.initOnboardControls(supabase);
+  }
 })();
+</script>
