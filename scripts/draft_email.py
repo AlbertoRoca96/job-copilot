@@ -1,3 +1,4 @@
+# scripts/draft_email.py
 import os, sys, json, re, yaml, hashlib
 from typing import Tuple
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -157,35 +158,38 @@ def _dedup_by_url_keep_order(items):
 
 def _insert_targeted_summary_paragraph(doc: Document, sentence: str):
     """
-    Insert summary near the top and return a UI-ready change item.
-    Use text-swapping to emulate insert-at-index (python-docx limitation).
+    Insert a *new* summary paragraph without overwriting existing content.
+    Prefer to insert right after a 'Summary' heading if present; otherwise
+    insert after the very first paragraph (name/contact block).
+
+    Returns a UI-ready change object describing the insertion.
     """
-    if not sentence:
+    if not (sentence or "").strip():
         return None
+
     import re as _re
-    idx = None
+    target_idx = None
     for i, p in enumerate(doc.paragraphs):
-        if _re.search(r"\bsummary\b", (p.text or "").lower()):
-            idx = i + 1
+        if _re.search(r"\bsummary\b", (p.text or "").strip().lower()):
+            target_idx = i
             break
-    if idx is None:
-        p0 = doc.paragraphs[0] if doc.paragraphs else doc.add_paragraph("")
-        original = p0.text
-        tail = doc.add_paragraph(sentence)
-        p0.text, tail.text = tail.text, p0.text
-        return {
-            "anchor_section": "Summary",
-            "original_paragraph_text": original,
-            "modified_paragraph_text": p0.text,
-            "inserted_sentence": sentence
-        }
-    tail = doc.add_paragraph(sentence)
-    original = doc.paragraphs[idx].text
-    doc.paragraphs[idx].text, tail.text = tail.text, doc.paragraphs[idx].text
+
+    # Fallback: after first paragraph (usually name/contact)
+    if target_idx is None:
+        target_idx = 0 if doc.paragraphs else -1
+
+    # Create the new paragraph at the end, then move it after target using XML API
+    newp = doc.add_paragraph((sentence or "").strip())
+
+    if target_idx >= 0 and len(doc.paragraphs) > 0:
+        target = doc.paragraphs[target_idx]
+        # Move new paragraph node after target node
+        target._p.addnext(newp._p)
+
     return {
         "anchor_section": "Summary",
-        "original_paragraph_text": original,
-        "modified_paragraph_text": doc.paragraphs[idx].text,
+        "original_paragraph_text": "",           # insertion, not a rewrite
+        "modified_paragraph_text": sentence,     # the new paragraph content
         "inserted_sentence": sentence
     }
 
@@ -313,7 +317,7 @@ def main(top: int, user: str | None):
         except Exception:
             pass
 
-        # *** KEY FIX: tailor bullets in the doc itself (no empty targets) ***
+        # *** tailor bullets in the doc itself ***
         granular_changes = tailor_docx_in_place(
             doc,
             jd_keywords=jd_kws,
