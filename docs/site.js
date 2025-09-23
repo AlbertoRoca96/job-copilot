@@ -68,7 +68,7 @@
     upMsg.textContent = 'Uploaded.';
   }
 
-  // 2) Trigger Edge Function -> GH Action (with preferences)
+  // 2) Trigger Edge Function -> GH Action (with preferences) and redirect to profile
   async function runTailor() {
     const session = await getSession();
     if (!session) return alert('Sign in first.');
@@ -107,13 +107,17 @@
       });
 
       let detail = '';
-      try { const out = await resp.json(); detail = out?.detail || out?.error || ''; } catch {}
+      let out = {};
+      try { out = await resp.json(); detail = out?.detail || out?.error || ''; } catch {}
       if (!resp.ok) {
         runMsg.textContent = `Error: ${detail || resp.status}`;
         return;
       }
-      runMsg.textContent = `Queued: ${(detail && detail.request_id) || 'ok'}`;
-      pollForShortlist();
+
+      runMsg.textContent = `Queued: ${out?.request_id || 'ok'}`;
+
+      // UX: take user to live profile page; it reads from DB and will update as soon as parse finishes
+      window.location.href = 'profile.html';
     } catch (e) {
       runMsg.textContent = 'Error: ' + String(e);
     }
@@ -161,13 +165,6 @@
     shortlist.classList.remove('hidden');
     table.classList.remove('hidden');
     noData.classList.add('hidden');
-  }
-
-  // poll after queueing
-  let pollTimer = null;
-  function pollForShortlist() {
-    if (pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(loadShortlist, 5000);
   }
 
   // wire up
