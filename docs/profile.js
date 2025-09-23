@@ -10,31 +10,36 @@
   const who = document.getElementById('who');
   const signinOnly = document.getElementById('signinOnly');
   const profBox = document.getElementById('profile');
-  const draftsBox = document.getElementById('drafts');
-  const logout = document.getElementById('logout');
 
-  const coversDiv = document.getElementById('covers');
-  const resumesDiv = document.getElementById('resumes');
-  const draftMsg = document.getElementById('draftMsg');
+  const matBox = document.getElementById('materials');
+  const genBtn = document.getElementById('genBtn');
+  const genMsg = document.getElementById('genMsg');
+  const topN   = document.getElementById('topN');
+  const draftTable = document.getElementById('draftTable');
+  const draftBody  = draftTable.querySelector('tbody');
+  const noDrafts   = document.getElementById('noDrafts');
 
   function pills(arr) {
     if (!Array.isArray(arr) || arr.length === 0) return '—';
     return arr.map(x => `<span class="pill">${String(x)}</span>`).join(' ');
   }
 
-  // auth
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) { signinOnly.classList.remove('hidden'); return; }
-  who.textContent = `Signed in as ${user.email || user.id}`;
-  logout.onclick = async () => { await supabase.auth.signOut(); location.href = './'; };
 
-  // load profile (RLS)
-  const { data, error } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+  who.textContent = `Signed in as ${user.email || user.id}`;
+
+  // Read own profile row (RLS: id = auth.uid())
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', user.id)
+    .single();
+
   profBox.classList.remove('hidden');
-  draftsBox.classList.remove('hidden');
-  if (error) {
-    document.getElementById('full_name').textContent = `Error: ${error.message}`;
-  } else {
+  matBox.classList.remove('hidden');
+
+  if (!error && data) {
     document.getElementById('full_name').textContent = data?.full_name || '—';
     document.getElementById('email').textContent     = data?.email || '—';
     document.getElementById('phone').textContent     = data?.phone || '—';
@@ -49,64 +54,85 @@
     ].join(', ');
     document.getElementById('policy').textContent = s;
     document.getElementById('updated').textContent = (data?.updated_at || data?.created_at || '—').toString();
+  } else {
+    document.getElementById('full_name').textContent = `Error: ${error?.message || 'profile not found'}`;
   }
 
-  // helper to list + link files in Storage via signed URLs
-  async function listFiles(prefix) {
-    const { data: files, error } = await supabase.storage.from('outputs').list(`${user.id}/${prefix}`, { limit: 100, sortBy: { column: 'name', order: 'desc' } });
-    if (error) return [];
-    const items = [];
-    for (const f of files) {
-      const key = `${user.id}/${prefix}/${f.name}`;
-      const { data: signed } = await supabase.storage.from('outputs').createSignedUrl(key, 60);
-      if (signed?.signedUrl) items.push({ name: f.name, url: signed.signedUrl });
-    }
-    return items;
-  }
-
-  async function refreshDraftLists() {
-    coversDiv.innerHTML = ''; resumesDiv.innerHTML = '';
-    for (const item of await listFiles('outbox')) {
-      const a = document.createElement('a'); a.href = item.url; a.textContent = item.name; a.className='file'; a.target='_blank';
-      coversDiv.appendChild(a);
-    }
-    for (const item of await listFiles('resumes')) {
-      const a = document.createElement('a'); a.href = item.url; a.textContent = item.name; a.className='file'; a.target='_blank';
-      resumesDiv.appendChild(a);
-    }
-  }
-
-  // run drafts (Edge Function -> dispatch GH workflow)
-  document.getElementById('runDrafts').onclick = async () => {
-    draftMsg.textContent = 'Queuing…';
+  // Generate materials -> call Edge Function request-drafts
+  async function generateDrafts() {
+    genMsg.textContent = 'Queuing…';
+    const session = (await supabase.auth.getSession()).data.session;
+    if (!session) { genMsg.textContent = 'Sign in first.'; return; }
     try {
-      const { data: session } = await supabase.auth.getSession();
-      const top = Math.max(1, Math.min(25, parseInt(document.getElementById('topN').value || '5', 10) || 5));
-      const resp = await fetch('https://imozfqawxpsasjdmgdkh.supabase.co/functions/v1/request-draft', {
+      const restBase = 'https://imozfqawxpsasjdmgdkh.supabase.co';
+      const resp = await fetch(`${restBase}/functions/v1/request-drafts`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           apikey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc',
-          Authorization: `Bearer ${session.session?.access_token || ''}`
+          Authorization: `Bearer ${session.access_token}`
         },
-        body: JSON.stringify({ top, note: 'user triggered from profile' })
+        body: JSON.stringify({ top: Math.max(1, Math.min(20, parseInt(topN.value || '5', 10) || 5)) })
       });
-      const out = await resp.json().catch(()=> ({}));
-      draftMsg.textContent = resp.ok ? `Queued (top=${top})` : `Error: ${out.detail || out.error || resp.status}`;
-      if (resp.ok) {
-        // start polling list for new files
-        const t = setInterval(async () => {
-          await refreshDraftLists();
-        }, 5000);
-        // initial refresh
-        await refreshDraftLists();
-        // stop polling after 2 minutes to avoid running forever
-        setTimeout(()=> clearInterval(t), 120000);
-      }
+      const out = await resp.json().catch(() => ({}));
+      if (!resp.ok) { genMsg.textContent = `Error: ${out.detail || out.error || resp.status}`; return; }
+      genMsg.textContent = `Queued request ${out.request_id}. Refresh in a bit.`;
+      pollDrafts();
     } catch (e) {
-      draftMsg.textContent = 'Error: ' + String(e);
+      genMsg.textContent = 'Error: ' + String(e);
     }
-  };
+  }
 
-  await refreshDraftLists();
+  // List drafts via signed URLs
+  async function loadDrafts() {
+    draftBody.innerHTML = '';
+    const key = `${user.id}/drafts_index.json`;
+    const { data: signed, error } = await supabase.storage.from('outputs').createSignedUrl(key, 60);
+    if (error || !signed?.signedUrl) {
+      draftTable.classList.add('hidden');
+      noDrafts.classList.remove('hidden');
+      return;
+    }
+    let idx = null;
+    try {
+      const r = await fetch(signed.signedUrl, { cache: 'no-cache' });
+      if (r.ok) idx = await r.json();
+    } catch {}
+    const rows = [];
+    function push(type, file) { rows.push([type, file]); }
+    (idx?.outbox || []).forEach(f => push('cover',   `outbox/${f}`));
+    (idx?.resumes || []).forEach(f => push('resume', `resumes/${f}`));
+    (idx?.changes || []).forEach(f => push('changes',`changes/${f}`));
+
+    if (rows.length === 0) {
+      draftTable.classList.add('hidden');
+      noDrafts.classList.remove('hidden');
+      return;
+    }
+
+    // For each file, make a signed URL row
+    for (const [type, rel] of rows) {
+      const key2 = `${user.id}/${rel}`;
+      const { data: s2 } = await supabase.storage.from('outputs').createSignedUrl(key2, 60);
+      const tr = document.createElement('tr');
+      const tdT = document.createElement('td'); tdT.textContent = type; tr.appendChild(tdT);
+      const tdF = document.createElement('td');
+      const a = document.createElement('a');
+      a.href = s2?.signedUrl || '#'; a.target = '_blank'; a.rel = 'noopener'; a.textContent = rel.split('/').slice(-1)[0];
+      tdF.appendChild(a); tr.appendChild(tdF);
+      draftBody.appendChild(tr);
+    }
+    draftTable.classList.remove('hidden');
+    noDrafts.classList.add('hidden');
+  }
+
+  // Polling after queue
+  let pollTimer = null;
+  function pollDrafts() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(loadDrafts, 5000);
+  }
+
+  genBtn.onclick = generateDrafts;
+  await loadDrafts();
 })();
