@@ -2,9 +2,16 @@
 import os, sys, json, requests, argparse
 from datetime import datetime, timedelta
 
-# import scoring
+# Make src importable
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from src.core.scoring import score_job, tokenize, contains_any  # tokenize used in compute_parts
+
+# Import the updated helpers
+from src.core.scoring import (
+    score_job,
+    tokenize,
+    contains_any,
+    tokens_from_terms,   # NEW
+)
 
 DATA_JOBS = os.path.join(os.path.dirname(__file__), '..', 'data', 'jobs.jsonl')
 OUT_DIR   = os.path.join(os.path.dirname(__file__), '..', 'docs', 'data')
@@ -34,17 +41,22 @@ def compute_parts(job, profile):
     title = job.get('title','') or ''
     desc  = job.get('description','') or ''
     loc   = job.get('location','') or ''
-    tokens = tokenize(title) | tokenize(desc)
 
-    skills = _lower_set(profile.get('skills'))
-    skill_overlap = len(skills & tokens) / max(1, len(skills))
+    job_tokens = tokenize(title) | tokenize(desc)
 
-    target_titles = _lower_set(profile.get('target_titles'))
-    title_tokens = tokenize(title)
-    title_similarity = len(target_titles & title_tokens) / max(1, len(target_titles))
+    # --- token-set versions of skills / titles ---
+    skill_tokens = tokens_from_terms(profile.get('skills'))
+    target_title_tokens = tokens_from_terms(profile.get('target_titles'))
 
+    skill_overlap = len(skill_tokens & job_tokens) / max(1, len(skill_tokens))
+    title_similarity = len(target_title_tokens & tokenize(title)) / max(1, len(target_title_tokens))
+
+    # soft location boost (prefer user-provided locations, fallback heuristic)
     loc_boost = 0.0
-    if contains_any(loc, {"virginia","va","east coast","eastern time","et","est"}):
+    loc_terms = tokens_from_terms(profile.get('locations'))
+    if loc_terms and (loc_terms & tokenize(f"{loc} {desc}")):
+        loc_boost = 0.1
+    elif contains_any(loc, {"virginia","va","east coast","eastern time","et","est"}):
         loc_boost = 0.1
 
     return round(skill_overlap, 4), round(title_similarity, 4), round(loc_boost, 4)
