@@ -57,17 +57,17 @@ jobs:
           set -euo pipefail
           python scripts/fetch_user_assets.py --user "${{ github.event.inputs.user_id }}"
 
-      - name: Parse resume -> upsert profile
+      - name: Parse resume -> upsert/patch profile
         shell: bash
         run: |
           set -euo pipefail
           python scripts/parse_resume.py --user "${{ github.event.inputs.user_id }}"
 
-      - name: Crawl targets
+      - name: Crawl boards (from Supabase) using profile filters
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/crawl.py
+          python scripts/crawl.py --user "${{ github.event.inputs.user_id }}"
 
       - name: Rank jobs
         shell: bash
@@ -75,19 +75,16 @@ jobs:
           set -euo pipefail
           python scripts/rank.py --user "${{ github.event.inputs.user_id }}"
 
-      # ---------- Export & Upload Profile JSON for the Profile page ----------
       - name: Export profile JSON (service role)
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p docs/data
-          # Get the full row array for this user
           curl -sS \
             "${SUPABASE_URL%/}/rest/v1/profiles?id=eq.${{ github.event.inputs.user_id }}&select=*" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
             -o docs/data/profile.raw.json
-          # Normalize: keep first object or {} if empty (avoids null/[] issues)
           jq '.[0] // {}' docs/data/profile.raw.json > docs/data/profile.json
           rm -f docs/data/profile.raw.json
 
