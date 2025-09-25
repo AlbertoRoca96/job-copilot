@@ -1,96 +1,228 @@
-# Each policy adds ONE short clause to a bullet when BOTH the JD and the bullet context match.
-# Clauses are concise and human/ATS-friendly. We never fabricate skills the candidate doesn't already claim.
+# Universal, role-agnostic tailoring rules (base + sector packs)
+# Applied only when JD cues AND existing bullet context line up AND the candidate
+# already claims at least one item in requires_any.
 
-# --- Editorial / Content / Admin ---
+# ------------------------------
+# CORE, COMMON ACROSS MOST ROLES
+# ------------------------------
 
-- id: copyediting_ap_style
-  jd_cues: ["copyediting", "copy edit", "ap style", "style guide", "editing"]
-  bullet_cues: ["edit", "edited", "copy", "proof", "style", "guide"]
-  requires_any: ["copyediting", "copy editing", "proofreading", "ap style", "editorial"]
-  clause: "edited copy to AP style and house guidelines"
+- id: core_service_orientation
+  jd_cues: ["customer", "client", "guest", "service", "support"]
+  bullet_cues: ["customer", "client", "guest", "support", "help desk"]
+  requires_any: ["customer service", "support", "client relations"]
+  clause: "resolved requests with clear updates and next steps to raise satisfaction"
 
-- id: proofreading
-  jd_cues: ["proofread", "proofreading", "grammar", "typos", "quality"]
-  bullet_cues: ["proof", "review", "edit", "errors", "draft"]
-  requires_any: ["proofreading", "copyediting", "editorial"]
-  clause: "proofread drafts for clarity, grammar, and consistency"
+- id: core_communication_speaking
+  jd_cues: ["communication", "present", "stakeholder", "brief", "coordination"]
+  bullet_cues: ["presented", "explained", "updated", "met with", "stakeholder"]
+  requires_any: ["communication", "presentation", "public speaking"]
+  clause: "presented concise updates tailored to audience needs"
 
-- id: fact_checking
-  jd_cues: ["fact-check", "fact checking", "accuracy", "sources"]
-  bullet_cues: ["verify", "research", "source", "reference", "link"]
-  requires_any: ["editorial", "research"]
-  clause: "fact-checked names, dates, and sources prior to publication"
+- id: core_active_listening
+  jd_cues: ["listening", "interpersonal", "de-escalation", "conflict"]
+  bullet_cues: ["listened", "resolved", "addressed", "concerns"]
+  requires_any: ["customer service", "counseling", "client relations"]
+  clause: "used active listening to clarify needs and prevent rework"
 
-- id: cms_publishing
-  jd_cues: ["cms", "wordpress", "content management", "publish", "production"]
-  bullet_cues: ["post", "publish", "format", "upload", "image", "caption"]
-  requires_any: ["cms", "wordpress", "editorial"]
-  clause: "published and formatted content in CMS with correct metadata"
+- id: core_time_management
+  jd_cues: ["deadlines", "prioritize", "multitask", "queue", "sla"]
+  bullet_cues: ["prioritized", "deadline", "queue", "sla", "turnaround"]
+  requires_any: ["time management", "organization"]
+  clause: "prioritized work against SLAs to meet deadlines consistently"
 
-- id: editorial_calendar
-  jd_cues: ["calendar", "scheduling", "planning", "deadlines"]
-  bullet_cues: ["schedule", "coordinate", "calendar", "deadline"]
-  requires_any: ["scheduling", "editorial", "calendar"]
-  clause: "coordinated the editorial calendar and on-time handoffs"
+- id: core_quality_documentation
+  jd_cues: ["documentation", "procedures", "records", "audit", "compliance"]
+  bullet_cues: ["logged", "documented", "tracked", "record", "standard"]
+  requires_any: ["documentation", "record keeping", "compliance"]
+  clause: "kept clear, auditable records that matched policy"
 
-- id: seo_basics
-  jd_cues: ["seo", "search", "metadata", "keywords"]
-  bullet_cues: ["title", "slug", "meta", "keyword", "search"]
-  requires_any: ["seo", "editorial"]
-  clause: "applied basic SEO (titles, slugs, keywords, meta) to posts"
+- id: core_process_improvement
+  jd_cues: ["improve", "optimize", "efficiency", "lean", "waste"]
+  bullet_cues: ["streamlined", "reduced", "improved", "standardized"]
+  requires_any: ["process improvement", "lean", "kaizen"]
+  clause: "standardized steps to reduce handoffs and errors"
 
-- id: social_scheduling
-  jd_cues: ["social", "channels", "distribution", "schedule"]
-  bullet_cues: ["social", "draft", "schedule", "publish"]
-  requires_any: ["social", "scheduling"]
-  clause: "scheduled post distribution across social channels"
+- id: core_team_collab
+  jd_cues: ["cross-functional", "team", "collaborate", "handoff"]
+  bullet_cues: ["partnered", "coordinated", "worked with", "handoff"]
+  requires_any: ["teamwork", "collaboration"]
+  clause: "coordinated handoffs so the next team could start immediately"
 
-- id: images_assets
-  jd_cues: ["image", "assets", "copyright", "alt text", "caption"]
-  bullet_cues: ["image", "photo", "graphics", "caption", "alt"]
-  requires_any: ["adobe", "photoshop", "indesign", "illustrator", "cms"]
-  clause: "sourced images with captions/alt text and basic rights checks"
+- id: core_data_accuracy
+  jd_cues: ["data entry", "accuracy", "reporting", "kpi"]
+  bullet_cues: ["entered", "updated", "reconciled", "report"]
+  requires_any: ["excel", "google sheets", "data entry"]
+  clause: "checked entries against source to prevent downstream errors"
 
-- id: accessibility_alt
-  jd_cues: ["accessibility", "a11y", "alt text"]
-  bullet_cues: ["alt", "caption", "image"]
-  requires_any: ["cms", "editorial"]
-  clause: "added alt text and descriptive captions for accessibility"
+- id: core_safety_ethics
+  jd_cues: ["safety", "confidential", "privacy", "ethics", "policy"]
+  bullet_cues: ["confidential", "safely", "policy", "protocol"]
+  requires_any: ["confidentiality", "policy", "safety"]
+  clause: "followed privacy and safety protocols without exception"
 
-- id: analytics_reporting
-  jd_cues: ["analytics", "metrics", "report", "performance", "insight"]
-  bullet_cues: ["report", "track", "metric", "view", "click", "open"]
-  requires_any: ["excel", "google sheets", "analytics", "powerbi"]
-  clause: "tracked basic analytics and reported actionable highlights"
+# ------------------------------
+# ADMIN & CUSTOMER SUPPORT
+# ------------------------------
 
-- id: stakeholder_comms
-  jd_cues: ["stakeholder", "communication", "coordination", "cross-functional"]
-  bullet_cues: ["coordinate", "email", "update", "meet", "brief"]
-  requires_any: ["customer service", "stakeholder management", "editorial"]
-  clause: "coordinated updates with stakeholders and clarified next steps"
+- id: admin_ticketing
+  jd_cues: ["tickets", "helpdesk", "case", "queue", "crm"]
+  bullet_cues: ["ticket", "case", "zendesk", "freshdesk", "salesforce"]
+  requires_any: ["crm", "help desk", "ticketing"]
+  clause: "triaged tickets by priority and routed edge cases appropriately"
 
-- id: templates_cleanup
-  jd_cues: ["template", "consistency", "formatting", "style"]
-  bullet_cues: ["template", "format", "standardize"]
-  requires_any: ["editorial", "microsoft office", "word"]
-  clause: "standardized document templates to speed production"
+- id: admin_calendar_scheduling
+  jd_cues: ["schedule", "calendar", "appointments", "meetings"]
+  bullet_cues: ["scheduled", "calendar", "outlook", "google calendar"]
+  requires_any: ["scheduling", "calendar management"]
+  clause: "kept calendars current and minimized scheduling conflicts"
 
-- id: project_tracking
-  jd_cues: ["tracking", "kanban", "ticket", "process"]
-  bullet_cues: ["track", "ticket", "board", "queue"]
-  requires_any: ["scheduling", "editorial"]
-  clause: "organized tasks in a lightweight tracker to reduce misses"
+- id: admin_reports
+  jd_cues: ["reports", "dashboard", "metrics"]
+  bullet_cues: ["report", "dashboard", "weekly", "monthly"]
+  requires_any: ["excel", "google sheets", "reporting"]
+  clause: "produced concise weekly metrics with clear action items"
 
-# --- Keep a few tech-friendly but neutral clauses (useful when resumes include tech) ---
+# ------------------------------
+# HEALTHCARE / CLINICAL SUPPORT
+# (References: O*NET knowledge 'Medicine & Dentistry'; privacy rules from HHS HIPAA; 
+# general service orientation & speaking descriptors.) 
+# ------------------------------
 
-- id: data_pipelines
-  jd_cues: ["pipeline", "dataset", "data"]
-  bullet_cues: ["pipeline", "cron", "github", "actions", "sql", "postgres"]
-  requires_any: ["github actions", "sql", "postgresql"]
-  clause: "built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres)"
+- id: health_patient_intake
+  jd_cues: ["patient intake", "vitals", "triage", "chart"]
+  bullet_cues: ["intake", "vitals", "chart", "roomed", "EMR"]
+  requires_any: ["patient care", "medical assisting", "EMR", "EHR"]
+  clause: "completed intake and chart updates promptly to reduce wait time"
 
-- id: api_docs
-  jd_cues: ["api", "documentation", "tooling"]
-  bullet_cues: ["api", "doc", "write"]
-  requires_any: ["python", "javascript"]
-  clause: "documented small APIs so teammates could integrate quickly"
+- id: health_handoff
+  jd_cues: ["handoff", "care team", "multidisciplinary", "rounds"]
+  bullet_cues: ["nurse", "provider", "physician", "handoff"]
+  requires_any: ["care team", "patient care"]
+  clause: "gave structured handoffs so providers had what they needed"
+
+- id: health_privacy
+  jd_cues: ["HIPAA", "privacy", "confidentiality", "PHI"]
+  bullet_cues: ["confidential", "HIPAA", "privacy"]
+  requires_any: ["HIPAA", "privacy", "confidentiality"]
+  clause: "protected PHI per HIPAA and local policy"
+
+- id: health_infection_control
+  jd_cues: ["infection control", "PPE", "standard precautions"]
+  bullet_cues: ["PPE", "sanitize", "cleaned", "disinfect"]
+  requires_any: ["infection control", "PPE"]
+  clause: "followed standard precautions and appropriate PPE"
+
+# ------------------------------
+# EDUCATION / TRAINING
+# (References: O*NET 'Instructing' cross-functional skill and education knowledge area.)
+# ------------------------------
+
+- id: edu_classroom_management
+  jd_cues: ["classroom management", "behavior", "routines"]
+  bullet_cues: ["managed", "classroom", "routines", "expectations"]
+  requires_any: ["classroom management", "behavior"]
+  clause: "used clear routines so learners stayed on task"
+
+- id: edu_differentiation
+  jd_cues: ["differentiate", "IEP", "accommodation", "support needs"]
+  bullet_cues: ["individualized", "modified", "accommodated"]
+  requires_any: ["lesson planning", "instruction"]
+  clause: "differentiated tasks and supports to meet diverse needs"
+
+- id: edu_family_comms
+  jd_cues: ["family", "guardian", "home", "communication"]
+  bullet_cues: ["family", "parent", "guardian", "newsletter"]
+  requires_any: ["communication", "parent outreach"]
+  clause: "kept families informed with brief, actionable updates"
+
+# ------------------------------
+# LOGISTICS / OPERATIONS
+# ------------------------------
+
+- id: ops_inventory_control
+  jd_cues: ["inventory", "stock", "cycle count", "reconcile"]
+  bullet_cues: ["inventory", "counted", "reconciled", "sku"]
+  requires_any: ["inventory", "stock control"]
+  clause: "performed cycle counts and reconciled discrepancies quickly"
+
+- id: ops_shipping_receiving
+  jd_cues: ["shipping", "receiving", "dock", "bill of lading", "manifest"]
+  bullet_cues: ["shipped", "received", "pallet", "forklift", "BOL", "manifest"]
+  requires_any: ["shipping", "receiving", "warehouse"]
+  clause: "validated shipments against manifests and flagged damages promptly"
+
+- id: ops_safety
+  jd_cues: ["safety", "osha", "hazard", "ppe"]
+  bullet_cues: ["safety", "OSHA", "PPE", "lockout"]
+  requires_any: ["safety", "OSHA"]
+  clause: "followed site safety checks before each task"
+
+# ------------------------------
+# HOSPITALITY / GUEST SERVICES
+# ------------------------------
+
+- id: hosp_front_office
+  jd_cues: ["front desk", "check-in", "reservations", "guest"]
+  bullet_cues: ["front desk", "reservations", "checked in", "POS", "PMS"]
+  requires_any: ["front desk", "reservations", "POS", "PMS"]
+  clause: "handled check-ins efficiently and resolved issues on first contact"
+
+- id: hosp_housekeeping_quality
+  jd_cues: ["housekeeping", "cleanliness", "inspection", "turnover"]
+  bullet_cues: ["housekeeping", "cleaned", "inspected", "rooms"]
+  requires_any: ["housekeeping", "guest rooms"]
+  clause: "met cleanliness standards with documented room inspections"
+
+- id: hosp_event_coord
+  jd_cues: ["events", "banquets", "setup", "vendor"]
+  bullet_cues: ["event", "banquet", "setup", "AV", "vendor"]
+  requires_any: ["events", "banquet", "AV"]
+  clause: "coordinated room setup and vendor timing to spec"
+
+# ------------------------------
+# RETAIL / SALES FLOOR
+# ------------------------------
+
+- id: retail_merchandising
+  jd_cues: ["planogram", "merchandising", "display", "reset"]
+  bullet_cues: ["merchandis", "display", "planogram", "reset"]
+  requires_any: ["merchandising", "planogram"]
+  clause: "kept displays compliant with planograms and promo timing"
+
+- id: retail_pos_cash
+  jd_cues: ["POS", "cash handling", "till", "loss prevention"]
+  bullet_cues: ["POS", "cash", "register", "till", "shrink"]
+  requires_any: ["pos", "cash handling"]
+  clause: "balanced tills and followed loss-prevention steps"
+
+# ------------------------------
+# WRITING / EDITORIAL (lightweight, non-tech)
+# ------------------------------
+
+- id: editorial_copyediting
+  jd_cues: ["copyediting", "proofread", "style", "AP", "house style"]
+  bullet_cues: ["edited", "proofread", "style", "copy"]
+  requires_any: ["copyediting", "proofreading"]
+  clause: "applied house style so copy stayed consistent"
+
+- id: editorial_content_ops
+  jd_cues: ["content calendar", "cms", "publish", "schedule", "social"]
+  bullet_cues: ["scheduled", "posted", "CMS", "calendar"]
+  requires_any: ["cms", "content calendar", "social media"]
+  clause: "kept the content calendar current and error-free"
+
+# ------------------------------
+# LIGHT TECH / DATA (kept generic)
+# ------------------------------
+
+- id: data_reporting
+  jd_cues: ["reporting", "kpi", "dashboard", "excel", "sheets"]
+  bullet_cues: ["excel", "google sheets", "dashboard", "pivot"]
+  requires_any: ["excel", "google sheets"]
+  clause: "built simple dashboards so managers saw status at a glance"
+
+- id: basic_it_support
+  jd_cues: ["troubleshoot", "ticket", "reset", "onboarding"]
+  bullet_cues: ["troubleshoot", "ticket", "reset", "onboard"]
+  requires_any: ["it support", "help desk"]
+  clause: "resolved common issues and documented fixes for reuse"
