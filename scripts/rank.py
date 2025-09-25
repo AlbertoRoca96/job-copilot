@@ -77,6 +77,13 @@ def _within_recency(job, profile) -> bool:
     cutoff = (datetime.utcnow().date() - timedelta(days=days))
     return pdate >= cutoff
 
+# Add near the other helpers
+def _title_gate(job, profile) -> bool:
+    tts = tokens_from_terms((profile or {}).get('target_titles'))
+    if not tts:
+        return True
+    return bool(tts & tokenize(job.get('title','') or ''))
+
 def main(user_id: str):
     if not os.path.exists(DATA_JOBS):
         print('No jobs.jsonl found; run scripts/crawl.py first.')
@@ -91,7 +98,9 @@ def main(user_id: str):
             except Exception:
                 continue
 
-    filtered = [j for j in raw if _within_recency(j, profile)]
+    # Replace the filtered = … line with this:
+    filtered = [j for j in raw if _within_recency(j, profile) and _title_gate(j, profile)]
+
     out = []
     for j in filtered:
         so, ts, lb = compute_parts(j, profile)
