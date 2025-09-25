@@ -1,3 +1,5 @@
+# src/tailor/resume.py
+
 import re
 import difflib
 from typing import List, Tuple, Dict, Set, Optional
@@ -6,6 +8,7 @@ from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 
 from .policies import load_policies  # merges runtime + base
+
 
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{1,}")
 
@@ -37,6 +40,33 @@ CANON = {
     "wasm": "WebAssembly",
 }
 
+# -------------------------------------------------------------------
+# Section aliases — flexible matching across varied resume headings.
+# Keys are our canonical labels; values are acceptable aliases.
+SECTION_ALIASES: Dict[str, List[str]] = {
+    "projects": [
+        "projects", "side projects", "selected projects", "personal projects",
+        "portfolio projects"
+    ],
+    "work experience": [
+        "work experience", "experience", "professional experience",
+        "employment", "work history"
+    ],
+    "technical skills": [
+        "technical skills", "skills", "tech skills", "core skills", "skills & tools"
+    ],
+    # These are included only for range delimiting (we don't mutate them):
+    "education": ["education"],
+    "workshops": ["workshops", "certifications", "training"],
+    "references": ["references"],
+}
+# Pre-compute lookup for speed
+_ALIAS_TO_CANON: Dict[str, str] = {
+    alias: canon
+    for canon, aliases in SECTION_ALIASES.items()
+    for alias in aliases
+}
+
 # --------------------- helpers & utilities ---------------------
 
 class ChangeLog:
@@ -65,20 +95,56 @@ def tokens(text: str) -> Set[str]:
 def normalize_ws(s: str) -> str:
     return re.sub(r"\s+", " ", s or "").strip()
 
-def find_section_ranges(doc: Document, section_titles: List[str]) -> Dict[str, Tuple[int, int]]:
-    wants = [normalize_ws(t).lower() for t in section_titles]
-    hits: Dict[str, int] = {}
+def _heading_label(p: Paragraph) -> Optional[str]:
+    """
+    Return a canonical section label if the paragraph looks like a section header.
+    We match on the normalized text against our alias table, and we also accept
+    common Word heading styles (“Heading 1/2/3”) with short text.
+    """
+    t = normalize_ws(p.text).lower()
+    if not t:
+        return None
+
+    # Style hint: many resumes use "Heading X"
+    style_name = (getattr(p.style, "name", "") or "").lower()
+    is_heading_style = style_name.startswith("heading")
+
+    # Exact alias match
+    if t in _ALIAS_TO_CANON:
+        return _ALIAS_TO_CANON[t]
+
+    # If style is a heading and the text is short, try fuzzy alias match
+    if is_heading_style and len(t) <= 40:
+        # loosen slightly — allow singular/plural or small variations
+        for alias, canon in _ALIAS_TO_CANON.items():
+            if difflib.SequenceMatcher(None, t, alias).ratio() >= 0.88:
+                return canon
+    return None
+
+def find_section_ranges(doc: Document, canonical_order: List[str]) -> Dict[str, Tuple[int, int]]:
+    """
+    Build [start, end) paragraph index ranges for each canonical section
+    present in the document using SECTION_ALIASES and heading styles.
+    """
+    # First pass: record positions of any recognized section headers.
+    hits: List[Tuple[int, str]] = []  # (paragraph_idx, canonical_label)
     for i, p in enumerate(doc.paragraphs):
-        t = normalize_ws(p.text).lower()
-        for w in wants:
-            if t == w:
-                hits[w] = i
+        lab = _heading_label(p)
+        if lab:
+            hits.append((i, lab))
+
+    # Sort by document order
+    hits.sort(key=lambda x: x[0])
+
+    # Build ranges [start, end)
     ranges: Dict[str, Tuple[int, int]] = {}
-    sorted_hits = sorted(hits.items(), key=lambda kv: kv[1])
-    for k, start in sorted_hits:
-        later = [v for _, v in sorted_hits if v > start]
-        end = later[0] if later else len(doc.paragraphs)
-        ranges[k] = (start, end)
+    for idx, (start, canon) in enumerate(hits):
+        # end is next header or end of document
+        end = hits[idx + 1][0] if idx + 1 < len(hits) else len(doc.paragraphs)
+        # keep only sections we care about
+        if canon in canonical_order and canon not in ranges:
+            ranges[canon] = (start, end)
+
     return ranges
 
 def paragraph_is_bullet(p: Paragraph) -> bool:
@@ -323,9 +389,10 @@ def tailor_docx_in_place(doc: Document,
     allowed_vocab = set(k.lower() for k in allowed_vocab_list)
     used_clauses: Set[str] = set()
 
+    # Build ranges using flexible alias detection
     ranges = find_section_ranges(doc, [
-        "Education", "Side Projects", "Projects", "Work Experience",
-        "Technical Skills", "Workshops", "References",
+        "education", "projects", "work experience",
+        "technical skills", "workshops", "references",
     ])
     pars = doc.paragraphs
 
@@ -334,16 +401,15 @@ def tailor_docx_in_place(doc: Document,
         s, e = ranges["technical skills"]
         reorder_or_annotate_skills(pars, s, e, list(jd_vocab), logger)
 
-    # Projects / Side Projects
-    for sec in ("side projects", "projects"):
-        if sec in ranges:
-            s, e = ranges[sec]
-            _rewrite_bullets_in_place(
-                pars, s, e, jd_vocab, allowed_vocab, policies,
-                logger, "Projects", max_rewrites=3, used_clauses=used_clauses
-            )
+    # Projects (includes “Side Projects”, etc.)
+    if "projects" in ranges:
+        s, e = ranges["projects"]
+        _rewrite_bullets_in_place(
+            pars, s, e, jd_vocab, allowed_vocab, policies,
+            logger, "Projects", max_rewrites=3, used_clauses=used_clauses
+        )
 
-    # Work Experience
+    # Work Experience / Experience / Professional Experience
     if "work experience" in ranges:
         s, e = ranges["work experience"]
         _rewrite_bullets_in_place(
