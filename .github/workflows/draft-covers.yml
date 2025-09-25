@@ -26,8 +26,9 @@ env:
   PYTHONPATH: ${{ github.workspace }}
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-  # flip to "0" to suppress LLM even if key exists
   USE_LLM: "1"
+  # Force inline keyword injection; never add fabricated new sentences
+  TAILOR_INLINE_ONLY: "1"
 
 jobs:
   build:
@@ -49,7 +50,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          pip install -r requirements.txt python-docx requests pyyaml beautifulsoup4
+          pip install -r requirements.txt python-docx requests pyyaml beautifulsoup4 jinja2
 
       - name: Mark job_requests running
         shell: bash
@@ -106,10 +107,17 @@ jobs:
           set -euo pipefail
           python scripts/fetch_user_assets.py --user "${{ github.event.inputs.user_id }}"
 
+      - name: Parse resume & patch profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/parse_resume.py --user "${{ github.event.inputs.user_id }}"
+
       - name: Run drafting (covers + tailored resumes)
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           USE_LLM: ${{ env.USE_LLM }}
+          TAILOR_INLINE_ONLY: ${{ env.TAILOR_INLINE_ONLY }}
         shell: bash
         run: |
           set -euo pipefail
@@ -207,18 +215,6 @@ jobs:
             -H "Content-Type: application/json" \
             -H "x-upsert: true" \
             --data-binary @docs/data/drafts_index.json
-
-      - name: Upload run artifacts (debug)
-        uses: actions/upload-artifact@v4
-        with:
-          name: drafts-run-${{ github.event.inputs.user_id }}
-          path: |
-            docs/outbox/
-            docs/resumes/
-            docs/changes/
-            docs/data/drafts_index.json
-          if-no-files-found: warn
-          retention-days: 7
 
       # -------- STATUS --------
       - name: Mark job_requests done
