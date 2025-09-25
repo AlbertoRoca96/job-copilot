@@ -2,9 +2,16 @@
 import os, sys, json, traceback, argparse, requests
 from typing import List, Dict, Set
 
+# Make src importable
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Providers
 from src.ingest.greenhouse import crawl_greenhouse
 from src.ingest.lever import crawl_lever
+from src.ingest.linkedin import crawl_linkedin
+from src.ingest.indeed import crawl_indeed
+
+# Scoring/token helpers (for profile-driven filters)
 from src.core.scoring import tokens_from_terms, tokenize
 
 ROOT = os.path.dirname(__file__)
@@ -13,13 +20,6 @@ OUT_JSONL = os.path.join(DATA_DIR, 'jobs.jsonl')
 
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SRK = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
-
-GENERIC_STOP: Set[str] = {
-    # too generic; causes false positives across engineering roles
-    "data","service","customer","entry","record","keeping","scheduling",
-    "microsoft","office","word","excel","powerpoint","outlook","adobe",
-    "content","writing"  # title gate will catch editor roles; these are noisy
-}
 
 def _dedup_on_url(items: List[Dict]) -> List[Dict]:
     seen = set(); out = []
@@ -42,32 +42,34 @@ def _get_boards() -> List[Dict]:
     r.raise_for_status()
     return r.json() or []
 
+# ---------- Profile-driven filtering ----------
 def _build_filters(profile: dict):
+    """
+    inc/exc: use skills + titles inclusions, with a strict TITLE gate so we can
+    safely crawl general-purpose job boards (LinkedIn/Indeed) without relying on
+    hand-curated exclusion lists.
+    """
     title_tokens = tokens_from_terms(profile.get('target_titles'))
 
-    # small synonym nudge for editorial
-    if "editor" in title_tokens:   title_tokens.add("editorial")
+    # lightweight synonyms to not miss obvious variants
+    if "editor" in title_tokens:    title_tokens.add("editorial")
     if "editorial" in title_tokens: title_tokens.add("editor")
-    if "writer" in title_tokens:   title_tokens.add("writer")  # already canonicalized
+    if "writer" in title_tokens:    title_tokens.add("writer")
 
-    skill_tokens = tokens_from_terms(profile.get('skills')) - GENERIC_STOP
+    skill_tokens = tokens_from_terms(profile.get('skills'))
     inc = title_tokens | skill_tokens
 
-    # default exclusions
+    # sensible default exclusions (still helpful)
     exc = {"senior","staff","principal","lead","manager","director"}
 
-    # If this looks like an editorial search, exclude common engineering terms.
-    if {"editor","editorial","writer","copyeditor","copyediting"} & title_tokens:
-        exc |= {"software","engineer","developer","scientist","ml","ai"}
-
-    # Avoid old fallback to {"software","engineer"} — that was causing bad results
     return title_tokens, inc, exc
 
 def _keep_factory(title_tokens: Set[str], inc: Set[str], exc: Set[str]):
-    """Keep a job if:
-       1) TITLE contains any target-title token (strict gate), and
-       2) title+description contains any inc token, and
-       3) none of the exclusion tokens appear.
+    """
+    Keep a job if:
+      (1) Title contains ANY target-title token (strict gate),
+      (2) title+desc contains ANY include token,
+      (3) and NONE of the exclude tokens.
     """
     def _keep(j: Dict) -> bool:
         title = str(j.get('title') or '').lower()
@@ -90,7 +92,6 @@ def main(user_id: str):
     title_tokens, inc, exc = _build_filters(profile)
     keep = _keep_factory(title_tokens, inc, exc)
 
-    # debug print so you can see what’s driving decisions
     print("Title gate tokens:", sorted(list(title_tokens)))
     print("Include tokens (sample 30):", sorted(list(inc))[:30], "…")
     print("Exclude tokens:", sorted(list(exc)))
@@ -112,6 +113,10 @@ def main(user_id: str):
                 jobs = crawl_greenhouse(slug)
             elif src == 'lever':
                 jobs = crawl_lever(slug)
+            elif src == 'linkedin':
+                jobs = crawl_linkedin(profile)   # slug ignored; we build from profile
+            elif src == 'indeed':
+                jobs = crawl_indeed(profile)     # slug ignored; we build from profile
             else:
                 print(f'  !! Unknown source {src} (skipping)'); continue
 
