@@ -1,14 +1,16 @@
-Dear Hiring Team at {{ job.company | title }},
+Dear Hiring Team at {{ (job.company or 'your organization')|trim }},
 
-I'm excited to apply for the **{{ job.title }}** role. A quick fit snapshot:
-- Background: {{ profile.target_titles | join(' / ') }}; hands-on with {{ profile.skills[:5] | join(', ') }}.
-- Highlights aligned to your needs:
-  1) Built and shipped ML/engineering projects (Python).
-  2) Full-stack comfort ({{ profile.skills | join(', ') }}), from ingest to deploy.
-  3) Pragmatic, testable code and lean dashboards that help teams act.
+I'm excited to apply for the **{{ job.title }}** role.
 
-I’ve attached my resume and would love to share details on relevant projects. Thanks for your time — I’m keen to learn more about the team and the problems you’re solving.
+**Why I'm a strong fit**
+- Background: {{ (profile.target_titles or [])|join(' / ') }}
+- Strengths relevant to this posting: {{ (profile.skills or [])|join(', ') }}
+
+I’m comfortable working to deadline, coordinating with stakeholders, and keeping quality high across drafting, editing/formatting, scheduling and basic production tasks (CMS, docs, calendars, assets).
+
+I’ve attached my resume and would welcome the chance to discuss how I can help {{ (job.company or 'your team')|trim }}.
 
 Best,
-{{ profile.name }}
-{{ profile.email }} | {{ profile.github }} | {{ profile.phone }}
+
+{{ profile.full_name or '' }}
+{{ profile.email or '' }}{% if profile.phone %} | {{ profile.phone }}{% endif %}
