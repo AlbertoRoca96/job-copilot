@@ -33,10 +33,15 @@ def extract(docx_path: str):
   return {"full_name": name, "email": email, "phone": phone, "skills": skills}
 
 def patch_profile(user_id: str, profile: dict):
-  # Replace only the fields we set (arrays are replaced entirely)
+  # Replace only the fields we set; arrays are overridden (PATCH)
   url = f"{SUPABASE_URL}/rest/v1/profiles?id=eq.{user_id}"
   r = requests.patch(url,
-    headers={"Content-Type":"application/json","apikey":SRK,"Authorization":f"Bearer {SRK}","Prefer":"return=minimal"},
+    headers={
+      "Content-Type":"application/json",
+      "apikey":SRK,
+      "Authorization":f"Bearer {SRK}",
+      "Prefer":"return=minimal"         # reduce payload; standard PostgREST Prefer header
+    },
     data=json.dumps(profile), timeout=30)
   r.raise_for_status()
 
