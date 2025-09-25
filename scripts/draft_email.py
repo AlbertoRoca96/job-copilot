@@ -7,8 +7,6 @@ from src.tailor.render import render_cover
 from src.tailor.resume import tailor_docx_in_place
 from docx import Document
 
-# NOTE: no craft_tailored_snippets import (we're not creating any "Targeted" summary)
-
 import requests
 from bs4 import BeautifulSoup
 
@@ -22,7 +20,11 @@ DATA_DIR   = os.path.join(os.path.dirname(__file__), '..', 'docs', 'data')
 PROFILE_YAML   = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'profile.yaml')
 PORTFOLIO_YAML = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'portfolio.yaml')
 TMPL_DIR       = os.path.join(os.path.dirname(__file__), '..', 'src', 'tailor', 'templates')
-BASE_RESUME    = os.path.join(os.path.dirname(__file__), '..', 'assets', 'Resume-2025.docx')
+
+# IMPORTANT: we prefer the user's uploaded resume fetched by scripts/fetch_user_assets.py
+CURRENT_RESUME = os.path.join(os.path.dirname(__file__), '..', 'assets', 'current.docx')
+FALLBACK_RESUME= os.path.join(os.path.dirname(__file__), '..', 'assets', 'Resume-2025.docx')
+
 BANLIST_JSON   = os.path.join(DATA_DIR, 'banlist.json')
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL","").rstrip("/")
@@ -130,7 +132,8 @@ def write_profile_yaml_from_dict(d: dict):
         "target_titles": d.get("target_titles") or [],
         "locations": d.get("locations") or [],
     }
-    os.makedirs(os.path.dirname(PROFILE_YAML), exist_ok=True)
+    os.makedirs(os.path.dirname(PROFILE_YAML), exist_ok=True
+    )
     with open(PROFILE_YAML, "w") as f:
         yaml.safe_dump({k:v for k,v in y.items() if v is not None}, f)
 
@@ -143,7 +146,6 @@ def load_profile_for_user(user_id: str) -> dict:
     arr = r.json()
     return (arr[0] if arr else {}) or {}
 
-# Keep dashboard order + dedup by url
 def _dedup_by_url_keep_order(items):
     seen = set()
     out = []
@@ -156,8 +158,19 @@ def _dedup_by_url_keep_order(items):
         out.append(j)
     return out
 
+def _select_base_resume() -> str:
+    """
+    Prefer the user's uploaded resume (assets/current.docx).
+    Fallback to the repository template (assets/Resume-2025.docx).
+    """
+    if os.path.isfile(CURRENT_RESUME):
+        print(f"Using base resume: {CURRENT_RESUME}")
+        return CURRENT_RESUME
+    print(f"Using fallback resume: {FALLBACK_RESUME}")
+    return FALLBACK_RESUME
+
 def main(top: int, user: str | None):
-    # Load profile
+    # Load profile (from Supabase) so covers can use fresh contact info
     prof = load_profile_for_user(user) if user else {}
     if prof:
         write_profile_yaml_from_dict(prof)
@@ -175,7 +188,7 @@ def main(top: int, user: str | None):
 
     allowed = set(allowed_vocab(profile, portfolio))
 
-    # same shortlist as dashboard
+    # shortlist as on the dashboard
     jobs = []
     if os.path.exists(DATA_JSON):
         with open(DATA_JSON) as f:
@@ -205,13 +218,16 @@ def main(top: int, user: str | None):
         banlist = []
     banset = {x.strip().lower() for x in banlist}
 
-    # LLM flags retained for future use, but we don't generate a summary now
     use_llm = os.getenv("USE_LLM","0") == "1" and bool(os.getenv("OPENAI_API_KEY"))
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    print(f"LLM: {'enabled' if use_llm else 'disabled (no summary injected)'}")
+    print(f"LLM: {'enabled' if use_llm else 'disabled'}")
+    if use_llm:
+        print(f"LLM model: {model}")
 
     def jd_sha(s: str) -> str:
         return hashlib.sha1((s or "").encode("utf-8")).hexdigest()[:8]
+
+    base_resume_path = _select_base_resume()
 
     drafted_covers = drafted_resumes = 0
     llm_summary = {"used": False, "model": None, "jobs": []}
@@ -221,30 +237,30 @@ def main(top: int, user: str | None):
         safe_title   = safe_name(j.get('title',''))
         slug = f"{safe_company}_{safe_title}"[:150]
 
+        # choose best JD text
         jd_text = pick_jd_text(j) or (j.get("description") or "")
         tmp_job = dict(j); tmp_job["description"] = jd_text
         jd_kws = extract_jd_terms(tmp_job, allowed, cap=24)
 
-        # keep JD file for debugging
-        os.makedirs(CHANGES_DIR, exist_ok=True)
+        # keep JD raw for debugging
         with open(os.path.join(CHANGES_DIR, f"{slug}.jd.txt"), "w") as f:
             f.write(jd_text[:20000])
         jd_hash = jd_sha(jd_text)
 
-        # COVER (no "Targeted Summary" block)
+        # COVER
         cover_fname = f"{slug}.md"
         cover = render_cover(j, PROFILE_YAML, TMPL_DIR)
-        # Optionally, you could append ATS keywords at the bottom for your own debugging,
-        # but we leave covers as-is now to avoid any “Targeted …” text.
         with open(os.path.join(OUTBOX_MD, cover_fname), 'w') as f: f.write(cover)
         j['cover_path'] = f"outbox/{cover_fname}"
 
-        # RESUME
+        # RESUME (tailor inside the doc)
         out_docx_name = f"{slug}_{jd_hash}.docx"
         out_docx = os.path.join(RESUMES_MD, out_docx_name)
-        doc = Document(BASE_RESUME)
 
-        # document metadata for ATS (keywords only from JD)
+        # Load user's uploaded resume if present
+        doc = Document(base_resume_path)
+
+        # metadata (keywords only from JD)
         try:
             cp = doc.core_properties
             cp.comments = f"job-copilot:{slug}:{jd_hash}"
@@ -253,7 +269,6 @@ def main(top: int, user: str | None):
         except Exception:
             pass
 
-        # Tailor bullets inside the doc (injections handled in resume.py)
         granular_changes = tailor_docx_in_place(
             doc,
             jd_keywords=jd_kws,
@@ -264,12 +279,12 @@ def main(top: int, user: str | None):
         j['resume_docx'] = f"resumes/{out_docx_name}"
         j['resume_docx_hash'] = jd_hash
 
-        # Build changes JSON (only granular bullet changes now)
+        # Explain changes (bullet level only)
         explain = {
             "company": j.get("company",""),
             "title": j.get("title",""),
             "ats_keywords": jd_kws,
-            "llm_keywords": [],   # none; we are not adding a summary anymore
+            "llm_keywords": [],
             "changes": list(granular_changes or []),
             "jd_hash": jd_hash
         }
