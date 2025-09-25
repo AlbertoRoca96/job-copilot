@@ -1,4 +1,3 @@
-# src/tailor/resume.py
 #!/usr/bin/env python3
 import os, sys, re, json, time, argparse, hashlib, pathlib, logging
 from typing import List, Dict, Any, Optional, Tuple, Set
@@ -12,8 +11,7 @@ from docx.text.run import Run
 UA = "job-copilot/1.0 (+https://github.com/AlbertoRoca96/job-copilot)"
 TIMEOUT = (10, 20)  # connect, read
 MAX_JD_CHARS = 100_000
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # any current small reasoning model
-USE_RESPONSES_API = True  # Structured outputs
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # canonical casing map
@@ -65,7 +63,6 @@ def read_links(path: str) -> List[Dict[str, Any]]:
                     url = item.get("url") or item.get("link") or item.get("jd_url")
                     if url: out.append({"url": url, **{k:v for k,v in item.items() if k not in ("url","link","jd_url")}})
         elif isinstance(data, dict):
-            # look for common containers
             arr = data.get("jobs") or data.get("items") or data.get("links") or []
             for item in arr:
                 if isinstance(item, str):
@@ -84,6 +81,24 @@ def read_links(path: str) -> List[Dict[str, Any]]:
             out.append({"url": line})
     return out
 
+# ------------ JD fetch (with LinkedIn fallbacks to description/meta) ------------
+def _extract_linkedin_text(html: str, soup: BeautifulSoup) -> Optional[str]:
+    # try JSON-LD description
+    for tag in soup.find_all("script", {"type": "application/ld+json"}):
+        try:
+            obj = json.loads(tag.string or "")
+            if isinstance(obj, dict):
+                desc = obj.get("description")
+                if isinstance(desc, str) and len(desc) > 60:
+                    return normalize_ws(BeautifulSoup(desc, "html.parser").get_text(" ", strip=True))
+        except Exception:
+            continue
+    # meta description
+    meta = soup.find("meta", {"name": "description"}) or soup.find("meta", {"property": "og:description"})
+    if meta and meta.get("content"):
+        return normalize_ws(meta["content"])
+    return None
+
 def fetch_jd_plaintext(url: str) -> str:
     resp = requests.get(url, headers={"User-Agent": UA}, timeout=TIMEOUT)
     resp.raise_for_status()
@@ -92,19 +107,22 @@ def fetch_jd_plaintext(url: str) -> str:
     # strip obvious cruft
     for tag in soup(["script", "style", "noscript", "svg", "img"]):
         tag.decompose()
-    # optional: common layout tags that often contain boilerplate
     for sel in ["header", "footer", "nav"]:
         for tag in soup.select(sel):
             tag.decompose()
-    text = soup.get_text(separator=" ", strip=True)  # official args used
+    text = soup.get_text(separator=" ", strip=True)
+    text = normalize_ws(text)
+    # LinkedIn login walls: fall back to description if body text looks useless
+    if ("linkedin.com" in url) and (len(text) < 400):
+        alt = _extract_linkedin_text(html, soup)
+        if alt: text = alt
     return text[:MAX_JD_CHARS]
 
-# ----------------------- LLM (structured outputs) -----------------------
+# ----------------------- LLM (Chat Completions + tool calling) -----------------------
 def call_llm_weaves(resume_text: str, jd_text: str, job_title: str = "", company: str = "") -> Dict[str, Any]:
     """
-    Ask the model for structured suggestions:
-      - skills_additions: list[str]
-      - weaves: list[{cue, phrase, section}] where phrase is <= 18 words, factual & ATS-relevant
+    Return:
+      { "skills_additions": [str], "weaves": [ {section, cue, phrase} ] }
     """
     if not OPENAI_API_KEY:
         logging.warning("OPENAI_API_KEY not set; returning empty LLM suggestions.")
@@ -113,28 +131,32 @@ def call_llm_weaves(resume_text: str, jd_text: str, job_title: str = "", company
     from openai import OpenAI
     client = OpenAI(api_key=OPENAI_API_KEY)
 
-    schema = {
-        "name": "TailorPlan",
-        "schema": {
-            "type": "object",
-            "properties": {
-                "skills_additions": {"type": "array", "items": {"type": "string"}},
-                "weaves": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "section": {"type": "string", "enum": ["Work Experience","Projects"]},
-                            "cue": {"type": "string"},
-                            "phrase": {"type": "string", "maxLength": 120}
-                        },
-                        "required": ["section","cue","phrase"],
-                        "additionalProperties": False
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "TailorPlan",
+            "description": "Return ATS-safe additions for Skills list, and short inline weave phrases per section.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "skills_additions": {"type": "array", "items": {"type": "string"}},
+                    "weaves": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "section": {"type": "string", "enum": ["Work Experience", "Projects"]},
+                                "cue": {"type": "string"},
+                                "phrase": {"type": "string", "maxLength": 120}
+                            },
+                            "required": ["section", "cue", "phrase"],
+                            "additionalProperties": False
+                        }
                     }
-                }
-            },
-            "required": ["skills_additions","weaves"],
-            "additionalProperties": False
+                },
+                "required": ["skills_additions", "weaves"],
+                "additionalProperties": False
+            }
         }
     }
 
@@ -154,36 +176,31 @@ Company: {company or 'N/A'}
 {resume_text}
 
 Return JSON with:
-- skills_additions: short terms or bigrams that belong in Skills list and appear in the JD (or synonyms), truthful w.r.t. resume.
-- weaves: small phrases to inject inline into existing bullets; provide a minimal 'cue' substring to find a suitable bullet.
+- skills_additions: short terms for the Skills list that appear in the JD (or synonyms), truthful w.r.t. resume.
+- weaves: small phrases to inject inline into existing bullets; include a minimal 'cue' substring to locate the bullet.
 """
 
-    if USE_RESPONSES_API:
-        # Structured Outputs via response_format json_schema
-        result = client.responses.create(
-            model=MODEL,
-            input=[{"role": "system", "content": sys_prompt},
-                   {"role": "user", "content": user_prompt}],
-            response_format={"type": "json_schema", "json_schema": schema},
-            temperature=0.2,
-        )
-        content = result.output_text  # SDK returns text already conforming to schema
-    else:
-        # Fallback to chat.completions w/ JSON tool (older)
-        result = client.chat.completions.create(
-            model=MODEL,
-            messages=[{"role": "system", "content": sys_prompt},
-                      {"role": "user", "content": user_prompt}],
-            response_format={"type": "json_object"},
-            temperature=0.2,
-        )
-        content = result.choices[0].message.content
-
     try:
-        return json.loads(content)
+        resp = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            tools=[tool],
+            tool_choice={"type": "function", "function": {"name": "TailorPlan"}},
+            temperature=0.2,
+        )
+        msg = resp.choices[0].message
+        if getattr(msg, "tool_calls", None):
+            args = msg.tool_calls[0].function.arguments
+            return json.loads(args)
+        if msg.content:
+            return json.loads(msg.content)
     except Exception as e:
-        logging.error("Failed to parse LLM JSON: %s", e)
-        return {"skills_additions": [], "weaves": []}
+        logging.error("LLM tool-call failed: %s", e)
+
+    return {"skills_additions": [], "weaves": []}
 
 # ----------------------- .docx editing -----------------------
 def paragraph_is_bullet(p: Paragraph) -> bool:
@@ -228,7 +245,7 @@ def copy_format(src: Run, dst: Run):
 
 def set_text_preserve_style(p: Paragraph, text: str):
     base = dominant_run(p)
-    p.text = text  # replaces runs with one run (paragraph style preserved)
+    p.text = text
     if base and p.runs:
         copy_format(base, p.runs[0])
 
@@ -239,7 +256,6 @@ def first_sentence_split(text: str) -> int:
 def weave_into_paragraph(p: Paragraph, phrase: str) -> bool:
     phrase = canon((phrase or "").strip().rstrip("."))
     if not phrase: return False
-    base = dominant_run(p)
     txt = "".join(r.text for r in p.runs) if p.runs else p.text
     insert_at = first_sentence_split(txt)
     glue = " " if insert_at and insert_at <= len(txt) and txt[insert_at-1].isalnum() else ""
@@ -252,7 +268,6 @@ def inject_skills(doc: Document, additions: List[str]) -> bool:
     additions = [canon(a) for a in additions if a]
     ranges = find_section_ranges(doc, ["Technical Skills", "Skills", "Core Skills"])
     if not ranges: return False
-    # take the first skills section; modify the first comma list line we find
     key = next(iter([k for k in ("technical skills","skills","core skills") if k in ranges]), None)
     if not key: return False
     s, e = ranges[key]
@@ -264,15 +279,13 @@ def inject_skills(doc: Document, additions: List[str]) -> bool:
         present = tokens(t)
         new = [a for a in additions if a.lower() not in present]
         if not new: return False
-        # append within parentheses or at end of list
         m = re.search(r"\(([^)]+)\)", t)
         if m:
             inside = m.group(1).strip()
             sep = ", " if inside and not inside.endswith(",") else ""
             after = t[:m.start(1)] + inside + f"{sep}{', '.join(new)}" + t[m.end(1):]
         else:
-            if t.endswith("."): t2 = t[:-1]
-            else: t2 = t
+            t2 = t[:-1] if t.endswith(".") else t
             sep = ", " if ("," in t2 or ";" in t2) and not t2.endswith(",") else (", " if ("," in t2 or ";" in t2) else ": ")
             after = t2 + f"{sep}{', '.join(new)}"
         set_text_preserve_style(p, after)
@@ -295,10 +308,8 @@ def find_section_ranges(doc: Document, titles: List[str]) -> Dict[str, Tuple[int
 def apply_weaves(doc: Document, weaves: List[Dict[str,str]]) -> int:
     changed = 0
     if not weaves: return changed
-    # index sections
     secs = find_section_ranges(doc, ["Work Experience","Professional Experience","Experience",
                                      "Projects","Project Experience","Side Projects"])
-    # build paragraph lists per logical label
     def para_indices(keys: List[str]) -> List[int]:
         for k in keys:
             lk = k.lower()
@@ -322,7 +333,6 @@ def apply_weaves(doc: Document, weaves: List[Dict[str,str]]) -> int:
             if not cue: best = i; break
             if cue in t:
                 best = i; break
-            # fuzzy helper
             import difflib
             r = difflib.SequenceMatcher(None, cue, t).ratio()
             if r > best_ratio:
@@ -359,8 +369,9 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
 
     index_items = []
     for item in links:
-        url = item.get("url")
-        if not url: continue
+        url = item.get("url") or item.get("link") or item.get("jd_url")
+        if not url:
+            continue
         logging.info("Fetching JD: %s", url)
         try:
             jd_text = fetch_jd_plaintext(url)
@@ -368,25 +379,18 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
             logging.warning("Failed to fetch %s: %s", url, e)
             continue
 
-        # LLM structured suggestions (skills + weaves)
         job_title = item.get("title") or item.get("job_title") or ""
         company   = item.get("company") or item.get("org") or ""
         plan = call_llm_weaves(resume_plain, jd_text, job_title, company)
 
-        # Apply to a fresh copy of the resume per job
         doc = Document(resume_path)
-        before_map = [p.text for p in doc.paragraphs]
         changes: List[Dict[str, Any]] = []
 
-        # Pass A: skills additions
         if inject_skills(doc, plan.get("skills_additions") or []):
             changes.append(make_change_log_item("Skills/Technical Skills", "", "", "Reordered/enriched inline skills list."))
 
-        # Pass B: weave phrases into bullets
         weave_count = apply_weaves(doc, plan.get("weaves") or [])
         if weave_count == 0:
-            # fallback: append one short phrase to first two shortest bullets
-            # choose a safe top term from skills_additions or JD token freq
             candidates = plan.get("skills_additions") or []
             top_phrase = canon(candidates[0]) if candidates else ""
             secs = find_section_ranges(doc, ["Work Experience","Professional Experience","Experience"])
@@ -405,17 +409,14 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
                                                             "Fallback appender to ensure visible tailoring.",
                                                             inserted=f"Using {top_phrase}."))
 
-        # Always save JD text for inspection
         slug = slugify(job_title or url)[:80]
         jd_txt_path = out_changes / f"{slug}.jd.txt"
         jd_txt_path.write_text(jd_text, encoding="utf-8")
 
-        # Save resume
         h = hashlib.sha1((url + str(time.time())).encode()).hexdigest()[:8]
         out_docx = out_resumes / f"{slug}_{h}.docx"
         doc.save(out_docx.as_posix())
 
-        # Write change log JSON (basic — you can expand with per-paragraph diffs)
         changes_path = out_changes / f"{slug}_{h}.json"
         changes_path.write_text(json.dumps(changes, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -429,7 +430,6 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
             "ts": int(time.time())
         })
 
-    # Write drafts index for UI
     index_path = out_root / "drafts_index.json"
     index_path.write_text(json.dumps(index_items, ensure_ascii=False, indent=2), encoding="utf-8")
     logging.info("Wrote index: %s", index_path)
