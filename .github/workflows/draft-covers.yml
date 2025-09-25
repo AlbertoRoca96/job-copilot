@@ -10,7 +10,7 @@ on:
         description: "job_requests id"
         required: true
       top:
-        description: "Number of top roles to draft (kept for compatibility; not used by resume CLI)"
+        description: "Top roles to draft from Your Shortlist"
         required: false
         default: "5"
 
@@ -27,9 +27,7 @@ env:
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
   USE_LLM: "1"
-  # Force inline keyword injection; never add fabricated new sentences (carried through for compatibility)
-  TAILOR_INLINE_ONLY: "1"
-  # Model for LLM suggestions (used by src/tailor/resume.py)
+  TAILOR_INLINE_ONLY: "1"   # keep for compatibility; resume.py avoids fabrication anyway
   OPENAI_MODEL: gpt-4o-mini
 
 jobs:
@@ -104,7 +102,33 @@ jobs:
             "${SUPABASE_URL%/}/storage/v1/object/outputs/${{ github.event.inputs.user_id }}/scores.json" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-            -o docs/data/scores.json || echo "No scores.json found; proceeding"
+            -o docs/data/scores.json || echo "No scores.json found; proceeding with repo file if present"
+
+      - name: Ensure shortlist exists (repo or downloaded)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f docs/data/scores.json || { echo "[]">docs/data/scores.json; echo "Created empty docs/data/scores.json"; }
+
+      - name: Build TOP-N shortlist (Your Shortlist → top by score)
+        shell: bash
+        run: |
+          set -euo pipefail
+          N="${{ github.event.inputs.top }}"
+          SRC="docs/data/scores.json"
+          DST="docs/data/scores.top.json"
+          # Take the top N by .score (desc). sort_by + reverse + slice is canonical.
+          jq --argjson n "$N" '
+            def topn(a): (a | sort_by((.score // 0)) | reverse | .[:$n]);
+            if type == "array"      then topn(.)
+            elif has("jobs")  then topn(.jobs)
+            elif has("items") then topn(.items)
+            elif has("links") then topn(.links)
+            else [] end
+          ' "$SRC" > "$DST"
+          echo "Selected TOP-$N from Your Shortlist:"
+          jq -r '.[] | "\(.score // 0)\t\(.title // "")\t\(.company // "")\t\(.url // .link // .jd_url // "")"' "$DST" || true
+          if [ ! -s "$DST" ]; then cp "$SRC" "$DST"; fi
 
       - name: Fetch user's latest resume
         shell: bash
@@ -125,9 +149,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Use your new CLI that reads links -> scrapes JD -> injects -> writes docs/<uid>/*
+          # Feed only the TOP-N shortlist into your CLI
           python src/tailor/resume.py \
-            --links docs/data/scores.json \
+            --links docs/data/scores.top.json \
             --resume assets/current.docx \
             --out docs \
             --user "${{ github.event.inputs.user_id }}"
@@ -220,7 +244,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -f docs/data/drafts_index.json || echo '{"outbox":[],"resumes":[],"changes":[]}' > docs/data/drafts_index.json
           key="outputs/${{ github.event.inputs.user_id }}/drafts_index.json"
           curl -sS -X POST \
             "${SUPABASE_URL%/}/storage/v1/object/$key" \
