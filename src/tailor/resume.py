@@ -10,21 +10,32 @@ from docx.text.run import Run
 # ----------------------- config -----------------------
 UA = "job-copilot/1.0 (+https://github.com/AlbertoRoca96/job-copilot)"
 TIMEOUT = (10, 20)  # connect, read
-MAX_JD_CHARS = 100_000
+MAX_JD_CHARS = 120_000
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # canonical casing map
 CANON = {
+    # editorial / comms / general office
     "ap style": "AP style", "cms": "CMS", "pos": "POS",
     "crm": "CRM", "microsoft office": "Microsoft Office",
     "word": "Word", "excel": "Excel", "powerpoint": "PowerPoint",
     "outlook": "Outlook", "adobe": "Adobe", "photoshop": "Photoshop",
     "illustrator": "Illustrator", "indesign": "InDesign",
+    "social media": "Social media", "content calendar": "Content calendar",
+    "copyediting": "Copyediting", "fact checking": "Fact-checking",
+    "proofreading": "Proofreading",
+    # tech common
     "sql": "SQL", "supabase": "Supabase", "github actions": "GitHub Actions",
     "python": "Python", "javascript": "JavaScript"
 }
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{1,}")
+
+STOP = {
+    "the","a","an","and","or","to","of","for","in","on","at","by","with","from",
+    "is","are","was","were","be","been","as","that","this","these","those","it",
+    "you","your","we","our","their","they","he","she","them","i","not"
+}
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
@@ -38,14 +49,18 @@ def canon(s: str) -> str:
         out = re.sub(rf"\b{re.escape(k)}\b", CANON[k], out, flags=re.IGNORECASE)
     return out
 
-def tokens(s: str) -> Set[str]:
-    return set(WORD_RE.findall((s or "").lower()))
+def tokens(s: str) -> List[str]:
+    return WORD_RE.findall((s or "").lower())
+
+def token_set(s: str) -> Set[str]:
+    return set(tokens(s))
 
 def slugify(s: str) -> str:
     s = (s or "").lower()
     s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
     return s or "job"
 
+# ----------------------- shortlist / links -----------------------
 def read_links(path: str) -> List[Dict[str, Any]]:
     p = pathlib.Path(path)
     if not p.exists():
@@ -81,92 +96,125 @@ def read_links(path: str) -> List[Dict[str, Any]]:
             out.append({"url": line})
     return out
 
-# ------------ JD fetch (with LinkedIn fallbacks to description/meta) ------------
-def _extract_linkedin_text(html: str, soup: BeautifulSoup) -> Optional[str]:
-    # try JSON-LD description
-    for tag in soup.find_all("script", {"type": "application/ld+json"}):
-        try:
-            obj = json.loads(tag.string or "")
-            if isinstance(obj, dict):
-                desc = obj.get("description")
-                if isinstance(desc, str) and len(desc) > 60:
-                    return normalize_ws(BeautifulSoup(desc, "html.parser").get_text(" ", strip=True))
-        except Exception:
-            continue
-    # meta description
-    meta = soup.find("meta", {"name": "description"}) or soup.find("meta", {"property": "og:description"})
-    if meta and meta.get("content"):
-        return normalize_ws(meta["content"])
-    return None
-
+# ----------------------- JD fetch -----------------------
 def fetch_jd_plaintext(url: str) -> str:
-    resp = requests.get(url, headers={"User-Agent": UA}, timeout=TIMEOUT)
+    """
+    Fetch HTML and collapse to readable text. Also harvest <meta name="description"> and og:description
+    because some sites (e.g., LinkedIn) return thin/blocked pages to unauth'd clients.
+    """
+    resp = requests.get(url, headers={
+        "User-Agent": UA,
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.8",
+    }, timeout=TIMEOUT, allow_redirects=True)
     resp.raise_for_status()
     html = resp.text
     soup = BeautifulSoup(html, "html.parser")
+
     # strip obvious cruft
     for tag in soup(["script", "style", "noscript", "svg", "img"]):
         tag.decompose()
     for sel in ["header", "footer", "nav"]:
         for tag in soup.select(sel):
             tag.decompose()
-    text = soup.get_text(separator=" ", strip=True)
-    text = normalize_ws(text)
-    # LinkedIn login walls: fall back to description if body text looks useless
-    if ("linkedin.com" in url) and (len(text) < 400):
-        alt = _extract_linkedin_text(html, soup)
-        if alt: text = alt
-    return text[:MAX_JD_CHARS]
 
-# ----------------------- LLM (Chat Completions + tool calling) -----------------------
+    meta_bits = []
+    for m in soup.find_all("meta", attrs={"name": "description"}):
+        c = (m.get("content") or "").strip()
+        if c: meta_bits.append(c)
+    for m in soup.find_all("meta", attrs={"property": "og:description"}):
+        c = (m.get("content") or "").strip()
+        if c: meta_bits.append(c)
+
+    text = soup.get_text(separator=" ", strip=True)
+    blob = " ".join([text] + meta_bits)
+    blob = normalize_ws(blob)
+    return blob[:MAX_JD_CHARS]
+
+# ----------------------- local keyword miner (fallback) -----------------------
+PHRASES = [
+    # editorial / media
+    "ap style", "cms", "content calendar", "social media", "copyediting",
+    "fact checking", "proofreading", "editorial calendar", "pitching",
+    "seo", "analytics", "style guide",
+    # admin / ops
+    "calendar management", "travel arrangements", "expense reports",
+    "meeting notes", "inbox management", "crm", "data entry",
+    # retail / cx
+    "pos", "inventory", "front of house", "customer service",
+    # tools
+    "microsoft office", "excel", "powerpoint", "outlook", "adobe",
+    "photoshop", "illustrator", "indesign"
+]
+
+def mine_plan_from_text(resume_text: str, jd_text: str) -> Dict[str, Any]:
+    """
+    Deterministic plan when the LLM returns little or JD is thin.
+    - skills_additions: top phrases present in JD but not obviously present in resume skills.
+    - weaves: short prepositional phrases targeted at Work Experience.
+    """
+    jd_low = (jd_text or "").lower()
+    res_low = (resume_text or "").lower()
+
+    hits = []
+    for ph in PHRASES:
+        if ph in jd_low:
+            hits.append(ph)
+
+    # dedupe, respect order
+    seen, ordered = set(), []
+    for h in hits:
+        if h not in seen:
+            ordered.append(h)
+            seen.add(h)
+
+    # skills_additions (prefer phrases not already present)
+    skills_additions = [canon(h) for h in ordered if h not in res_low][:6]
+
+    # build 2–4 weaves
+    weave_pool = []
+    if "ap style" in jd_low or "cms" in jd_low:
+        weave_pool.append("to AP style and CMS guidelines")
+    if "social media" in jd_low:
+        weave_pool.append("via social media scheduling and analytics")
+    if "crm" in jd_low:
+        weave_pool.append("using CRM tracking and follow-ups")
+    if "excel" in jd_low or "spreadsheet" in jd_low:
+        weave_pool.append("using Excel for tracking and reporting")
+    if "pos" in jd_low or "inventory" in jd_low:
+        weave_pool.append("via POS and inventory checks")
+
+    weaves = []
+    for phrase in weave_pool[:4]:
+        weaves.append({"section": "Work Experience", "cue": "", "phrase": phrase})
+
+    return {"skills_additions": skills_additions, "weaves": weaves}
+
+# ----------------------- LLM (chat completions JSON mode) -----------------------
 def call_llm_weaves(resume_text: str, jd_text: str, job_title: str = "", company: str = "") -> Dict[str, Any]:
     """
-    Return:
-      { "skills_additions": [str], "weaves": [ {section, cue, phrase} ] }
+    Ask the model for structured suggestions:
+      - skills_additions: list[str]
+      - weaves: list[{cue, phrase, section}] where phrase is <= 18 words, factual & ATS-relevant
+
+    If the model is unavailable or returns empty, fall back to the deterministic miner above.
     """
     if not OPENAI_API_KEY:
-        logging.warning("OPENAI_API_KEY not set; returning empty LLM suggestions.")
-        return {"skills_additions": [], "weaves": []}
+        logging.warning("OPENAI_API_KEY not set; using deterministic fallback plan.")
+        return mine_plan_from_text(resume_text, jd_text)
 
-    from openai import OpenAI
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
 
-    tool = {
-        "type": "function",
-        "function": {
-            "name": "TailorPlan",
-            "description": "Return ATS-safe additions for Skills list, and short inline weave phrases per section.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "skills_additions": {"type": "array", "items": {"type": "string"}},
-                    "weaves": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "section": {"type": "string", "enum": ["Work Experience", "Projects"]},
-                                "cue": {"type": "string"},
-                                "phrase": {"type": "string", "maxLength": 120}
-                            },
-                            "required": ["section", "cue", "phrase"],
-                            "additionalProperties": False
-                        }
-                    }
-                },
-                "required": ["skills_additions", "weaves"],
-                "additionalProperties": False
-            }
-        }
-    }
+        sys_prompt = (
+            "You inject ATS-relevant keywords into an existing resume without fabricating achievements. "
+            "Prefer weaving short prepositional phrases (e.g., 'to AP style and CMS guidelines', "
+            "'via POS and inventory checks') into bullets that already talk about the task. "
+            "Keep phrases <= 18 words. Avoid buzzword stuffing. Output JSON only."
+        )
 
-    sys_prompt = (
-        "You inject ATS-relevant keywords into an existing resume without fabricating achievements. "
-        "Prefer weaving short prepositional phrases (e.g., 'to AP style and CMS guidelines', 'via POS and inventory checks') "
-        "into bullets that already talk about the task. Keep phrases <= 18 words. Avoid buzzword stuffing."
-    )
-
-    user_prompt = f"""Job title: {job_title or 'N/A'}
+        user_prompt = f"""Job title: {job_title or 'N/A'}
 Company: {company or 'N/A'}
 
 === Job Description (plain text) ===
@@ -175,34 +223,54 @@ Company: {company or 'N/A'}
 === Resume (plain text) ===
 {resume_text}
 
-Return JSON with:
-- skills_additions: short terms for the Skills list that appear in the JD (or synonyms), truthful w.r.t. resume.
-- weaves: small phrases to inject inline into existing bullets; include a minimal 'cue' substring to locate the bullet.
-"""
+Return JSON with exactly this shape:
+{{
+  "skills_additions": ["AP style", "CMS", "Excel"],
+  "weaves": [
+    {{"section":"Work Experience","cue":"edited","phrase":"to AP style and CMS guidelines"}},
+    {{"section":"Projects","cue":"wrote","phrase":"with SEO keyword research and analytics"}}
+  ]
+}}"""
 
-    try:
+        # Chat Completions JSON mode (supported); Responses API param mismatch previously caused the error.
+        # Ref: response_format JSON mode / Structured Outputs in Completions. 
+        # (We still add a robust fallback below if parse fails.)  # noqa
         resp = client.chat.completions.create(
             model=MODEL,
-            messages=[
-                {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            tools=[tool],
-            tool_choice={"type": "function", "function": {"name": "TailorPlan"}},
+            messages=[{"role": "system", "content": sys_prompt},
+                      {"role": "user", "content": user_prompt}],
+            response_format={"type": "json_object"},
             temperature=0.2,
         )
-        msg = resp.choices[0].message
-        if getattr(msg, "tool_calls", None):
-            args = msg.tool_calls[0].function.arguments
-            return json.loads(args)
-        if msg.content:
-            return json.loads(msg.content)
+        content = resp.choices[0].message.content or "{}"
+        plan = json.loads(content)
     except Exception as e:
-        logging.error("LLM tool-call failed: %s", e)
+        logging.warning("LLM call failed (%s). Falling back to deterministic miner.", e)
+        plan = {}
 
-    return {"skills_additions": [], "weaves": []}
+    # robust fallback / sanitation
+    if not isinstance(plan, dict):
+        plan = {}
+    skills_additions = plan.get("skills_additions") or []
+    weaves = plan.get("weaves") or []
+    if (not skills_additions) and (not weaves):
+        plan = mine_plan_from_text(resume_text, jd_text)
+    else:
+        # sanitize casing and lengths
+        skills_additions = [canon(x) for x in skills_additions if isinstance(x, str) and x.strip()]
+        cleaned_weaves = []
+        for w in weaves:
+            if not isinstance(w, dict): continue
+            phrase = canon((w.get("phrase") or "").strip())
+            if not phrase or len(phrase.split()) > 18: continue
+            section = (w.get("section") or "Work Experience").strip()
+            cue = (w.get("cue") or "").strip()
+            cleaned_weaves.append({"section": section, "cue": cue, "phrase": phrase})
+        plan = {"skills_additions": skills_additions[:8], "weaves": cleaned_weaves[:6]}
 
-# ----------------------- .docx editing -----------------------
+    return plan
+
+# ----------------------- .docx helpers -----------------------
 def paragraph_is_bullet(p: Paragraph) -> bool:
     try:
         name = (getattr(p.style, "name", "") or "").lower()
@@ -245,7 +313,7 @@ def copy_format(src: Run, dst: Run):
 
 def set_text_preserve_style(p: Paragraph, text: str):
     base = dominant_run(p)
-    p.text = text
+    p.text = text  # replaces runs with one run (paragraph style preserved)
     if base and p.runs:
         copy_format(base, p.runs[0])
 
@@ -253,45 +321,20 @@ def first_sentence_split(text: str) -> int:
     m = re.search(r'([.!?])(\s|$)', text)
     return (m.start(1)+1) if m else len(text)
 
-def weave_into_paragraph(p: Paragraph, phrase: str) -> bool:
+def weave_into_paragraph(p: Paragraph, phrase: str) -> Tuple[bool, str, str, str]:
     phrase = canon((phrase or "").strip().rstrip("."))
-    if not phrase: return False
+    if not phrase:
+        return (False, p.text, p.text, "")
     txt = "".join(r.text for r in p.runs) if p.runs else p.text
+    before = txt
     insert_at = first_sentence_split(txt)
     glue = " " if insert_at and insert_at <= len(txt) and txt[insert_at-1].isalnum() else ""
-    new_text = txt[:insert_at] + f"{glue} using {phrase}" + txt[insert_at:]
+    inserted = f"{glue} using {phrase}"
+    new_text = txt[:insert_at] + inserted + txt[insert_at:]
     set_text_preserve_style(p, new_text)
-    return True
+    return (True, before, p.text, inserted.strip())
 
-def inject_skills(doc: Document, additions: List[str]) -> bool:
-    if not additions: return False
-    additions = [canon(a) for a in additions if a]
-    ranges = find_section_ranges(doc, ["Technical Skills", "Skills", "Core Skills"])
-    if not ranges: return False
-    key = next(iter([k for k in ("technical skills","skills","core skills") if k in ranges]), None)
-    if not key: return False
-    s, e = ranges[key]
-    for i in range(s, e):
-        p = doc.paragraphs[i]
-        t = normalize_ws(p.text)
-        if not t or paragraph_is_bullet(p) or ("," not in t and ";" not in t):
-            continue
-        present = tokens(t)
-        new = [a for a in additions if a.lower() not in present]
-        if not new: return False
-        m = re.search(r"\(([^)]+)\)", t)
-        if m:
-            inside = m.group(1).strip()
-            sep = ", " if inside and not inside.endswith(",") else ""
-            after = t[:m.start(1)] + inside + f"{sep}{', '.join(new)}" + t[m.end(1):]
-        else:
-            t2 = t[:-1] if t.endswith(".") else t
-            sep = ", " if ("," in t2 or ";" in t2) and not t2.endswith(",") else (", " if ("," in t2 or ";" in t2) else ": ")
-            after = t2 + f"{sep}{', '.join(new)}"
-        set_text_preserve_style(p, after)
-        return True
-    return False
-
+# ----------------------- section find -----------------------
 def find_section_ranges(doc: Document, titles: List[str]) -> Dict[str, Tuple[int,int]]:
     wants = [normalize_ws(t).lower() for t in titles]
     hits: Dict[str,int] = {}
@@ -305,11 +348,62 @@ def find_section_ranges(doc: Document, titles: List[str]) -> Dict[str, Tuple[int
         ranges[k]=(start,end)
     return ranges
 
-def apply_weaves(doc: Document, weaves: List[Dict[str,str]]) -> int:
-    changed = 0
-    if not weaves: return changed
+# ----------------------- skill list injection -----------------------
+def inject_skills(doc: Document, additions: List[str]) -> Optional[Dict[str,str]]:
+    if not additions: 
+        return None
+    additions = [canon(a) for a in additions if a]
+    ranges = find_section_ranges(doc, ["Technical Skills", "Skills", "Core Skills"])
+    if not ranges: 
+        return None
+
+    key = next(iter([k for k in ("technical skills","skills","core skills") if k in ranges]), None)
+    if not key: 
+        return None
+    s, e = ranges[key]
+    for i in range(s, e):
+        p = doc.paragraphs[i]
+        t = normalize_ws(p.text)
+        if not t or paragraph_is_bullet(p):
+            continue
+        if "," not in t and ";" not in t:
+            continue
+        present = token_set(t)
+        new = [a for a in additions if a.lower() not in present]
+        if not new: 
+            return None
+        m = re.search(r"\(([^)]+)\)", t)
+        before = p.text
+        if m:
+            inside = m.group(1).strip()
+            sep = ", " if inside and not inside.endswith(",") else ""
+            after = t[:m.start(1)] + inside + f"{sep}{', '.join(new)}" + t[m.end(1):]
+        else:
+            t2 = t[:-1] if t.endswith(".") else t
+            # choose a separator: if list-y already, append; else create a colon list
+            if ("," in t2 or ";" in t2):
+                sep = ", " if not t2.endswith(",") else ""
+                after = t2 + f"{sep}{', '.join(new)}"
+            else:
+                after = t2 + f": {', '.join(new)}"
+        set_text_preserve_style(p, after)
+        return {
+            "section": "Skills/Technical Skills",
+            "before": before,
+            "after": p.text,
+            "inserted": None,
+            "reason": "Reordered/enriched inline skills list."
+        }
+    return None
+
+# ----------------------- weave application -----------------------
+def apply_weaves(doc: Document, weaves: List[Dict[str,str]]) -> List[Dict[str,str]]:
+    changes: List[Dict[str,str]] = []
+    if not weaves: 
+        return changes
     secs = find_section_ranges(doc, ["Work Experience","Professional Experience","Experience",
                                      "Projects","Project Experience","Side Projects"])
+
     def para_indices(keys: List[str]) -> List[int]:
         for k in keys:
             lk = k.lower()
@@ -317,6 +411,7 @@ def apply_weaves(doc: Document, weaves: List[Dict[str,str]]) -> int:
                 s,e = secs[lk]
                 return list(range(s,e))
         return []
+
     work_idxs = para_indices(["Work Experience","Professional Experience","Experience"])
     proj_idxs = para_indices(["Projects","Project Experience","Side Projects"])
 
@@ -325,12 +420,14 @@ def apply_weaves(doc: Document, weaves: List[Dict[str,str]]) -> int:
         cue = (w.get("cue") or "").lower().strip()
         phrase = w.get("phrase") or ""
         idxs = work_idxs if section.startswith("Work") else proj_idxs
-        best = None; best_ratio = 0.0
+        best = None; best_ratio = -1.0
         for i in idxs:
             p = doc.paragraphs[i]
-            if not paragraph_is_bullet(p): continue
+            if not paragraph_is_bullet(p): 
+                continue
             t = normalize_ws(p.text).lower()
-            if not cue: best = i; break
+            if not cue:
+                best = i; break
             if cue in t:
                 best = i; break
             import difflib
@@ -338,20 +435,18 @@ def apply_weaves(doc: Document, weaves: List[Dict[str,str]]) -> int:
             if r > best_ratio:
                 best_ratio, best = r, i
         if best is not None:
-            if weave_into_paragraph(doc.paragraphs[best], phrase):
-                changed += 1
-    return changed
+            ok, before, after, inserted = weave_into_paragraph(doc.paragraphs[best], phrase)
+            if ok:
+                changes.append({
+                    "section": "Work Experience" if section.startswith("Work") else "Projects",
+                    "before": before,
+                    "after": after,
+                    "inserted": inserted,
+                    "reason": "Injected inline JD keyword phrase."
+                })
+    return changes
 
 # ----------------------- pipeline -----------------------
-def make_change_log_item(section: str, before: str, after: str, reason: str, inserted: Optional[str] = None):
-    return {
-        "anchor_section": section,
-        "original_paragraph_text": before,
-        "modified_paragraph_text": after,
-        "inserted_sentence": inserted,
-        "reason": reason
-    }
-
 def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = "user") -> None:
     out_root = pathlib.Path(out_prefix).joinpath(uid)
     out_resumes = out_root / "resumes"
@@ -369,8 +464,8 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
 
     index_items = []
     for item in links:
-        url = item.get("url") or item.get("link") or item.get("jd_url")
-        if not url:
+        url = item.get("url")
+        if not url: 
             continue
         logging.info("Fetching JD: %s", url)
         try:
@@ -383,19 +478,40 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
         company   = item.get("company") or item.get("org") or ""
         plan = call_llm_weaves(resume_plain, jd_text, job_title, company)
 
+        # Apply to a fresh copy of the resume per job
         doc = Document(resume_path)
         changes: List[Dict[str, Any]] = []
 
-        if inject_skills(doc, plan.get("skills_additions") or []):
-            changes.append(make_change_log_item("Skills/Technical Skills", "", "", "Reordered/enriched inline skills list."))
+        # Pass A: skills additions
+        skills_change = inject_skills(doc, plan.get("skills_additions") or [])
+        if skills_change:
+            changes.append({
+                "anchor_section": skills_change["section"],
+                "original_paragraph_text": skills_change["before"],
+                "modified_paragraph_text": skills_change["after"],
+                "inserted_sentence": None,
+                "reason": skills_change["reason"]
+            })
 
-        weave_count = apply_weaves(doc, plan.get("weaves") or [])
-        if weave_count == 0:
-            candidates = plan.get("skills_additions") or []
-            top_phrase = canon(candidates[0]) if candidates else ""
+        # Pass B: weave phrases into bullets
+        weave_changes = apply_weaves(doc, plan.get("weaves") or [])
+        for ch in weave_changes:
+            changes.append({
+                "anchor_section": ch["section"],
+                "original_paragraph_text": ch["before"],
+                "modified_paragraph_text": ch["after"],
+                "inserted_sentence": ch["inserted"],
+                "reason": ch["reason"]
+            })
+
+        # Pass C: guaranteed fallback if still nothing injected into bullets
+        if not weave_changes:
+            # choose a safe top term
+            cands = (plan.get("skills_additions") or []) + [w["phrase"] for w in (plan.get("weaves") or []) if w.get("phrase")]
+            top_phrase = canon(cands[0]) if cands else ""
             secs = find_section_ranges(doc, ["Work Experience","Professional Experience","Experience"])
             chosen_key = next(iter([k for k in ("work experience","professional experience","experience") if k in secs]), None)
-            if chosen_key:
+            if chosen_key and top_phrase:
                 s,e = secs[chosen_key]
                 bullets = [(i, len(doc.paragraphs[i].text)) for i in range(s,e) if paragraph_is_bullet(doc.paragraphs[i])]
                 bullets = [b for b in bullets if b[1] < 220]
@@ -403,20 +519,26 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
                 for idx,_ in bullets[:2]:
                     p = doc.paragraphs[idx]
                     before = p.text
-                    if top_phrase:
-                        set_text_preserve_style(p, before.rstrip().rstrip(".") + f" Using {top_phrase}.")
-                        changes.append(make_change_log_item("Work Experience", before, p.text,
-                                                            "Fallback appender to ensure visible tailoring.",
-                                                            inserted=f"Using {top_phrase}."))
+                    set_text_preserve_style(p, before.rstrip().rstrip(".") + f" Using {top_phrase}.")
+                    changes.append({
+                        "anchor_section": "Work Experience",
+                        "original_paragraph_text": before,
+                        "modified_paragraph_text": p.text,
+                        "inserted_sentence": f"Using {top_phrase}.",
+                        "reason": "Fallback appender to ensure visible tailoring."
+                    })
 
+        # Always save JD text for inspection
         slug = slugify(job_title or url)[:80]
         jd_txt_path = out_changes / f"{slug}.jd.txt"
         jd_txt_path.write_text(jd_text, encoding="utf-8")
 
+        # Save resume
         h = hashlib.sha1((url + str(time.time())).encode()).hexdigest()[:8]
         out_docx = out_resumes / f"{slug}_{h}.docx"
         doc.save(out_docx.as_posix())
 
+        # Write change log JSON (now includes paragraph-level before/after)
         changes_path = out_changes / f"{slug}_{h}.json"
         changes_path.write_text(json.dumps(changes, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -430,13 +552,14 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
             "ts": int(time.time())
         })
 
+    # Write drafts index for UI
     index_path = out_root / "drafts_index.json"
     index_path.write_text(json.dumps(index_items, ensure_ascii=False, indent=2), encoding="utf-8")
     logging.info("Wrote index: %s", index_path)
 
 # ----------------------- CLI -----------------------
 def main():
-    ap = argparse.ArgumentParser(description="Tailor resume from JD links with LLM-assisted weaving.")
+    ap = argparse.ArgumentParser(description="Tailor resume from JD links with LLM-assisted weaving (+ deterministic fallback).")
     ap.add_argument("--links", required=True, help="Path to JSON or .txt containing JD links.")
     ap.add_argument("--resume", required=True, help="Path to source .docx resume.")
     ap.add_argument("--out", required=True, help="Output prefix (e.g., outputs).")
