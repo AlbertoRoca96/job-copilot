@@ -10,7 +10,7 @@ on:
         description: "job_requests id"
         required: true
       top:
-        description: "Number of top roles to draft"
+        description: "Number of top roles to draft (kept for compatibility; not used by resume CLI)"
         required: false
         default: "5"
 
@@ -27,8 +27,10 @@ env:
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
   USE_LLM: "1"
-  # Force inline keyword injection; never add fabricated new sentences
+  # Force inline keyword injection; never add fabricated new sentences (carried through for compatibility)
   TAILOR_INLINE_ONLY: "1"
+  # Model for LLM suggestions (used by src/tailor/resume.py)
+  OPENAI_MODEL: gpt-4o-mini
 
 jobs:
   build:
@@ -50,7 +52,8 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          pip install -r requirements.txt python-docx requests pyyaml beautifulsoup4 jinja2
+          # requirements.txt + explicit libs used by src/tailor/resume.py
+          pip install -r requirements.txt python-docx requests pyyaml beautifulsoup4 jinja2 openai
 
       - name: Mark job_requests running
         shell: bash
@@ -70,6 +73,7 @@ jobs:
         run: |
           set -euo pipefail
           uid="${{ github.event.inputs.user_id }}"
+          # Use the Storage API multi-delete on the bucket "outputs" with prefixes
           curl -sS -X DELETE \
             "${SUPABASE_URL%/}/storage/v1/object/outputs" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
@@ -86,9 +90,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf docs/outbox docs/resumes docs/changes
+          uid="${{ github.event.inputs.user_id }}"
+          rm -rf "docs/${uid}"
           rm -f  docs/data/drafts_index.json
-          mkdir -p docs/outbox docs/resumes docs/changes docs/data
+          mkdir -p "docs/${uid}/outbox" "docs/${uid}/resumes" "docs/${uid}/changes" docs/data
 
       # -------- PIPELINE --------
       - name: Download shortlist scores.json from Storage (if present)
@@ -113,31 +118,37 @@ jobs:
           set -euo pipefail
           python scripts/parse_resume.py --user "${{ github.event.inputs.user_id }}"
 
-      - name: Run drafting (covers + tailored resumes)
+      - name: Tailor resumes from live JDs (LLM-assisted weaving)
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          USE_LLM: ${{ env.USE_LLM }}
-          TAILOR_INLINE_ONLY: ${{ env.TAILOR_INLINE_ONLY }}
+          OPENAI_MODEL: ${{ env.OPENAI_MODEL }}
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/draft_email.py --top "${{ github.event.inputs.top }}" --user "${{ github.event.inputs.user_id }}"
+          # Use your new CLI that reads links -> scrapes JD -> injects -> writes docs/<uid>/*
+          python src/tailor/resume.py \
+            --links docs/data/scores.json \
+            --resume assets/current.docx \
+            --out docs \
+            --user "${{ github.event.inputs.user_id }}"
 
-      - name: Build drafts_index.json (only uploaded file types)
+      - name: Build drafts_index.json (based on docs/<uid>/*)
         shell: bash
         run: |
           set -euo pipefail
+          uid="${{ github.event.inputs.user_id }}"
+          base="docs/${uid}"
           mkdir -p docs/data
           shopt -s nullglob
 
           OUTBOX_LIST=()
-          for f in docs/outbox/*.md; do OUTBOX_LIST+=("$(basename "$f")"); done
+          for f in "$base/outbox/"*.md; do OUTBOX_LIST+=("$(basename "$f")"); done
 
           RESUME_LIST=()
-          for f in docs/resumes/*.docx; do RESUME_LIST+=("$(basename "$f")"); done
+          for f in "$base/resumes/"*.docx; do RESUME_LIST+=("$(basename "$f")"); done
 
           CHANGES_LIST=()
-          for f in docs/changes/*.json; do CHANGES_LIST+=("$(basename "$f")"); done
+          for f in "$base/changes/"*.json; do CHANGES_LIST+=("$(basename "$f")"); done
 
           jq -n \
             --argjson outbox  "$(printf '%s\n' "${OUTBOX_LIST[@]:-}"  | jq -R . | jq -s .)" \
@@ -155,9 +166,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          uid="${{ github.event.inputs.user_id }}"
           shopt -s nullglob
-          for f in docs/outbox/*.md; do
-            key="outputs/${{ github.event.inputs.user_id }}/outbox/$(basename "$f")"
+          for f in "docs/${uid}/outbox/"*.md; do
+            key="outputs/${uid}/outbox/$(basename "$f")"
             curl -sS -X POST \
               "${SUPABASE_URL%/}/storage/v1/object/$key" \
               -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
@@ -172,9 +184,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          uid="${{ github.event.inputs.user_id }}"
           shopt -s nullglob
-          for f in docs/resumes/*.docx; do
-            key="outputs/${{ github.event.inputs.user_id }}/resumes/$(basename "$f")"
+          for f in "docs/${uid}/resumes/"*.docx; do
+            key="outputs/${uid}/resumes/$(basename "$f")"
             curl -sS -X POST \
               "${SUPABASE_URL%/}/storage/v1/object/$key" \
               -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
@@ -189,9 +202,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          uid="${{ github.event.inputs.user_id }}"
           shopt -s nullglob
-          for f in docs/changes/*.json; do
-            key="outputs/${{ github.event.inputs.user_id }}/changes/$(basename "$f")"
+          for f in "docs/${uid}/changes/"*.json; do
+            key="outputs/${uid}/changes/$(basename "$f")"
             curl -sS -X POST \
               "${SUPABASE_URL%/}/storage/v1/object/$key" \
               -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
