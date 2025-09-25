@@ -1,4 +1,3 @@
-# scripts/parse_resume.py
 import os, re, json, requests, argparse
 from docx import Document
 
@@ -15,7 +14,7 @@ KNOWN_SKILLS = {
 }
 
 def tokens(text: str):
-  return set(w.lower() for w in re.findall(r"[A-Za-z][A-Za-z0-9+.-]{1,}", text))
+  return set(w.lower() for w in re.findall(r"[A-Za-z][A-Za-z0-9+.-]{1,}", text or ""))
 
 def extract(docx_path: str):
   doc = Document(docx_path)
@@ -28,16 +27,16 @@ def extract(docx_path: str):
   skills = sorted([s for s in KNOWN_SKILLS if any(t in s or s in t for t in toks)])
   name = None
   for p in doc.paragraphs[:8]:
-    t = p.text.strip()
+    t = (p.text or "").strip()
     if t and len(t.split())<=4 and not EMAIL_RE.search(t) and not PHONE_RE.search(t):
       name = t; break
   return {"full_name": name, "email": email, "phone": phone, "skills": skills}
 
-def upsert_profile(user_id: str, profile: dict):
-  profile["id"] = user_id
-  url = f"{SUPABASE_URL}/rest/v1/profiles"
-  r = requests.post(url,
-    headers={"Content-Type":"application/json","apikey":SRK,"Authorization":f"Bearer {SRK}","Prefer":"resolution=merge-duplicates"},
+def patch_profile(user_id: str, profile: dict):
+  # Replace only the fields we set (arrays are replaced entirely)
+  url = f"{SUPABASE_URL}/rest/v1/profiles?id=eq.{user_id}"
+  r = requests.patch(url,
+    headers={"Content-Type":"application/json","apikey":SRK,"Authorization":f"Bearer {SRK}","Prefer":"return=minimal"},
     data=json.dumps(profile), timeout=30)
   r.raise_for_status()
 
@@ -46,11 +45,11 @@ def main(user_id: str):
   if not os.path.exists(path):
     print("No resume at", path); return
   prof = extract(path)
-  prof = {k:v for k,v in prof.items() if v}
+  prof = {k:v for k,v in prof.items() if v is not None}
   if not prof:
     print("No fields extracted."); return
-  upsert_profile(user_id, prof)
-  print("Upserted profile with extracted fields.")
+  patch_profile(user_id, prof)
+  print("Patched profile (skills/name/email/phone replaced).")
 
 if __name__ == "__main__":
   ap = argparse.ArgumentParser(); ap.add_argument("--user", required=True)
