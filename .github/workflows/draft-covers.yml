@@ -27,7 +27,7 @@ env:
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
   USE_LLM: "1"
-  TAILOR_INLINE_ONLY: "1"   # keep for compatibility; resume.py avoids fabrication anyway
+  TAILOR_INLINE_ONLY: "1"
   OPENAI_MODEL: gpt-4o-mini
 
 jobs:
@@ -50,7 +50,6 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          # requirements.txt + explicit libs used by src/tailor/resume.py
           pip install -r requirements.txt python-docx requests pyyaml beautifulsoup4 jinja2 openai
 
       - name: Mark job_requests running
@@ -71,7 +70,6 @@ jobs:
         run: |
           set -euo pipefail
           uid="${{ github.event.inputs.user_id }}"
-          # Use the Storage API multi-delete on the bucket "outputs" with prefixes
           curl -sS -X DELETE \
             "${SUPABASE_URL%/}/storage/v1/object/outputs" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
@@ -117,7 +115,6 @@ jobs:
           N="${{ github.event.inputs.top }}"
           SRC="docs/data/scores.json"
           DST="docs/data/scores.top.json"
-          # Take the top N by .score (desc). sort_by + reverse + slice is canonical.
           jq --argjson n "$N" '
             def topn(a): (a | sort_by((.score // 0)) | reverse | .[:$n]);
             if type == "array"      then topn(.)
@@ -149,7 +146,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Feed only the TOP-N shortlist into your CLI
           python src/tailor/resume.py \
             --links docs/data/scores.top.json \
             --resume assets/current.docx \
@@ -239,11 +235,12 @@ jobs:
               --data-binary @"$f"
           done
 
-      - name: Upload drafts_index.json
+      - name: Upload drafts_index.json (always create if missing to avoid curl 26)
         if: ${{ always() }}
         shell: bash
         run: |
           set -euo pipefail
+          test -f docs/data/drafts_index.json || echo '{"outbox":[],"resumes":[],"changes":[]}' > docs/data/drafts_index.json
           key="outputs/${{ github.event.inputs.user_id }}/drafts_index.json"
           curl -sS -X POST \
             "${SUPABASE_URL%/}/storage/v1/object/$key" \
