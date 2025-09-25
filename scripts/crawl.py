@@ -1,10 +1,11 @@
+# scripts/crawl.py
 import os, sys, json, traceback, argparse, requests
-from typing import List, Dict
+from typing import List, Dict, Set
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.ingest.greenhouse import crawl_greenhouse
 from src.ingest.lever import crawl_lever
-from src.core.scoring import tokens_from_terms
+from src.core.scoring import tokens_from_terms, tokenize
 
 ROOT = os.path.dirname(__file__)
 DATA_DIR = os.path.join(ROOT, '..', 'data')
@@ -12,6 +13,13 @@ OUT_JSONL = os.path.join(DATA_DIR, 'jobs.jsonl')
 
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SRK = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+
+GENERIC_STOP: Set[str] = {
+    # too generic; causes false positives across engineering roles
+    "data","service","customer","entry","record","keeping","scheduling",
+    "microsoft","office","word","excel","powerpoint","outlook","adobe",
+    "content","writing"  # title gate will catch editor roles; these are noisy
+}
 
 def _dedup_on_url(items: List[Dict]) -> List[Dict]:
     seen = set(); out = []
@@ -35,18 +43,43 @@ def _get_boards() -> List[Dict]:
     return r.json() or []
 
 def _build_filters(profile: dict):
-    inc = set(tokens_from_terms(profile.get('target_titles'))) | set(tokens_from_terms(profile.get('skills')))
-    if not inc: inc = {"software", "engineer"}  # fallback
-    exc = {"senior","staff","principal","lead","manager","director"}  # default exclusions
-    return inc, exc
+    title_tokens = tokens_from_terms(profile.get('target_titles'))
 
-def _keep_factory(inc: set, exc: set):
+    # small synonym nudge for editorial
+    if "editor" in title_tokens:   title_tokens.add("editorial")
+    if "editorial" in title_tokens: title_tokens.add("editor")
+    if "writer" in title_tokens:   title_tokens.add("writer")  # already canonicalized
+
+    skill_tokens = tokens_from_terms(profile.get('skills')) - GENERIC_STOP
+    inc = title_tokens | skill_tokens
+
+    # default exclusions
+    exc = {"senior","staff","principal","lead","manager","director"}
+
+    # If this looks like an editorial search, exclude common engineering terms.
+    if {"editor","editorial","writer","copyeditor","copyediting"} & title_tokens:
+        exc |= {"software","engineer","developer","scientist","ml","ai"}
+
+    # Avoid old fallback to {"software","engineer"} — that was causing bad results
+    return title_tokens, inc, exc
+
+def _keep_factory(title_tokens: Set[str], inc: Set[str], exc: Set[str]):
+    """Keep a job if:
+       1) TITLE contains any target-title token (strict gate), and
+       2) title+description contains any inc token, and
+       3) none of the exclusion tokens appear.
+    """
     def _keep(j: Dict) -> bool:
         title = str(j.get('title') or '').lower()
         desc  = str(j.get('description') or '').lower()
         blob  = f"{title} {desc}"
-        if inc and not any(k in blob for k in inc): return False
-        if exc and any(k in blob for k in exc):     return False
+
+        if title_tokens and not (title_tokens & tokenize(title)):
+            return False
+        if inc and not any(k in blob for k in inc):
+            return False
+        if exc and any(k in blob for k in exc):
+            return False
         return True
     return _keep
 
@@ -54,8 +87,13 @@ def main(user_id: str):
     os.makedirs(DATA_DIR, exist_ok=True)
 
     profile = _get_profile(user_id)
-    inc, exc = _build_filters(profile)
-    keep = _keep_factory(inc, exc)
+    title_tokens, inc, exc = _build_filters(profile)
+    keep = _keep_factory(title_tokens, inc, exc)
+
+    # debug print so you can see what’s driving decisions
+    print("Title gate tokens:", sorted(list(title_tokens)))
+    print("Include tokens (sample 30):", sorted(list(inc))[:30], "…")
+    print("Exclude tokens:", sorted(list(exc)))
 
     boards = _get_boards()
     if not boards:
