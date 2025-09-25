@@ -21,7 +21,7 @@ PROFILE_YAML   = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'p
 PORTFOLIO_YAML = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'portfolio.yaml')
 TMPL_DIR       = os.path.join(os.path.dirname(__file__), '..', 'src', 'tailor', 'templates')
 
-# IMPORTANT: we prefer the user's uploaded resume fetched by scripts/fetch_user_assets.py
+# Prefer the user's uploaded resume fetched by scripts/fetch_user_assets.py
 CURRENT_RESUME = os.path.join(os.path.dirname(__file__), '..', 'assets', 'current.docx')
 FALLBACK_RESUME= os.path.join(os.path.dirname(__file__), '..', 'assets', 'Resume-2025.docx')
 
@@ -132,8 +132,7 @@ def write_profile_yaml_from_dict(d: dict):
         "target_titles": d.get("target_titles") or [],
         "locations": d.get("locations") or [],
     }
-    os.makedirs(os.path.dirname(PROFILE_YAML), exist_ok=True
-    )
+    os.makedirs(os.path.dirname(PROFILE_YAML), exist_ok=True)
     with open(PROFILE_YAML, "w") as f:
         yaml.safe_dump({k:v for k,v in y.items() if v is not None}, f)
 
@@ -159,10 +158,6 @@ def _dedup_by_url_keep_order(items):
     return out
 
 def _select_base_resume() -> str:
-    """
-    Prefer the user's uploaded resume (assets/current.docx).
-    Fallback to the repository template (assets/Resume-2025.docx).
-    """
     if os.path.isfile(CURRENT_RESUME):
         print(f"Using base resume: {CURRENT_RESUME}")
         return CURRENT_RESUME
@@ -175,7 +170,7 @@ def main(top: int, user: str | None):
     if prof:
         write_profile_yaml_from_dict(prof)
 
-    # Ensure portfolio placeholder file exists
+    # Ensure portfolio placeholder
     if not os.path.exists(PORTFOLIO_YAML):
         os.makedirs(os.path.dirname(PORTFOLIO_YAML), exist_ok=True)
         with open(PORTFOLIO_YAML, "w") as f:
@@ -188,7 +183,7 @@ def main(top: int, user: str | None):
 
     allowed = set(allowed_vocab(profile, portfolio))
 
-    # shortlist as on the dashboard
+    # shortlist from dashboard (downloaded by workflow into docs/data/scores.json)
     jobs = []
     if os.path.exists(DATA_JSON):
         with open(DATA_JSON) as f:
@@ -228,6 +223,7 @@ def main(top: int, user: str | None):
         return hashlib.sha1((s or "").encode("utf-8")).hexdigest()[:8]
 
     base_resume_path = _select_base_resume()
+    print("Base resume path resolved to:", base_resume_path)
 
     drafted_covers = drafted_resumes = 0
     llm_summary = {"used": False, "model": None, "jobs": []}
@@ -256,11 +252,9 @@ def main(top: int, user: str | None):
         # RESUME (tailor inside the doc)
         out_docx_name = f"{slug}_{jd_hash}.docx"
         out_docx = os.path.join(RESUMES_MD, out_docx_name)
-
-        # Load user's uploaded resume if present
         doc = Document(base_resume_path)
 
-        # metadata (keywords only from JD)
+        # metadata (keywords from JD)
         try:
             cp = doc.core_properties
             cp.comments = f"job-copilot:{slug}:{jd_hash}"
@@ -279,7 +273,6 @@ def main(top: int, user: str | None):
         j['resume_docx'] = f"resumes/{out_docx_name}"
         j['resume_docx_hash'] = jd_hash
 
-        # Explain changes (bullet level only)
         explain = {
             "company": j.get("company",""),
             "title": j.get("title",""),
