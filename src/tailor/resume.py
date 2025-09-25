@@ -1,84 +1,192 @@
 # src/tailor/resume.py
-import re
-import difflib
-from typing import List, Tuple, Dict, Set, Optional, Callable
+#!/usr/bin/env python3
+import os, sys, re, json, time, argparse, hashlib, pathlib, logging
+from typing import List, Dict, Any, Optional, Tuple, Set
+import requests
+from bs4 import BeautifulSoup
 from docx import Document
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 
-from .policies import load_policies  # optional fallback clauses (kept for compatibility)
+# ----------------------- config -----------------------
+UA = "job-copilot/1.0 (+https://github.com/AlbertoRoca96/job-copilot)"
+TIMEOUT = (10, 20)  # connect, read
+MAX_JD_CHARS = 100_000
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # any current small reasoning model
+USE_RESPONSES_API = True  # Structured outputs
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# --------- tokenization & casing ---------
-
+# canonical casing map
+CANON = {
+    "ap style": "AP style", "cms": "CMS", "pos": "POS",
+    "crm": "CRM", "microsoft office": "Microsoft Office",
+    "word": "Word", "excel": "Excel", "powerpoint": "PowerPoint",
+    "outlook": "Outlook", "adobe": "Adobe", "photoshop": "Photoshop",
+    "illustrator": "Illustrator", "indesign": "InDesign",
+    "sql": "SQL", "supabase": "Supabase", "github actions": "GitHub Actions",
+    "python": "Python", "javascript": "JavaScript"
+}
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{1,}")
 
-# Canonical casing for common tools/skills (extend as needed)
-CANON = {
-    # tech
-    "c++": "C++", "python": "Python", "pytorch": "PyTorch", "tensorflow": "TensorFlow",
-    "scikit-learn": "scikit-learn", "sklearn": "scikit-learn", "xgboost": "XGBoost",
-    "javascript": "JavaScript", "typescript": "TypeScript", "react": "React",
-    "react native": "React Native", "expo": "Expo", "opencv": "OpenCV", "sql": "SQL",
-    "postgres": "Postgres", "postgresql": "Postgres", "supabase": "Supabase",
-    "github actions": "GitHub Actions", "ci": "CI", "nlp": "NLP", "ml": "ML",
-    "rag": "RAG", "webassembly": "WebAssembly", "wasm": "WebAssembly",
-    # office/editorial/etc.
-    "microsoft office": "Microsoft Office", "word": "Word", "excel": "Excel",
-    "powerpoint": "PowerPoint", "outlook": "Outlook", "adobe": "Adobe",
-    "photoshop": "Photoshop", "illustrator": "Illustrator", "indesign": "InDesign",
-    "power bi": "Power BI", "cms": "CMS", "seo": "SEO",
-}
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
-def tokens(text: str) -> Set[str]:
-    return set(WORD_RE.findall((text or "").lower()))
-
+# ----------------------- utils -----------------------
 def normalize_ws(s: str) -> str:
-    return re.sub(r"\s+", " ", s or "").strip()
+    return re.sub(r"\s+", " ", (s or "")).strip()
 
-def _canon(s: str) -> str:
+def canon(s: str) -> str:
     out = s or ""
-    for k in sorted(CANON.keys(), key=len, reverse=True):
+    for k in sorted(CANON, key=len, reverse=True):
         out = re.sub(rf"\b{re.escape(k)}\b", CANON[k], out, flags=re.IGNORECASE)
     return out
 
-# --------- change log (UI-facing) ---------
+def tokens(s: str) -> Set[str]:
+    return set(WORD_RE.findall((s or "").lower()))
 
-class ChangeLog:
-    def __init__(self):
-        self.items: List[dict] = []
+def slugify(s: str) -> str:
+    s = (s or "").lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+    return s or "job"
 
-    def add(self, section: str, before: str, after: str,
-            reason: str, inserted_sentence: Optional[str] = None,
-            anchor: Optional[str] = None):
-        self.items.append({
-            "anchor_section": (anchor or section or "").strip(),
-            "original_paragraph_text": (before or "").strip(),
-            "modified_paragraph_text": (after or "").strip(),
-            "inserted_sentence": (inserted_sentence or "").strip() or None,
-            "reason": reason
-        })
+def read_links(path: str) -> List[Dict[str, Any]]:
+    p = pathlib.Path(path)
+    if not p.exists():
+        raise FileNotFoundError(path)
+    text = p.read_text(encoding="utf-8", errors="ignore")
+    # try JSON first
+    try:
+        data = json.loads(text)
+        out = []
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, str):
+                    out.append({"url": item})
+                elif isinstance(item, dict):
+                    url = item.get("url") or item.get("link") or item.get("jd_url")
+                    if url: out.append({"url": url, **{k:v for k,v in item.items() if k not in ("url","link","jd_url")}})
+        elif isinstance(data, dict):
+            # look for common containers
+            arr = data.get("jobs") or data.get("items") or data.get("links") or []
+            for item in arr:
+                if isinstance(item, str):
+                    out.append({"url": item})
+                elif isinstance(item, dict):
+                    url = item.get("url") or item.get("link") or item.get("jd_url")
+                    if url: out.append({"url": url, **{k:v for k,v in item.items() if k not in ("url","link","jd_url")}})
+        if out: return out
+    except Exception:
+        pass
+    # else treat as newline-delimited list
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line and re.match(r"^https?://", line):
+            out.append({"url": line})
+    return out
 
-# --------- document helpers ---------
+def fetch_jd_plaintext(url: str) -> str:
+    resp = requests.get(url, headers={"User-Agent": UA}, timeout=TIMEOUT)
+    resp.raise_for_status()
+    html = resp.text
+    soup = BeautifulSoup(html, "html.parser")
+    # strip obvious cruft
+    for tag in soup(["script", "style", "noscript", "svg", "img"]):
+        tag.decompose()
+    # optional: common layout tags that often contain boilerplate
+    for sel in ["header", "footer", "nav"]:
+        for tag in soup.select(sel):
+            tag.decompose()
+    text = soup.get_text(separator=" ", strip=True)  # official args used
+    return text[:MAX_JD_CHARS]
 
-def find_section_ranges(doc: Document, section_titles: List[str]) -> Dict[str, Tuple[int, int]]:
-    """Return {lower_title: (start_idx, end_idx)} (end is exclusive)."""
-    wants = [normalize_ws(t).lower() for t in section_titles]
-    hits: Dict[str, int] = {}
-    for i, p in enumerate(doc.paragraphs):
-        t = normalize_ws(p.text).lower()
-        for w in wants:
-            if t == w:
-                hits[w] = i
-    ranges: Dict[str, Tuple[int, int]] = {}
-    sorted_hits = sorted(hits.items(), key=lambda kv: kv[1])
-    for k, start in sorted_hits:
-        later = [v for _, v in sorted_hits if v > start]
-        end = later[0] if later else len(doc.paragraphs)
-        ranges[k] = (start, end)
-    return ranges
+# ----------------------- LLM (structured outputs) -----------------------
+def call_llm_weaves(resume_text: str, jd_text: str, job_title: str = "", company: str = "") -> Dict[str, Any]:
+    """
+    Ask the model for structured suggestions:
+      - skills_additions: list[str]
+      - weaves: list[{cue, phrase, section}] where phrase is <= 18 words, factual & ATS-relevant
+    """
+    if not OPENAI_API_KEY:
+        logging.warning("OPENAI_API_KEY not set; returning empty LLM suggestions.")
+        return {"skills_additions": [], "weaves": []}
 
+    from openai import OpenAI
+    client = OpenAI(api_key=OPENAI_API_KEY)
+
+    schema = {
+        "name": "TailorPlan",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "skills_additions": {"type": "array", "items": {"type": "string"}},
+                "weaves": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "section": {"type": "string", "enum": ["Work Experience","Projects"]},
+                            "cue": {"type": "string"},
+                            "phrase": {"type": "string", "maxLength": 120}
+                        },
+                        "required": ["section","cue","phrase"],
+                        "additionalProperties": False
+                    }
+                }
+            },
+            "required": ["skills_additions","weaves"],
+            "additionalProperties": False
+        }
+    }
+
+    sys_prompt = (
+        "You inject ATS-relevant keywords into an existing resume without fabricating achievements. "
+        "Prefer weaving short prepositional phrases (e.g., 'to AP style and CMS guidelines', 'via POS and inventory checks') "
+        "into bullets that already talk about the task. Keep phrases <= 18 words. Avoid buzzword stuffing."
+    )
+
+    user_prompt = f"""Job title: {job_title or 'N/A'}
+Company: {company or 'N/A'}
+
+=== Job Description (plain text) ===
+{jd_text}
+
+=== Resume (plain text) ===
+{resume_text}
+
+Return JSON with:
+- skills_additions: short terms or bigrams that belong in Skills list and appear in the JD (or synonyms), truthful w.r.t. resume.
+- weaves: small phrases to inject inline into existing bullets; provide a minimal 'cue' substring to find a suitable bullet.
+"""
+
+    if USE_RESPONSES_API:
+        # Structured Outputs via response_format json_schema
+        result = client.responses.create(
+            model=MODEL,
+            input=[{"role": "system", "content": sys_prompt},
+                   {"role": "user", "content": user_prompt}],
+            response_format={"type": "json_schema", "json_schema": schema},
+            temperature=0.2,
+        )
+        content = result.output_text  # SDK returns text already conforming to schema
+    else:
+        # Fallback to chat.completions w/ JSON tool (older)
+        result = client.chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "system", "content": sys_prompt},
+                      {"role": "user", "content": user_prompt}],
+            response_format={"type": "json_object"},
+            temperature=0.2,
+        )
+        content = result.choices[0].message.content
+
+    try:
+        return json.loads(content)
+    except Exception as e:
+        logging.error("Failed to parse LLM JSON: %s", e)
+        return {"skills_additions": [], "weaves": []}
+
+# ----------------------- .docx editing -----------------------
 def paragraph_is_bullet(p: Paragraph) -> bool:
-    """Heuristic: list-like style or leading glyph."""
     try:
         name = (getattr(p.style, "name", "") or "").lower()
     except Exception:
@@ -88,23 +196,7 @@ def paragraph_is_bullet(p: Paragraph) -> bool:
     t = normalize_ws(p.text)
     return t.startswith(("•", "-", "–", "·"))
 
-def copy_format(from_run: Run, to_run: Run):
-    """Copy common font + style hints."""
-    try:
-        to_run.font.name = from_run.font.name
-        to_run.font.size = from_run.font.size
-        to_run.font.bold = from_run.font.bold
-        to_run.font.italic = from_run.font.italic
-        to_run.font.underline = from_run.font.underline
-        try:
-            to_run.style = from_run.style
-        except Exception:
-            pass
-    except Exception:
-        pass
-
-def _dominant_nonlink_run(p: Paragraph) -> Optional[Run]:
-    """Pick the longest non-hyperlink run as a formatting source."""
+def dominant_run(p: Paragraph) -> Optional[Run]:
     best, best_len = None, -1
     for r in p.runs:
         txt = (r.text or "")
@@ -122,349 +214,236 @@ def _dominant_nonlink_run(p: Paragraph) -> Optional[Run]:
                 return r
     return best
 
-def _clear_runs(p: Paragraph):
-    """Remove all runs (low-level)."""
-    for r in list(p.runs):
-        try:
-            r._element.getparent().remove(r._element)  # noqa
-        except Exception:
-            pass
+def copy_format(src: Run, dst: Run):
+    try:
+        dst.font.name = src.font.name
+        dst.font.size = src.font.size
+        dst.font.bold = src.font.bold
+        dst.font.italic = src.font.italic
+        dst.font.underline = src.font.underline
+        try: dst.style = src.style
+        except Exception: pass
+    except Exception:
+        pass
 
-def _set_text_preserve_para_style(p: Paragraph, text: str, base: Optional[Run]):
-    """
-    Assign text as a single run, then re-apply base run formatting so
-    we don't end up with default run formatting everywhere.
-    """
-    p.text = text  # replaces runs with one run; keeps paragraph-level style. :contentReference[oaicite:2]{index=2}
+def set_text_preserve_style(p: Paragraph, text: str):
+    base = dominant_run(p)
+    p.text = text  # replaces runs with one run (paragraph style preserved)
     if base and p.runs:
         copy_format(base, p.runs[0])
 
-# --------- QUOTED LOGIC: Pass 1/2/3 IMPLEMENTATION ---------
-
-# --- Pass 1: listline priorities (Skills & similar) ---
-def inject_listline_priorities(doc: Document,
-                               jd_keywords: List[str],
-                               backoff_terms: List[str],
-                               log_change: Callable[[str, str, str, str], None]):
-    """
-    Reorder inline skill/tool lists and insert plausible synonyms.
-    - Detect paragraphs under Skills/Technical Skills sections.
-    - Split comma/semicolon lists, normalize tokens.
-    - Priority = JD hits (ordered) + backoff terms (ESCO/O*NET).
-    - Rebuild the same paragraph text preserving run formatting (best-effort).
-    """
-    ranges = find_section_ranges(doc, ["Technical Skills", "Skills", "Core Skills"])
-    if not ranges:
-        return 0
-
-    # choose the first matching skills section
-    key = next(iter([k for k in ("technical skills", "skills", "core skills") if k in ranges]), None)
-    if not key:
-        return 0
-
-    start, end = ranges[key]
-    changes = 0
-    jd_lc = [k.strip().lower() for k in jd_keywords if k and k.strip()]
-    backoff_lc = [k.strip().lower() for k in backoff_terms if k and k.strip()]
-
-    for i in range(start, end):
-        p = doc.paragraphs[i]
-        t = normalize_ws(p.text)
-        if not t or paragraph_is_bullet(p) or len(t) > 600:
-            continue
-
-        # detect list-ish lines (commas/semicolons)
-        if "," not in t and ";" not in t:
-            continue
-
-        # split & normalize
-        raw_items = re.split(r"\s*[;,]\s*", t)
-        items = [normalize_ws(x) for x in raw_items if x.strip()]
-        if not items:
-            continue
-
-        present_tokens = tokens(t)
-        present_text = t.lower()
-
-        # Priority 1: JD hits that already exist in the line (preserve JD order)
-        prio = []
-        for k in jd_lc:
-            # match as token OR substring for multiword phrases
-            if k in present_tokens or k in present_text:
-                prio.append(k)
-
-        # Priority 2: backoff terms (ESCO/O*NET-derived) that are missing but plausible
-        # Only add if not already present as substring
-        to_add = [k for k in backoff_lc if k not in present_text]
-
-        # Reorder existing items by priority (stable)
-        by_lc = {x.lower(): x for x in items}
-        seen: Set[str] = set()
-        ordered: List[str] = []
-        for k in prio:
-            for cand in list(by_lc.keys()):
-                if k == cand and cand not in seen:
-                    ordered.append(by_lc[cand]); seen.add(cand)
-        for x in items:
-            if x.lower() not in seen:
-                ordered.append(x)
-
-        # Enrich: add plausible missing items at end (cap to avoid stuffing)
-        add_cap = 3
-        adds = []
-        for k in to_add:
-            if len(adds) >= add_cap:
-                break
-            adds.append(_canon(k))
-        after_text = ", ".join(ordered + adds)
-        after_text = _canon(after_text)
-
-        if after_text != p.text:
-            before = p.text
-            base = _dominant_nonlink_run(p)
-            _set_text_preserve_para_style(p, after_text, base)
-            log_change("Technical Skills", before, after_text, "Reordered/enriched inline skills list.")
-            changes += 1
-            # We stop after first meaningful skills line to avoid over-editing
-            break
-
-    return changes
-
-# --- small utility to locate first sentence boundary ---
-def _first_sentence_split(text: str) -> int:
+def first_sentence_split(text: str) -> int:
     m = re.search(r'([.!?])(\s|$)', text)
-    return (m.start(1) + 1) if m else len(text)
+    return (m.start(1)+1) if m else len(text)
 
-# --- Pass 2: weave phrase into an existing bullet (no new sentence) ---
-def weave_phrase_into_bullet(paragraph: Paragraph,
-                             phrase: str,
-                             copy_format_fn: Callable[[Run, Run], None],
-                             log_change: Callable[[str, str, str, str, Optional[str], Optional[str]], None],
-                             section_label: str = "Work Experience") -> bool:
-    """
-    Insert ' using <phrase>' before the first sentence terminator.
-    Preserve dominant run format via copy_format(existing_run, new_run).
-    """
-    phrase = _canon(phrase or "").strip().rstrip(".")
-    if not phrase:
-        return False
-
-    base = _dominant_nonlink_run(paragraph)
-    txt = "".join(r.text for r in paragraph.runs) if paragraph.runs else paragraph.text
-    insert_at = _first_sentence_split(txt)
-    glue = " " if insert_at and insert_at <= len(txt) and txt[insert_at - 1].isalnum() else ""
-    pre, post = txt[:insert_at], txt[insert_at:]
-    new_text = pre + f"{glue} using {phrase}" + post
-
-    before = paragraph.text
-    # safest path: reset text, then reapply formatting
-    _set_text_preserve_para_style(paragraph, new_text, base)
-    log_change(section_label, before, paragraph.text,
-               reason="Wove JD-aligned phrase inline.",
-               inserted_sentence=f" using {phrase}",
-               anchor=f"{section_label} • bullet")
+def weave_into_paragraph(p: Paragraph, phrase: str) -> bool:
+    phrase = canon((phrase or "").strip().rstrip("."))
+    if not phrase: return False
+    base = dominant_run(p)
+    txt = "".join(r.text for r in p.runs) if p.runs else p.text
+    insert_at = first_sentence_split(txt)
+    glue = " " if insert_at and insert_at <= len(txt) and txt[insert_at-1].isalnum() else ""
+    new_text = txt[:insert_at] + f"{glue} using {phrase}" + txt[insert_at:]
+    set_text_preserve_style(p, new_text)
     return True
 
-# --- Orchestrator hook inside your existing tailor_docx_in_place() ---
-def apply_universal_passes(doc: Document,
-                           sections: Optional[Dict[str, Tuple[int, int]]],
-                           jd_keywords: List[str],
-                           allowed_vocab: Set[str],
-                           backoff_terms: List[str],
-                           log_change: Callable[[str, str, str, str, Optional[str], Optional[str]], None]) -> int:
-    """
-    Run Pass 1 for Skills; Pass 2 over bullets; Pass 3 fallback 'Using ...' appends
-    if a section had 0 changes.
-    """
-    total = 0
-    # Pass 1: Skills
-    total += inject_listline_priorities(doc, jd_keywords, backoff_terms,
-                                        lambda sec, b, a, r: log_change(sec, b, a, r, None, sec))
-
-    # Prep sections map
-    sections = sections or find_section_ranges(doc, [
-        "Side Projects", "Projects", "Project Experience",
-        "Work Experience", "Professional Experience", "Experience",
-    ])
-
-    # Helper to choose top phrase from JD keywords within allowed vocab
-    def choose_top_phrase(jd_kws: List[str], allowed: Set[str]) -> Optional[str]:
-        for k in jd_kws:
-            if k and k.lower() in allowed and len(k) <= 48:
-                return _canon(k)
-        return None
-
-    # Pass 2: weave into existing bullets in Projects and Work Experience
-    def weave_section(sec_keys: List[str], label: str) -> bool:
-        changed = False
-        for key in sec_keys:
-            if key in sections:
-                s, e = sections[key]
-                for i in range(s, e):
-                    p = doc.paragraphs[i]
-                    if not paragraph_is_bullet(p):
-                        continue
-                    target = choose_top_phrase(jd_keywords, allowed_vocab)
-                    if target and weave_phrase_into_bullet(p, target, copy_format, log_change, section_label=label):
-                        changed = True
-        return changed
-
-    changed_projects = weave_section(["side projects", "projects", "project experience"], "Projects")
-    changed_work = weave_section(["work experience", "professional experience", "experience"], "Work Experience")
-    total += (1 if changed_projects else 0) + (1 if changed_work else 0)
-
-    # Pass 3: fallback appenders (only if no changes in a section)
-    def append_using_phrase_fallback(sec_keys: List[str], label: str) -> bool:
-        # find bullets and pick up to two shortest (<220 chars)
-        chosen_phrase = choose_top_phrase(jd_keywords, allowed_vocab)
-        if not chosen_phrase:
-            return False
-        for key in sec_keys:
-            if key not in sections:
-                continue
-            s, e = sections[key]
-            bullets = [(i, len(doc.paragraphs[i].text)) for i in range(s, e) if paragraph_is_bullet(doc.paragraphs[i])]
-            bullets = [b for b in bullets if b[1] < 220]
-            bullets.sort(key=lambda x: x[1])
-            made = False
-            for idx, _ in bullets[:2]:
-                p = doc.paragraphs[idx]
-                before = p.text
-                base = _dominant_nonlink_run(p)
-                suffix = f" Using {chosen_phrase}."
-                # ensure spacing / punctuation
-                text = before.rstrip()
-                if text.endswith("."):
-                    text = text[:-1]
-                new_text = text + suffix
-                _set_text_preserve_para_style(p, new_text, base)
-                log_change(label, before, p.text,
-                           reason="Fallback appender to ensure visible tailoring.",
-                           inserted_sentence=suffix.strip(),
-                           anchor=f"{label} • bullet")
-                made = True
-            if made:
-                return True
-        return False
-
-    if not changed_projects:
-        if append_using_phrase_fallback(["side projects", "projects", "project experience"], "Projects"):
-            total += 1
-    if not changed_work:
-        if append_using_phrase_fallback(["work experience", "professional experience", "experience"], "Work Experience"):
-            total += 1
-
-    return total
-
-# --------- existing policy machinery (optional/fallback) ---------
-
-_GENERIC = {"data", "software", "engineer", "engineering"}
-
-def _policy_score(policy: dict, stoks: Set[str], jd_vocab: Set[str]) -> float:
-    jd_cues = set(policy.get("jd_cues") or [])
-    bullet_cues = set(policy.get("bullet_cues") or [])
-    overlap_jd = len(jd_vocab & jd_cues) if jd_cues else 0
-    overlap_bul = len(stoks & bullet_cues) if bullet_cues else 0
-    penalty = -1.0 if jd_cues and all(c in _GENERIC for c in jd_cues) else 0.0
-    boost = 1.0 if policy.get("_source") == "runtime" else 0.0
-    return 2.0 * overlap_jd + 1.0 * overlap_bul + boost + penalty
-
-def choose_policy_for_sentence(sentence: str,
-                               jd_vocab: Set[str],
-                               allowed_vocab: Set[str],
-                               policies: List[dict],
-                               used_clauses: Set[str]) -> Optional[str]:
-    stoks = tokens(sentence)
-    best: Optional[dict] = None
-    best_score = -1e9
-    for pol in policies:
-        clause = (pol.get("clause") or "").strip()
-        if not clause:
+def inject_skills(doc: Document, additions: List[str]) -> bool:
+    if not additions: return False
+    additions = [canon(a) for a in additions if a]
+    ranges = find_section_ranges(doc, ["Technical Skills", "Skills", "Core Skills"])
+    if not ranges: return False
+    # take the first skills section; modify the first comma list line we find
+    key = next(iter([k for k in ("technical skills","skills","core skills") if k in ranges]), None)
+    if not key: return False
+    s, e = ranges[key]
+    for i in range(s, e):
+        p = doc.paragraphs[i]
+        t = normalize_ws(p.text)
+        if not t or paragraph_is_bullet(p) or ("," not in t and ";" not in t):
             continue
-        lc_clause = clause.lower()
-        if lc_clause in used_clauses:
+        present = tokens(t)
+        new = [a for a in additions if a.lower() not in present]
+        if not new: return False
+        # append within parentheses or at end of list
+        m = re.search(r"\(([^)]+)\)", t)
+        if m:
+            inside = m.group(1).strip()
+            sep = ", " if inside and not inside.endswith(",") else ""
+            after = t[:m.start(1)] + inside + f"{sep}{', '.join(new)}" + t[m.end(1):]
+        else:
+            if t.endswith("."): t2 = t[:-1]
+            else: t2 = t
+            sep = ", " if ("," in t2 or ";" in t2) and not t2.endswith(",") else (", " if ("," in t2 or ";" in t2) else ": ")
+            after = t2 + f"{sep}{', '.join(new)}"
+        set_text_preserve_style(p, after)
+        return True
+    return False
+
+def find_section_ranges(doc: Document, titles: List[str]) -> Dict[str, Tuple[int,int]]:
+    wants = [normalize_ws(t).lower() for t in titles]
+    hits: Dict[str,int] = {}
+    for i,p in enumerate(doc.paragraphs):
+        if normalize_ws(p.text).lower() in wants:
+            hits[normalize_ws(p.text).lower()] = i
+    ranges: Dict[str,Tuple[int,int]] = {}
+    for k,start in sorted(hits.items(), key=lambda kv: kv[1]):
+        later = [v for _,v in sorted(hits.items(), key=lambda kv: kv[1]) if v>start]
+        end = later[0] if later else len(doc.paragraphs)
+        ranges[k]=(start,end)
+    return ranges
+
+def apply_weaves(doc: Document, weaves: List[Dict[str,str]]) -> int:
+    changed = 0
+    if not weaves: return changed
+    # index sections
+    secs = find_section_ranges(doc, ["Work Experience","Professional Experience","Experience",
+                                     "Projects","Project Experience","Side Projects"])
+    # build paragraph lists per logical label
+    def para_indices(keys: List[str]) -> List[int]:
+        for k in keys:
+            lk = k.lower()
+            if lk in secs:
+                s,e = secs[lk]
+                return list(range(s,e))
+        return []
+    work_idxs = para_indices(["Work Experience","Professional Experience","Experience"])
+    proj_idxs = para_indices(["Projects","Project Experience","Side Projects"])
+
+    for w in weaves:
+        section = (w.get("section") or "Work Experience")
+        cue = (w.get("cue") or "").lower().strip()
+        phrase = w.get("phrase") or ""
+        idxs = work_idxs if section.startswith("Work") else proj_idxs
+        best = None; best_ratio = 0.0
+        for i in idxs:
+            p = doc.paragraphs[i]
+            if not paragraph_is_bullet(p): continue
+            t = normalize_ws(p.text).lower()
+            if not cue: best = i; break
+            if cue in t:
+                best = i; break
+            # fuzzy helper
+            import difflib
+            r = difflib.SequenceMatcher(None, cue, t).ratio()
+            if r > best_ratio:
+                best_ratio, best = r, i
+        if best is not None:
+            if weave_into_paragraph(doc.paragraphs[best], phrase):
+                changed += 1
+    return changed
+
+# ----------------------- pipeline -----------------------
+def make_change_log_item(section: str, before: str, after: str, reason: str, inserted: Optional[str] = None):
+    return {
+        "anchor_section": section,
+        "original_paragraph_text": before,
+        "modified_paragraph_text": after,
+        "inserted_sentence": inserted,
+        "reason": reason
+    }
+
+def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = "user") -> None:
+    out_root = pathlib.Path(out_prefix).joinpath(uid)
+    out_resumes = out_root / "resumes"
+    out_changes = out_root / "changes"
+    out_outbox = out_root / "outbox"
+    for d in (out_resumes, out_changes, out_outbox):
+        d.mkdir(parents=True, exist_ok=True)
+
+    resume_doc = Document(resume_path)
+    resume_plain = "\n".join([p.text for p in resume_doc.paragraphs])
+
+    links = read_links(links_file)
+    if not links:
+        raise RuntimeError("No links found.")
+
+    index_items = []
+    for item in links:
+        url = item.get("url")
+        if not url: continue
+        logging.info("Fetching JD: %s", url)
+        try:
+            jd_text = fetch_jd_plaintext(url)
+        except Exception as e:
+            logging.warning("Failed to fetch %s: %s", url, e)
             continue
-        req = set((pol.get("requires_any") or []))
-        if req and not (allowed_vocab & req):
-            continue
-        bullet_cues = set(pol.get("bullet_cues") or [])
-        if bullet_cues and not (stoks & bullet_cues):
-            continue
-        if difflib.SequenceMatcher(None, normalize_ws(sentence.lower()), normalize_ws(lc_clause)).ratio() > 0.85:
-            continue
-        score = _policy_score(pol, stoks, jd_vocab)
-        if score > best_score:
-            best_score = score
-            best = pol
-    if not best or best_score <= 0:
-        return None
-    used_clauses.add(best["clause"].lower())
-    return best["clause"]
 
-# --------- public entrypoint ---------
+        # LLM structured suggestions (skills + weaves)
+        job_title = item.get("title") or item.get("job_title") or ""
+        company   = item.get("company") or item.get("org") or ""
+        plan = call_llm_weaves(resume_plain, jd_text, job_title, company)
 
-def tailor_docx_in_place(doc: Document,
-                         jd_keywords: List[str],
-                         allowed_vocab_list: List[str],
-                         backoff_terms: Optional[List[str]] = None,
-                         inline_only: bool = True) -> List[dict]:
-    """
-    Tailor the existing resume **in place** with universal passes + optional policy fallback.
-      - Pass 1: reorder/enrich Skills inline list(s) using JD + backoff (ESCO/O*NET).
-      - Pass 2: weave short phrases into existing bullets (Projects, Work Experience).
-      - Pass 3: if a section saw 0 changes, append one concise 'Using <phrase>.' to 1–2 shortest bullets.
-      - If inline_only=False, also try short policy clauses (legacy behavior).
-    Returns the change log items.
-    """
-    logger = ChangeLog()
-    policies = load_policies()  # remains available if inline_only=False
-    jd_vocab = set(k.lower() for k in jd_keywords if k)
-    allowed_vocab = set(k.lower() for k in allowed_vocab_list if k)
-    backoff_terms = backoff_terms or []
+        # Apply to a fresh copy of the resume per job
+        doc = Document(resume_path)
+        before_map = [p.text for p in doc.paragraphs]
+        changes: List[Dict[str, Any]] = []
 
-    # sections map once
-    sections = find_section_ranges(doc, [
-        "Education",
-        "Side Projects", "Projects", "Project Experience",
-        "Work Experience", "Professional Experience", "Experience",
-        "Technical Skills", "Skills", "Core Skills",
-        "Workshops", "References",
-    ])
+        # Pass A: skills additions
+        if inject_skills(doc, plan.get("skills_additions") or []):
+            changes.append(make_change_log_item("Skills/Technical Skills", "", "", "Reordered/enriched inline skills list."))
 
-    def log_change(sec, before, after, reason, inserted=None, anchor=None):
-        logger.add(sec, before, after, reason, inserted_sentence=inserted, anchor=anchor)
+        # Pass B: weave phrases into bullets
+        weave_count = apply_weaves(doc, plan.get("weaves") or [])
+        if weave_count == 0:
+            # fallback: append one short phrase to first two shortest bullets
+            # choose a safe top term from skills_additions or JD token freq
+            candidates = plan.get("skills_additions") or []
+            top_phrase = canon(candidates[0]) if candidates else ""
+            secs = find_section_ranges(doc, ["Work Experience","Professional Experience","Experience"])
+            chosen_key = next(iter([k for k in ("work experience","professional experience","experience") if k in secs]), None)
+            if chosen_key:
+                s,e = secs[chosen_key]
+                bullets = [(i, len(doc.paragraphs[i].text)) for i in range(s,e) if paragraph_is_bullet(doc.paragraphs[i])]
+                bullets = [b for b in bullets if b[1] < 220]
+                bullets.sort(key=lambda x: x[1])
+                for idx,_ in bullets[:2]:
+                    p = doc.paragraphs[idx]
+                    before = p.text
+                    if top_phrase:
+                        set_text_preserve_style(p, before.rstrip().rstrip(".") + f" Using {top_phrase}.")
+                        changes.append(make_change_log_item("Work Experience", before, p.text,
+                                                            "Fallback appender to ensure visible tailoring.",
+                                                            inserted=f"Using {top_phrase}."))
 
-    # Universal passes
-    apply_universal_passes(doc, sections, jd_keywords, allowed_vocab, backoff_terms, log_change)
+        # Always save JD text for inspection
+        slug = slugify(job_title or url)[:80]
+        jd_txt_path = out_changes / f"{slug}.jd.txt"
+        jd_txt_path.write_text(jd_text, encoding="utf-8")
 
-    # Optional: policy-based micro-clauses as final fallback (very conservative)
-    if not inline_only:
-        used_clauses: Set[str] = set()
-        for sec_key, label in (
-            ("work experience", "Work Experience"),
-            ("professional experience", "Work Experience"),
-            ("experience", "Work Experience"),
-        ):
-            if sec_key not in sections:
-                continue
-            s, e = sections[sec_key]
-            for i in range(s, e):
-                p = doc.paragraphs[i]
-                if not paragraph_is_bullet(p) or len(p.text) > 350:
-                    continue
-                clause = choose_policy_for_sentence(p.text, jd_vocab, allowed_vocab, policies, used_clauses)
-                if not clause:
-                    continue
-                phrase = re.sub(r"^(built|improved|optimized|implemented|designed|delivered|shipped|reduced|increased|created|developed|automated|migrated|refactored|scaled)\s+",
-                                "", clause, flags=re.IGNORECASE).strip().rstrip(".")
-                phrase = _canon(phrase)
-                before = p.text
-                base = _dominant_nonlink_run(p)
-                suffix = f" — {phrase}"
-                _set_text_preserve_para_style(p, before.rstrip() + suffix, base)
-                logger.add(label, before, p.text,
-                           reason="Optional policy clause (fallback).",
-                           inserted_sentence=suffix.strip(),
-                           anchor=f"{label} • bullet")
+        # Save resume
+        h = hashlib.sha1((url + str(time.time())).encode()).hexdigest()[:8]
+        out_docx = out_resumes / f"{slug}_{h}.docx"
+        doc.save(out_docx.as_posix())
 
-    return logger.items
+        # Write change log JSON (basic — you can expand with per-paragraph diffs)
+        changes_path = out_changes / f"{slug}_{h}.json"
+        changes_path.write_text(json.dumps(changes, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        index_items.append({
+            "url": url,
+            "title": job_title,
+            "company": company,
+            "resume_path": str(out_docx),
+            "jd_text_path": str(jd_txt_path),
+            "changes_path": str(changes_path),
+            "ts": int(time.time())
+        })
+
+    # Write drafts index for UI
+    index_path = out_root / "drafts_index.json"
+    index_path.write_text(json.dumps(index_items, ensure_ascii=False, indent=2), encoding="utf-8")
+    logging.info("Wrote index: %s", index_path)
+
+# ----------------------- CLI -----------------------
+def main():
+    ap = argparse.ArgumentParser(description="Tailor resume from JD links with LLM-assisted weaving.")
+    ap.add_argument("--links", required=True, help="Path to JSON or .txt containing JD links.")
+    ap.add_argument("--resume", required=True, help="Path to source .docx resume.")
+    ap.add_argument("--out", required=True, help="Output prefix (e.g., outputs).")
+    ap.add_argument("--user", default="user", help="User id folder under output prefix.")
+    args = ap.parse_args()
+
+    run_pipeline(args.links, args.resume, args.out, uid=args.user)
+
+if __name__ == "__main__":
+    main()
