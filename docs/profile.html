@@ -18,6 +18,8 @@
     .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
     .ctl { margin:6px 8px 0 0; min-width:280px; }
     label small { color:#666; font-weight:400; }
+    ul.file-list { padding-left: 18px; margin: 6px 0 0 0; }
+    ul.file-list li { margin: 3px 0; }
   </style>
 </head>
 <body>
@@ -78,6 +80,11 @@
           <button id="runTailor" class="btn">Run my shortlist</button>
           <span id="runMsg" class="muted"></span>
         </li>
+        <li style="margin:10px 0">
+          <strong>Draft materials</strong><br/>
+          <button id="runDrafts" class="btn">Draft covers & resumes</button>
+          <span id="draftMsg" class="muted"></span>
+        </li>
       </ol>
     </section>
 
@@ -93,9 +100,26 @@
       </table>
       <div id="noData" class="muted">No shortlist yet.</div>
     </section>
+
+    <!-- Drafts -->
+    <section id="drafts" class="card hidden" style="margin-top:16px">
+      <h2>Your drafts</h2>
+      <div class="row" style="margin:6px 0">
+        <button id="refreshDrafts" class="btn">Refresh</button>
+      </div>
+      <div id="noDrafts" class="muted">No drafts yet.</div>
+      <div id="draftLists" class="hidden">
+        <h3 style="margin:8px 0 4px 0;">Cover letters</h3>
+        <ul id="coversList" class="file-list"></ul>
+        <h3 style="margin:14px 0 4px 0;">Tailored resumes</h3>
+        <ul id="resumesList" class="file-list"></ul>
+        <h3 style="margin:14px 0 4px 0;">Change logs</h3>
+        <ul id="changesList" class="file-list"></ul>
+      </div>
+    </section>
   </main>
 
   <!-- IMPORTANT: absolute path for GitHub Pages project sites -->
-  <script defer src="/job-copilot/profile.js?v=2025-09-25-1"></script>
+  <script defer src="/job-copilot/profile.js?v=2025-09-25-2"></script>
 </body>
 </html>
