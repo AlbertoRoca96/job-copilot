@@ -10,50 +10,49 @@ from docx import Document
 import requests
 from bs4 import BeautifulSoup
 
-DATA_JSONL  = os.path.join(os.path.dirname(__file__), '..', 'data', 'scores.jsonl')
-DATA_JSON   = os.path.join(os.path.dirname(__file__), '..', 'docs', 'data', 'scores.json')
-OUTBOX_MD   = os.path.join(os.path.dirname(__file__), '..', 'docs', 'outbox')
-RESUMES_MD  = os.path.join(os.path.dirname(__file__), '..', 'docs', 'resumes')
-CHANGES_DIR = os.path.join(os.path.dirname(__file__), '..', 'docs', 'changes')
-DATA_DIR    = os.path.join(os.path.dirname(__file__), '..', 'docs', 'data')
+from src.skills.taxonomy import augment_allowed_vocab  # NEW
+
+DATA_JSONL = os.path.join(os.path.dirname(__file__), '..', 'data', 'scores.jsonl')
+DATA_JSON  = os.path.join(os.path.dirname(__file__), '..', 'docs', 'data', 'scores.json')
+OUTBOX_MD  = os.path.join(os.path.dirname(__file__), '..', 'docs', 'outbox')
+RESUMES_MD = os.path.join(os.path.dirname(__file__), '..', 'docs', 'resumes')
+CHANGES_DIR= os.path.join(os.path.dirname(__file__), '..', 'docs', 'changes')
+DATA_DIR   = os.path.join(os.path.dirname(__file__), '..', 'docs', 'data')
 
 PROFILE_YAML   = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'profile.yaml')
 PORTFOLIO_YAML = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'portfolio.yaml')
 TMPL_DIR       = os.path.join(os.path.dirname(__file__), '..', 'src', 'tailor', 'templates')
 
-# Prefer the user’s uploaded resume fetched by scripts/fetch_user_assets.py
-CURRENT_RESUME  = os.path.join(os.path.dirname(__file__), '..', 'assets', 'current.docx')
-FALLBACK_RESUME = os.path.join(os.path.dirname(__file__), '..', 'assets', 'Resume-2025.docx')
+# IMPORTANT: prefer the user's uploaded resume fetched by scripts/fetch_user_assets.py
+CURRENT_RESUME = os.path.join(os.path.dirname(__file__), '..', 'assets', 'current.docx')
+FALLBACK_RESUME= os.path.join(os.path.dirname(__file__), '..', 'assets', 'Resume-2025.docx')
 
-BANLIST_JSON = os.path.join(DATA_DIR, 'banlist.json')
+BANLIST_JSON   = os.path.join(DATA_DIR, 'banlist.json')
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
-SRK          = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+SUPABASE_URL = os.environ.get("SUPABASE_URL","").rstrip("/")
+SRK = os.environ.get("SUPABASE_SERVICE_ROLE_KEY","")
 
 SYNONYMS = {
-    # domain-neutral normalizations
-    "js": "javascript", "reactjs": "react", "ts": "typescript",
-    "ml": "machine learning", "cv": "computer vision",
-    "gh actions": "github actions", "gh-actions": "github actions",
-    "ci/cd": "ci", "rest": "rest api", "etl": "data pipeline",
+  "js":"javascript","reactjs":"react","ts":"typescript","ml":"machine learning",
+  "cv":"computer vision","postgres":"postgresql","gh actions":"github actions",
+  "gh-actions":"github actions","ci/cd":"ci","llm":"machine learning","rest":"rest api",
+  "etl":"data pipeline"
 }
-def norm(w: str) -> str:
-    return SYNONYMS.get((w or "").strip().lower(), (w or "").strip().lower())
+def norm(w): return SYNONYMS.get((w or "").strip().lower(), (w or "").strip().lower())
 
 def tokens(text: str):
     WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+./-]{1,}")
     return set(WORD_RE.findall((text or "").lower()))
 
-# keep STOPWORDS broad and role-agnostic
 STOPWORDS = {
+    "engineer","engineering","software","developer","develop","team","teams","experience","years","year",
     "the","and","for","with","to","of","in","on","as","by","or","an","a","at","from","using",
-    "we","you","our","your","will","role","responsibilities","requirements","preferred","must",
+    "we","you","our","your","will","work","role","responsibilities","requirements","preferred","must",
     "strong","plus","bonus","including","include","etc","ability","skills","excellent","communication",
-    "team","teams","experience","years","year",
 }
 
-def allowed_vocab(profile: dict, portfolio: dict):
-    """Collect skills/targets/tags from profile + portfolio; normalize softly."""
+def _allowed_vocab_from_profile(profile: dict, portfolio: dict) -> Set[str]:
+    """Original profile->allowed vocabulary (lowercased)."""
     skills = {str(s).lower() for s in (profile.get("skills") or [])}
     titles = {str(t).lower() for t in (profile.get("target_titles") or [])}
     tags = set()
@@ -63,7 +62,17 @@ def allowed_vocab(profile: dict, portfolio: dict):
                 for t in (b.get("tags", []) or []):
                     tags.add(str(t).lower())
     expanded = {norm(w) for w in (skills | tags | titles)}
-    return sorted(expanded | skills | tags | titles)
+    return set(expanded | skills | tags | titles)
+
+def allowed_vocab(profile: dict, portfolio: dict) -> Set[str]:
+    """
+    NEW: Augment profile/portfolio skills with ESCO/O*NET title→skills back-off,
+    so non-tech roles get solid domain keywords too.
+    """
+    base = _allowed_vocab_from_profile(profile, portfolio)
+    titles = list(profile.get("target_titles") or [])
+    augmented = augment_allowed_vocab(base, titles)
+    return sorted(set(augmented))
 
 def _count_phrase(text: str, phrase: str) -> int:
     if not phrase:
@@ -71,33 +80,37 @@ def _count_phrase(text: str, phrase: str) -> int:
     pat = re.compile(rf"\b{re.escape(phrase)}\b", flags=re.IGNORECASE)
     return len(pat.findall(text or ""))
 
-def extract_jd_terms(job: dict, allowed: set, cap: int = 24):
-    """Score phrases and unigrams from the JD by overlap with allowed vocab + title/url cues."""
+def extract_jd_terms(job: dict, allowed: set, cap=24):
     title = (job.get("title") or "").lower()
     desc  = (job.get("description") or "").lower()
-    url   = (job.get("url") or "").lower()
+    url   = job.get("url", "")
 
     allowed_norm = {norm(a) for a in allowed}
-    phrases  = [a for a in allowed_norm if " " in a]
+    phrases = [a for a in allowed_norm if " " in a]
     unigrams = [a for a in allowed_norm if a and " " not in a]
 
     scores = {}
     for ph in phrases:
-        if any(x in STOPWORDS for x in ph.split()):  # skip generic phrases
+        if any(x in STOPWORDS for x in ph.split()):
             continue
         c = _count_phrase(desc, ph)
         if c:
             scores[ph] = scores.get(ph, 0) + 3.0 * c
-            if ph in title: scores[ph] += 2.0
+            if ph in title:
+                scores[ph] += 2.0
 
-    for w in list(tokens(desc)):
+    words = list(tokens(desc))
+    for w in words:
         w = norm(w)
         if w in unigrams and w not in STOPWORDS:
             scores[w] = scores.get(w, 0) + 1.0
-            if w in title: scores[w] += 1.5
+            if w in title:
+                scores[w] += 1.5
 
+    lower_url = url.lower()
     for k in list(scores.keys()):
-        if k in url: scores[k] += 0.5
+        if k in lower_url:
+            scores[k] += 0.5
 
     ranked = [k for k,_ in sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))]
     return ranked[:cap]
@@ -146,16 +159,18 @@ def load_profile_for_user(user_id: str) -> dict:
     return (arr[0] if arr else {}) or {}
 
 def _dedup_by_url_keep_order(items):
-    seen, out = set(), []
+    seen = set()
+    out = []
     for j in items:
         u = (j.get("url") or "").strip().lower()
         key = u or f"no-url::{j.get('company','')}::{j.get('title','')}"
-        if key in seen: continue
-        seen.add(key); out.append(j)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(j)
     return out
 
 def _select_base_resume() -> str:
-    """Prefer user-uploaded resume; fall back to repository template."""
     if os.path.isfile(CURRENT_RESUME):
         print(f"Using base resume: {CURRENT_RESUME}")
         return CURRENT_RESUME
@@ -165,7 +180,8 @@ def _select_base_resume() -> str:
 def main(top: int, user: str | None):
     # Load profile (from Supabase) so covers use fresh contact info
     prof = load_profile_for_user(user) if user else {}
-    if prof: write_profile_yaml_from_dict(prof)
+    if prof:
+        write_profile_yaml_from_dict(prof)
 
     # Ensure portfolio placeholder file exists
     if not os.path.exists(PORTFOLIO_YAML):
@@ -173,23 +189,22 @@ def main(top: int, user: str | None):
         with open(PORTFOLIO_YAML, "w") as f:
             yaml.safe_dump({"projects": [], "work_experience": [], "workshops": []}, f)
 
-    with open(PROFILE_YAML, 'r') as f:
-        profile = yaml.safe_load(f) or {}
-
+    with open(PROFILE_YAML, 'r') as f: profile = yaml.safe_load(f) or {}
     portfolio = {}
     if os.path.exists(PORTFOLIO_YAML):
-        with open(PORTFOLIO_YAML, 'r') as f:
-            portfolio = yaml.safe_load(f) or {}
+        with open(PORTFOLIO_YAML, 'r') as f: portfolio = yaml.safe_load(f) or {}
 
     allowed = set(allowed_vocab(profile, portfolio))
 
     # shortlist as on the dashboard
     jobs = []
     if os.path.exists(DATA_JSON):
-        with open(DATA_JSON) as f: jobs = json.load(f)
+        with open(DATA_JSON) as f:
+            jobs = json.load(f)
     elif os.path.exists(DATA_JSONL):
         with open(DATA_JSONL) as f:
-            for line in f: jobs.append(json.loads(line))
+            for line in f:
+                jobs.append(json.loads(line))
     else:
         print('No scores found; run scripts/rank.py first.')
         return
@@ -205,9 +220,8 @@ def main(top: int, user: str | None):
 
     # banlist
     try:
-        with open(BANLIST_JSON, 'r') as bf:
-            banlist = json.load(bf)
-            if not isinstance(banlist, list): banlist = []
+        with open(BANLIST_JSON, 'r') as bf: banlist = json.load(bf)
+        if not isinstance(banlist, list): banlist = []
     except Exception:
         banlist = []
     banset = {x.strip().lower() for x in banlist}
@@ -215,7 +229,8 @@ def main(top: int, user: str | None):
     use_llm = os.getenv("USE_LLM","0") == "1" and bool(os.getenv("OPENAI_API_KEY"))
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     print(f"LLM: {'enabled' if use_llm else 'disabled'}")
-    if use_llm: print(f"LLM model: {model}")
+    if use_llm:
+        print(f"LLM model: {model}")
 
     def jd_sha(s: str) -> str:
         return hashlib.sha1((s or "").encode("utf-8")).hexdigest()[:8]
@@ -226,8 +241,8 @@ def main(top: int, user: str | None):
     llm_summary = {"used": False, "model": None, "jobs": []}
 
     for j in jobs:
-        safe_company = safe_name(j.get('company',''))
-        safe_title   = safe_name(j.get('title',''))
+        safe_company = ''.join(c for c in (j.get('company','')) if c.isalnum() or c in ('-','_')).strip()
+        safe_title   = ''.join(c for c in (j.get('title',''))   if c.isalnum() or c in ('-','_')).strip()
         slug = f"{safe_company}_{safe_title}"[:150]
 
         # choose best JD text
@@ -240,17 +255,13 @@ def main(top: int, user: str | None):
             f.write(jd_text[:20000])
         jd_hash = jd_sha(jd_text)
 
-        # Make JD keywords available to the cover template
-        j['ats_keywords'] = jd_kws
-
-        # COVER (domain-agnostic template)
+        # COVER
         cover_fname = f"{slug}.md"
-        cover = render_cover(j, PROFILE_YAML, TMPL_DIR)
-        with open(os.path.join(OUTBOX_MD, cover_fname), 'w') as f:
-            f.write(cover)
+        cover = render_cover(j, PROFILE_YAML, TMPL_DIR, jd_keywords=jd_kws)  # pass kws
+        with open(os.path.join(OUTBOX_MD, cover_fname), 'w') as f: f.write(cover)
         j['cover_path'] = f"outbox/{cover_fname}"
 
-        # RESUME (tailor in place)
+        # RESUME (tailor inside the doc)
         out_docx_name = f"{slug}_{jd_hash}.docx"
         out_docx = os.path.join(RESUMES_MD, out_docx_name)
 
@@ -260,7 +271,7 @@ def main(top: int, user: str | None):
         try:
             cp = doc.core_properties
             cp.comments = f"job-copilot:{slug}:{jd_hash}"
-            cp.subject  = j.get("title","")
+            cp.subject = j.get("title","")
             cp.keywords = ", ".join([k for k in jd_kws if k][:16])
         except Exception:
             pass
@@ -275,7 +286,7 @@ def main(top: int, user: str | None):
         j['resume_docx'] = f"resumes/{out_docx_name}"
         j['resume_docx_hash'] = jd_hash
 
-        # Explain changes (preserve original section labels; resume.py handles anchors)
+        # Explain changes (bullet level only)
         explain = {
             "company": j.get("company",""),
             "title": j.get("title",""),
