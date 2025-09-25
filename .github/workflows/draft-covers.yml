@@ -160,23 +160,18 @@ jobs:
           base="docs/${uid}"
           mkdir -p docs/data
           shopt -s nullglob
-
           OUTBOX_LIST=()
           for f in "$base/outbox/"*.md; do OUTBOX_LIST+=("$(basename "$f")"); done
-
           RESUME_LIST=()
           for f in "$base/resumes/"*.docx; do RESUME_LIST+=("$(basename "$f")"); done
-
           CHANGES_LIST=()
           for f in "$base/changes/"*.json; do CHANGES_LIST+=("$(basename "$f")"); done
-
           jq -n \
             --argjson outbox  "$(printf '%s\n' "${OUTBOX_LIST[@]:-}"  | jq -R . | jq -s .)" \
             --argjson resumes "$(printf '%s\n' "${RESUME_LIST[@]:-}" | jq -R . | jq -s .)" \
             --argjson changes "$(printf '%s\n' "${CHANGES_LIST[@]:-}" | jq -R . | jq -s .)" \
             '{outbox:$outbox, resumes:$resumes, changes:$changes}' \
           > docs/data/drafts_index.json
-
           echo "Built drafts_index.json:"
           cat docs/data/drafts_index.json
 
@@ -235,12 +230,11 @@ jobs:
               --data-binary @"$f"
           done
 
-      - name: Upload drafts_index.json (always create if missing to avoid curl 26)
+      - name: Upload drafts_index.json
         if: ${{ always() }}
         shell: bash
         run: |
           set -euo pipefail
-          test -f docs/data/drafts_index.json || echo '{"outbox":[],"resumes":[],"changes":[]}' > docs/data/drafts_index.json
           key="outputs/${{ github.event.inputs.user_id }}/drafts_index.json"
           curl -sS -X POST \
             "${SUPABASE_URL%/}/storage/v1/object/$key" \
