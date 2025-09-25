@@ -8,8 +8,6 @@ from docx.text.run import Run
 
 from .policies import load_policies  # merges runtime + base
 
-# ---------- tokenization & canonicalization ----------
-
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{1,}")
 
 # Canonical tech casing for added clauses (keeps ATS-safe tokens but looks polished)
@@ -40,48 +38,36 @@ CANON = {
     "wasm": "WebAssembly",
 }
 
+# ---------- helpers ----------
+
 def tokens(text: str) -> Set[str]:
     return set(WORD_RE.findall((text or "").lower()))
 
 def normalize_ws(s: str) -> str:
     return re.sub(r"\s+", " ", s or "").strip()
 
-# ---------- change log (UI-facing) ----------
-
 class ChangeLog:
     """
-    Collects granular changes in the exact shape the UI expects.
-    Each item includes: original_paragraph_text, modified_paragraph_text,
-    optional inserted_sentence, and anchor_section (where the change occurred).
+    UI-facing granular changes. We DO NOT relabel sections:
+      - anchor_section: the fixed resume section label (e.g., "Projects")
+      - anchor: an optional finer-grained anchor (e.g., "Projects • bullet #2")
     """
     def __init__(self):
         self.items: List[dict] = []
 
-    def add(
-        self,
-        section: str,
-        before: str,
-        after: str,
-        reason: str,
-        inserted_sentence: Optional[str] = None,
-        anchor: Optional[str] = None,
-    ):
+    def add(self, section: str, before: str, after: str,
+            reason: str, inserted_sentence: Optional[str] = None,
+            anchor: Optional[str] = None):
         self.items.append({
-            "anchor_section": (anchor or section or "").strip(),
+            "anchor_section": (section or "").strip(),
+            "anchor": (anchor or "").strip() or None,
             "original_paragraph_text": (before or "").strip(),
             "modified_paragraph_text": (after or "").strip(),
             "inserted_sentence": (inserted_sentence or "").strip() or None,
-            "reason": reason,
+            "reason": reason
         })
 
-# ---------- document helpers ----------
-
 def find_section_ranges(doc: Document, section_titles: List[str]) -> Dict[str, Tuple[int, int]]:
-    """
-    Returns {lower_title: (start_idx, end_idx)} for paragraphs whose exact text equals
-    any of the provided headings (case-insensitive), where `end_idx` is the next
-    heading index or len(doc.paragraphs).
-    """
     wants = [normalize_ws(t).lower() for t in section_titles]
     hits: Dict[str, int] = {}
     for i, p in enumerate(doc.paragraphs):
@@ -98,12 +84,7 @@ def find_section_ranges(doc: Document, section_titles: List[str]) -> Dict[str, T
     return ranges
 
 def paragraph_is_bullet(p: Paragraph) -> bool:
-    """
-    Heuristic bullet detection:
-      • Word list styles often contain 'List', 'Bullet', or 'Number' in the style name.
-      • Fallback to leading glyphs (•, -, –, ·).
-    python-docx doesn’t expose a stable high-level list API, so heuristics are standard practice.  # noqa
-    """
+    # Heuristic: list-ish style name OR leading glyph
     try:
         name = (getattr(p.style, "name", "") or "").lower()
     except Exception:
@@ -114,10 +95,6 @@ def paragraph_is_bullet(p: Paragraph) -> bool:
     return t.startswith(("•", "-", "–", "·"))
 
 def copy_format(from_run: Run, to_run: Run):
-    """
-    Clone dominant run formatting (font, size, emphasis, style).
-    Character formatting primarily lives at the run level in Word documents.  # noqa
-    """
     try:
         to_run.font.name = from_run.font.name
         to_run.font.size = from_run.font.size
@@ -125,14 +102,13 @@ def copy_format(from_run: Run, to_run: Run):
         to_run.font.italic = from_run.font.italic
         to_run.font.underline = from_run.font.underline
         try:
-            to_run.style = from_run.style  # keep run style if possible
+            to_run.style = from_run.style
         except Exception:
             pass
     except Exception:
         pass
 
 def _dominant_nonlink_run(p: Paragraph) -> Optional[Run]:
-    """Pick the run that best represents the bullet's body text (not the hyperlink)."""
     best, best_len = None, -1
     for r in p.runs:
         txt = (r.text or "")
@@ -151,7 +127,6 @@ def _dominant_nonlink_run(p: Paragraph) -> Optional[Run]:
     return best
 
 def canonicalize_clause(clause: str) -> str:
-    """Replace lowercased tech tokens with canonical casing."""
     s = clause or ""
     for k in sorted(CANON.keys(), key=len, reverse=True):
         pattern = re.compile(rf"\b{re.escape(k)}\b", flags=re.IGNORECASE)
@@ -160,39 +135,33 @@ def canonicalize_clause(clause: str) -> str:
 
 def build_added_sentence_from_clause(clause: str) -> str:
     """
-    Convert a clause into a short, natural sentence that’s ATS-safe.
-    Avoid semicolons; prefer “Using …”.
+    Produce a short, grammatical sentence.
+    - If clause already starts with a verb (incl. editorial verbs), append as-is.
+    - If it starts with 'using/with', rewrite to 'Using …'.
+    - Otherwise, capitalize and append as a sentence.
     """
     if not clause:
         return ""
-    raw = (clause or "").strip().rstrip(".")
-    canon = canonicalize_clause(raw)
+    canon = canonicalize_clause((clause or "").strip().rstrip("."))
 
-    m = re.match(
-        r"^(built|improved|optimized|implemented|designed|delivered|shipped|reduced|increased|created|developed|automated|migrated|refactored|scaled)\s+(.+)$",
-        canon, flags=re.IGNORECASE
+    verb_pat = (
+        r"^(built|improved|optimized|implemented|designed|delivered|shipped|reduced|"
+        r"increased|created|developed|automated|migrated|refactored|scaled|"
+        r"edited|proofread|copyedited|copy-edited|fact-checked|coordinated|scheduled|"
+        r"published|wrote|curated|formatted|produced|managed|monitored|organized|drafted)\s+(.+)$"
     )
-    phrase = m.group(2) if m else canon
-    phrase = re.sub(r"^(using|with)\s+", "", phrase, flags=re.IGNORECASE)
-    return f" Using {phrase}."
+    m = re.match(verb_pat, canon, flags=re.IGNORECASE)
+    if m:
+        verb = m.group(1)
+        rest = m.group(2)
+        cap = verb[:1].upper() + verb[1:]
+        return f" {cap} {rest}."
+    m2 = re.match(r"^(using|with)\s+(.+)$", canon, flags=re.IGNORECASE)
+    if m2:
+        return f" Using {m2.group(2)}."
+    return f" {canon[:1].upper() + canon[1:]}."
 
-def append_clause_and_return_sentence(p: Paragraph, clause: str) -> str:
-    """
-    Add a JD-aligned natural sentence to the paragraph and return exactly
-    what was added (so the UI can highlight it).
-    """
-    if not clause:
-        return ""
-    add = build_added_sentence_from_clause(clause)
-    base = _dominant_nonlink_run(p)
-    if base is None:
-        p.add_run(add)
-        return add
-    r = p.add_run(add)
-    copy_format(base, r)
-    return add
-
-# ---------- policy scoring & selection ----------
+# ---------- policy selection ----------
 
 _GENERIC = {"data", "software", "engineer", "engineering"}
 
@@ -214,23 +183,20 @@ def _readability_ok(clause: str) -> bool:
         return False
     if s.count(',') > 2 or s.count('/') > 2:
         return False
-    VAGUE = {"various", "multiple", "numerous", "optimize", "synergy", "innovative"}
+    VAGUE = {"various","multiple","numerous","optimize","synergy","innovative"}
     toks = tokens(s)
     if len(VAGUE & toks) >= 2:
         return False
     return True
 
-def choose_policy_for_sentence(
-    sentence: str,
-    jd_vocab: Set[str],
-    allowed_vocab: Set[str],
-    policies: List[dict],
-    used_clauses: Set[str]
-) -> Optional[str]:
+def choose_policy_for_sentence(sentence: str,
+                               jd_vocab: Set[str],
+                               allowed_vocab: Set[str],
+                               policies: List[dict],
+                               used_clauses: Set[str]) -> Optional[str]:
     stoks = tokens(sentence)
     best: Optional[dict] = None
     best_score = -1e9
-
     for pol in policies:
         clause = (pol.get("clause") or "").strip()
         if not clause:
@@ -240,92 +206,66 @@ def choose_policy_for_sentence(
             continue
         if not _readability_ok(clause):
             continue
-
         req = set((pol.get("requires_any") or []))
         if req and not (allowed_vocab & req):
             continue
-
         bullet_cues = set(pol.get("bullet_cues") or [])
         if bullet_cues and not (stoks & bullet_cues):
             continue
-
-        # Avoid echoing near-identical phrasing already in the bullet
-        if difflib.SequenceMatcher(
-            None, normalize_ws(sentence.lower()), normalize_ws(lc_clause)
-        ).ratio() > 0.85:
+        if difflib.SequenceMatcher(None, normalize_ws(sentence.lower()),
+                                   normalize_ws(lc_clause)).ratio() > 0.85:
             continue
-
         score = _policy_score(pol, stoks, jd_vocab)
         if score > best_score:
             best_score = score
             best = pol
-
     if not best or best_score <= 0:
         return None
-
     used_clauses.add(best["clause"].lower())
     return best["clause"]
 
 # ---------- rewriting passes ----------
 
-def _rewrite_bullets_in_place(
-    paragraphs: List[Paragraph],
-    start: int,
-    end: int,
-    jd_vocab: Set[str],
-    allowed_vocab: Set[str],
-    policies: List[dict],
-    logger: ChangeLog,
-    section_label: str,
-    max_rewrites: int = 3,
-    used_clauses: Optional[Set[str]] = None,
-):
-    """
-    Append concise, JD-aligned clauses to up to N bullets **already in the resume**.
-    We never create new bullets — only augment existing ones.
-    """
+def _rewrite_bullets_in_place(paragraphs: List[Paragraph],
+                              start: int, end: int,
+                              jd_vocab: Set[str],
+                              allowed_vocab: Set[str],
+                              policies: List[dict],
+                              logger: ChangeLog,
+                              section_label: str,
+                              max_rewrites: int = 3,
+                              used_clauses: Optional[Set[str]] = None):
     if used_clauses is None:
         used_clauses = set()
-
     bullet_idxs = [i for i in range(start, end) if paragraph_is_bullet(paragraphs[i])]
     rewrites = 0
-
     for idx, para_idx in enumerate(bullet_idxs):
         if rewrites >= max_rewrites:
             break
         p = paragraphs[para_idx]
         before = p.text
-
         clause = choose_policy_for_sentence(before, jd_vocab, allowed_vocab, policies, used_clauses)
         if not clause:
             continue
-
-        # super-long bullets tend to degrade readability if appended
         if len(before) > 350:
             continue
-
-        added = append_clause_and_return_sentence(p, clause)
-        logger.add(
-            section_label,
-            before,
-            p.text,
-            reason=f"Aligned to JD via clause: “{canonicalize_clause(clause)}”",
-            inserted_sentence=added,
-            anchor=f"{section_label} • bullet #{idx+1}",
-        )
+        added = build_added_sentence_from_clause(clause)
+        base = _dominant_nonlink_run(p)
+        if base is None:
+            p.add_run(added)
+        else:
+            r = p.add_run(added)
+            copy_format(base, r)
+        logger.add(section_label, before, p.text,
+                   reason=f"Aligned to JD via clause: “{canonicalize_clause(clause)}”",
+                   inserted_sentence=added,
+                   anchor=f"{section_label} • bullet #{idx+1}")
         rewrites += 1
 
-def reorder_or_annotate_skills(
-    paragraphs: List[Paragraph],
-    start: int,
-    end: int,
-    prioritized: List[str],
-    logger: ChangeLog
-):
-    """
-    Prefer reordering a single comma-separated “skills” line; if multiple runs or lines,
-    annotate with a concise priority hint without disturbing styling.
-    """
+def reorder_or_annotate_skills(paragraphs: List[Paragraph],
+                               start: int, end: int,
+                               prioritized: List[str],
+                               logger: ChangeLog):
     def reorder_line_text(text: str, prio: List[str]) -> str:
         import re as _re
         items = [normalize_ws(x) for x in _re.split(r",\s*", text) if x.strip()]
@@ -336,8 +276,7 @@ def reorder_or_annotate_skills(
         for k in prio:
             lc = k.lower()
             if lc in by_lc and lc not in seen:
-                ordered.append(by_lc[lc])
-                seen.add(lc)
+                ordered.append(by_lc[lc]); seen.add(lc)
         for x in items:
             if x.lower() not in seen:
                 ordered.append(x)
@@ -348,19 +287,14 @@ def reorder_or_annotate_skills(
         t = normalize_ws(p.text)
         if not t or paragraph_is_bullet(p) or "," not in t or len(t) >= 500:
             continue
-
         prio_present = [k for k in prioritized if k.lower() in tokens(t)]
         if len(p.runs) == 1:
             before = p.runs[0].text
             after = reorder_line_text(before, prio_present)
             if after != before:
                 p.runs[0].text = after
-                logger.add(
-                    "Technical Skills",
-                    before,
-                    after,
-                    reason="Reordered to surface JD-matching skills already present.",
-                )
+                logger.add("Technical Skills", before, after,
+                           reason="Reordered to surface JD-matching skills already present.")
         else:
             if prio_present:
                 before = p.text
@@ -368,47 +302,33 @@ def reorder_or_annotate_skills(
                 last = next((run for run in reversed(p.runs) if normalize_ws(run.text)), None)
                 if last:
                     copy_format(last, r)
-                logger.add(
-                    "Technical Skills",
-                    before,
-                    p.text,
-                    reason="Annotated priorities without altering styling.",
-                )
+                logger.add("Technical Skills", before, p.text,
+                           reason="Annotated priorities without altering styling.")
         return  # only the first candidate line
 
-# ---------- public API ----------
-
-def tailor_docx_in_place(
-    doc: Document,
-    jd_keywords: List[str],
-    allowed_vocab_list: List[str],
-):
+def tailor_docx_in_place(doc: Document,
+                         jd_keywords: List[str],
+                         allowed_vocab_list: List[str]):
     """
-    Directly tailor the **existing** resume document:
+    Directly tailor the existing resume document:
       - Reorder/annotate skills lines.
       - Append concise JD-aligned sentences to bullets in Projects and Work Experience.
       - Return UI-ready granular change objects.
     """
     logger = ChangeLog()
-    policies = load_policies()  # runtime policies (LLM) take precedence
+    policies = load_policies()
     jd_vocab = set(k.lower() for k in jd_keywords)
     allowed_vocab = set(k.lower() for k in allowed_vocab_list)
     used_clauses: Set[str] = set()
 
-    # Be generous with heading synonyms—users’ templates vary.
+    # Be generous with heading synonyms—user templates vary.
     ranges = find_section_ranges(doc, [
-        # education is included just so it bounds other sections correctly
         "Education",
-        # projects
         "Side Projects", "Projects", "Project Experience",
-        # work
         "Work Experience", "Professional Experience", "Experience",
-        # skills
         "Technical Skills", "Skills", "Core Skills",
-        # optional
         "Workshops", "References",
     ])
-
     pars = doc.paragraphs
 
     # Skills
@@ -436,8 +356,8 @@ def tailor_docx_in_place(
         if sec in ranges:
             s, e = ranges[sec]
             _rewrite_bullets_in_place(
-                pars, s, e, jd_vocab, allowed_vocab, policies,
-                logger, label, max_rewrites=3, used_clauses=used_clauses
+                pars, s, e, jd_vocab, allowed_vocab, policies, logger,
+                label, max_rewrites=3, used_clauses=used_clauses
             )
             break
 
