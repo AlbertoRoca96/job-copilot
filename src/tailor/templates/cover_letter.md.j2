@@ -1,15 +1,26 @@
-Dear Hiring Team at {{ (job.company or 'your company') | trim }},
+Dear Hiring Team at {{ (job.company or 'your organization')|trim }},
 
-I'm excited to apply for the **{{ (job.title or 'position') | trim }}** role.
+I'm excited to apply for the **{{ job.title }}** role.
 
 **Why I’m a fit**
-- Background: {{ (profile.target_titles or [])[:2] | join(' / ') or 'relevant experience' }}.
-- Relevant strengths: {% set topk = (jd_keywords or [])[:6] %}{{ topk|join(', ') if topk else (profile.skills or [])[:6]|join(', ') }}.
-- Approach: clear communication, organized execution, and measurable outcomes.
+- Background: {{ (profile.target_titles or [])|join(' / ') or 'relevant experience' }}.
+- Strengths aligned to your needs:
+  {%- set kws = (jd_keywords or [])[:4] -%}
+  {%- if kws and (profile.skills or []) -%}
+  1) Hands-on with {{ kws|join(', ') }}.
+  2) Comfortable with {{ (profile.skills or [])[:8]|join(', ') }}.
+  {%- elif kws -%}
+  1) Hands-on with {{ kws|join(', ') }}.
+  {%- elif profile.skills -%}
+  1) Comfortable with {{ (profile.skills or [])[:8]|join(', ') }}.
+  {%- else -%}
+  1) Quickly learn tools and processes; reliable and detail-oriented.
+  {%- endif -%}
 
-I’ve attached my resume and would be happy to discuss related work and how I can support the team’s goals.  
-Thank you for your time.
+I’ve attached my resume and would welcome the chance to discuss relevant projects.
+Thanks for your time—I’m keen to learn more about the team and the problems you’re solving.
 
 Best,  
-{{ profile.full_name or profile.name or '' }}  
+{{ profile.full_name or '' }}
+{{- '\n' -}}
 {{ profile.email or '' }}{% if profile.phone %} | {{ profile.phone }}{% endif %}
