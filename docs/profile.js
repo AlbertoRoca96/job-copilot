@@ -1,13 +1,14 @@
-// docs/profile.js — profile-driven shortlist + drafting
+// docs/profile.js — shortlist + drafting + render generated files from Storage
 (async function () {
   await new Promise((r) => window.addEventListener("load", r));
 
-  // Supabase client (same project)
+  // Supabase client (project constants)
   const supabase = window.supabase.createClient(
     "https://imozfqawxpsasjdmgdkh.supabase.co",
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc"
   );
 
+  // DOM
   const el = (id) => document.getElementById(id);
   const signinOnly = el("signinOnly");
   const profBox    = el("profile");
@@ -15,6 +16,10 @@
   const shortlist  = el("shortlist");
   const jobsTable  = el("jobs");
   const jobsBody   = jobsTable.querySelector("tbody");
+  const materials  = el("materials");
+  const coversBox  = el("covers");
+  const resumesBox = el("resumes");
+  const changesBox = el("changes");
 
   const who     = el("who");
   const logout  = el("logout");
@@ -76,7 +81,7 @@
     ].join(", ");
     el("updated").textContent = (prof?.updated_at || prof?.created_at || "—").toString();
 
-    // prefill controls
+    // fill form fields
     titlesInput.value  = (prof?.target_titles || []).join(", ");
     locsInput.value    = (prof?.locations || []).join(", ");
     recencyInput.value = String(pol?.recency_days ?? 0);
@@ -119,7 +124,7 @@
     } catch (e) { patchErr = e; }
     if (patchErr) { runMsg.textContent = "Save failed: " + String(patchErr.message || patchErr); return; }
 
-    // Queue shortlist
+    // Queue shortlist (Edge: /functions/v1/request-run)
     const recencyDays   = Math.max(0, parseInt(recencyInput.value || "0", 10) || 0);
     const remoteOnly    = !!remoteOnlyCb.checked;
     const requirePosted = !!requirePostCb.checked;
@@ -154,13 +159,12 @@
     }
   };
 
-  // ---------- queue drafting (uses /functions/v1/request-draft) ----------
+  // ---------- queue drafting (Edge: /functions/v1/request-draft) ----------
   runDrafts.onclick = async () => {
     const session = await getSession(); if (!session) return alert("Sign in first.");
     draftMsg.textContent = "Queuing drafting…";
 
     const top = Math.max(1, Math.min(20, parseInt(topNInput.value || "5", 10) || 5));
-
     try {
       const restBase = "https://imozfqawxpsasjdmgdkh.supabase.co";
       const resp = await fetch(`${restBase}/functions/v1/request-draft`, {
@@ -177,6 +181,7 @@
       if (!resp.ok) { draftMsg.textContent = `Error: ${out.detail || out.error || resp.status}`; return; }
 
       draftMsg.textContent = `Drafts queued: ${out.request_id || "ok"} (top=${out.top || top})`;
+      setTimeout(loadMaterials, 3000);
     } catch (e) {
       draftMsg.textContent = "Error: " + String(e);
     }
@@ -222,9 +227,60 @@
     el("noData").classList.add("hidden");
   }
 
-  refresh.onclick = loadShortlist;
-  await loadShortlist();
+  // ---------- generated-materials loader ----------
+  async function loadMaterials() {
+    const u = await getUser(); if (!u) return;
+    const key = `${u.id}/drafts_index.json`;
 
-  // ---------- logout ----------
+    // 1) fetch the index via a short-lived signed URL
+    const ixUrlRes = await supabase.storage.from("outputs").createSignedUrl(key, 60);
+    if (ixUrlRes.error || !ixUrlRes.data?.signedUrl) {
+      materials.classList.remove("hidden");
+      coversBox.innerHTML = "<div class='muted'>No generated files yet.</div>";
+      resumesBox.innerHTML = "";
+      changesBox.innerHTML = "";
+      return;
+    }
+
+    let index = { outbox:[], resumes:[], changes:[] };
+    try {
+      const res = await fetch(ixUrlRes.data.signedUrl, { cache: "no-cache" });
+      if (res.ok) index = await res.json();
+    } catch {}
+
+    // helper: render a file grid from a list of basenames under a prefix
+    async function renderFiles(prefix, names, box) {
+      box.innerHTML = "";
+      if (!Array.isArray(names) || names.length === 0) {
+        box.innerHTML = "<div class='muted'>None</div>";
+        return;
+      }
+      for (const name of names) {
+        const p = `${u.id}/${prefix}/${name}`;
+        // 2) for each file, mint a signed URL (works for private buckets) — see Supabase docs. 
+        //    The client receives a temporary URL in data.signedUrl.  (Ref below)
+        const { data, error } = await supabase.storage.from("outputs").createSignedUrl(p, 60);
+        const url = !error && data?.signedUrl ? data.signedUrl : "#";
+        const div = document.createElement("div");
+        div.className = "file";
+        div.innerHTML = `<a href="${url}" target="_blank" rel="noopener">${name}</a>`;
+        box.appendChild(div);
+      }
+    }
+
+    await renderFiles("outbox",  index.outbox,  coversBox);
+    await renderFiles("resumes", index.resumes, resumesBox);
+    await renderFiles("changes", index.changes, changesBox);
+
+    materials.classList.remove("hidden");
+  }
+
+  refresh.onclick = async () => { await loadShortlist(); await loadMaterials(); };
+
+  // initial load
+  await loadShortlist();
+  await loadMaterials();
+
+  // logout
   logout.onclick = async () => { await supabase.auth.signOut(); location.reload(); };
 })();
