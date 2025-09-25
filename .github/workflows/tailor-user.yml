@@ -45,6 +45,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
+          # deps for resume parsing + crawling (incl. LinkedIn/Indeed scrapers)
           pip install -r requirements.txt python-docx requests pyyaml beautifulsoup4
 
       - name: Mark job_requests as running
@@ -71,7 +72,7 @@ jobs:
           set -euo pipefail
           python scripts/parse_resume.py --user "${{ github.event.inputs.user_id }}"
 
-      - name: Crawl boards (from Supabase) using profile filters
+      - name: Crawl boards (from Supabase) using profile filters (GH/Lever + LinkedIn/Indeed)
         shell: bash
         run: |
           set -euo pipefail
