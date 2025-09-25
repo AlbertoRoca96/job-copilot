@@ -1,6 +1,6 @@
 # scripts/draft_email.py
 import os, sys, json, re, yaml, hashlib
-from typing import Tuple
+from typing import Tuple, Set, List  # <-- fixes NameError for Set
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.tailor.render import render_cover
@@ -10,7 +10,8 @@ from docx import Document
 import requests
 from bs4 import BeautifulSoup
 
-from src.skills.taxonomy import augment_allowed_vocab  # NEW
+# NEW: generalized skills back-off (ESCO/O*NET mapping)
+from src.skills.taxonomy import augment_allowed_vocab
 
 DATA_JSONL = os.path.join(os.path.dirname(__file__), '..', 'data', 'scores.jsonl')
 DATA_JSON  = os.path.join(os.path.dirname(__file__), '..', 'docs', 'data', 'scores.json')
@@ -23,7 +24,7 @@ PROFILE_YAML   = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'p
 PORTFOLIO_YAML = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'portfolio.yaml')
 TMPL_DIR       = os.path.join(os.path.dirname(__file__), '..', 'src', 'tailor', 'templates')
 
-# IMPORTANT: prefer the user's uploaded resume fetched by scripts/fetch_user_assets.py
+# Prefer the user's uploaded resume fetched by scripts/fetch_user_assets.py
 CURRENT_RESUME = os.path.join(os.path.dirname(__file__), '..', 'assets', 'current.docx')
 FALLBACK_RESUME= os.path.join(os.path.dirname(__file__), '..', 'assets', 'Resume-2025.docx')
 
@@ -52,10 +53,10 @@ STOPWORDS = {
 }
 
 def _allowed_vocab_from_profile(profile: dict, portfolio: dict) -> Set[str]:
-    """Original profile->allowed vocabulary (lowercased)."""
+    """Base profile/portfolio vocabulary (lowercased)."""
     skills = {str(s).lower() for s in (profile.get("skills") or [])}
     titles = {str(t).lower() for t in (profile.get("target_titles") or [])}
-    tags = set()
+    tags: Set[str] = set()
     for section in ("projects", "work_experience", "workshops"):
         for item in (portfolio.get(section, []) or []):
             for b in (item.get("bullets", []) or []):
@@ -64,9 +65,9 @@ def _allowed_vocab_from_profile(profile: dict, portfolio: dict) -> Set[str]:
     expanded = {norm(w) for w in (skills | tags | titles)}
     return set(expanded | skills | tags | titles)
 
-def allowed_vocab(profile: dict, portfolio: dict) -> Set[str]:
+def allowed_vocab(profile: dict, portfolio: dict) -> List[str]:
     """
-    NEW: Augment profile/portfolio skills with ESCO/O*NET title→skills back-off,
+    Augment profile/portfolio skills with ESCO/O*NET title→skills back-off,
     so non-tech roles get solid domain keywords too.
     """
     base = _allowed_vocab_from_profile(profile, portfolio)
@@ -257,7 +258,7 @@ def main(top: int, user: str | None):
 
         # COVER
         cover_fname = f"{slug}.md"
-        cover = render_cover(j, PROFILE_YAML, TMPL_DIR, jd_keywords=jd_kws)  # pass kws
+        cover = render_cover(j, PROFILE_YAML, TMPL_DIR, jd_keywords=jd_kws)  # pass kws into template
         with open(os.path.join(OUTBOX_MD, cover_fname), 'w') as f: f.write(cover)
         j['cover_path'] = f"outbox/{cover_fname}"
 
