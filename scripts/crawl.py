@@ -35,12 +35,9 @@ def _get_boards() -> List[Dict]:
     return r.json() or []
 
 def _build_filters(profile: dict):
-    # Include = tokens from target_titles + skills (fallback to generic).
     inc = set(tokens_from_terms(profile.get('target_titles'))) | set(tokens_from_terms(profile.get('skills')))
-    if not inc:
-        inc = {"software", "engineer"}
-    # Exclude seniority by default; extend as needed
-    exc = {"senior","staff","principal","lead","manager","director"}
+    if not inc: inc = {"software", "engineer"}  # fallback
+    exc = {"senior","staff","principal","lead","manager","director"}  # default exclusions
     return inc, exc
 
 def _keep_factory(inc: set, exc: set):
@@ -66,7 +63,6 @@ def main(user_id: str):
 
     all_jobs: List[Dict] = []
     failures = 0
-
     for b in boards:
         src = (b.get('source') or '').strip().lower()
         slug = (b.get('slug') or '').strip().lower()
@@ -98,6 +94,6 @@ def main(user_id: str):
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
-    ap.add_argument('--user', required=True, help='Supabase user id')
+    ap.add_argument('--user', required=True)
     args = ap.parse_args()
     main(args.user)
