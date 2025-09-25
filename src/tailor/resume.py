@@ -1,54 +1,32 @@
 # src/tailor/resume.py
 import re
 import difflib
-from typing import List, Tuple, Dict, Set, Optional
+from typing import List, Tuple, Dict, Set, Optional, Callable
 from docx import Document
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 
-from .policies import load_policies  # still available (back-up), but default is inline inject
+from .policies import load_policies  # optional fallback clauses (kept for compatibility)
+
+# --------- tokenization & casing ---------
 
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{1,}")
 
-# Canonical tech (and common tools) casing for added phrases
+# Canonical casing for common tools/skills (extend as needed)
 CANON = {
-    "c++": "C++",
-    "python": "Python",
-    "pytorch": "PyTorch",
-    "tensorflow": "TensorFlow",
-    "scikit-learn": "scikit-learn",
-    "sklearn": "scikit-learn",
-    "xgboost": "XGBoost",
-    "javascript": "JavaScript",
-    "typescript": "TypeScript",
-    "react": "React",
-    "react native": "React Native",
-    "expo": "Expo",
-    "opencv": "OpenCV",
-    "sql": "SQL",
-    "postgres": "Postgres",
-    "postgresql": "Postgres",
-    "supabase": "Supabase",
-    "github actions": "GitHub Actions",
-    "ci": "CI",
-    "nlp": "NLP",
-    "ml": "ML",
-    "rag": "RAG",
-    "webassembly": "WebAssembly",
-    "wasm": "WebAssembly",
-    # office / editorial / misc
-    "microsoft office": "Microsoft Office",
-    "word": "Word",
-    "excel": "Excel",
-    "powerpoint": "PowerPoint",
-    "outlook": "Outlook",
-    "adobe": "Adobe",
-    "photoshop": "Photoshop",
-    "illustrator": "Illustrator",
-    "indesign": "InDesign",
-    "power bi": "Power BI",
-    "cms": "CMS",
-    "seo": "SEO",
+    # tech
+    "c++": "C++", "python": "Python", "pytorch": "PyTorch", "tensorflow": "TensorFlow",
+    "scikit-learn": "scikit-learn", "sklearn": "scikit-learn", "xgboost": "XGBoost",
+    "javascript": "JavaScript", "typescript": "TypeScript", "react": "React",
+    "react native": "React Native", "expo": "Expo", "opencv": "OpenCV", "sql": "SQL",
+    "postgres": "Postgres", "postgresql": "Postgres", "supabase": "Supabase",
+    "github actions": "GitHub Actions", "ci": "CI", "nlp": "NLP", "ml": "ML",
+    "rag": "RAG", "webassembly": "WebAssembly", "wasm": "WebAssembly",
+    # office/editorial/etc.
+    "microsoft office": "Microsoft Office", "word": "Word", "excel": "Excel",
+    "powerpoint": "PowerPoint", "outlook": "Outlook", "adobe": "Adobe",
+    "photoshop": "Photoshop", "illustrator": "Illustrator", "indesign": "InDesign",
+    "power bi": "Power BI", "cms": "CMS", "seo": "SEO",
 }
 
 def tokens(text: str) -> Set[str]:
@@ -57,7 +35,13 @@ def tokens(text: str) -> Set[str]:
 def normalize_ws(s: str) -> str:
     return re.sub(r"\s+", " ", s or "").strip()
 
-# ---------- change log (UI-facing) ----------
+def _canon(s: str) -> str:
+    out = s or ""
+    for k in sorted(CANON.keys(), key=len, reverse=True):
+        out = re.sub(rf"\b{re.escape(k)}\b", CANON[k], out, flags=re.IGNORECASE)
+    return out
+
+# --------- change log (UI-facing) ---------
 
 class ChangeLog:
     def __init__(self):
@@ -74,9 +58,10 @@ class ChangeLog:
             "reason": reason
         })
 
-# ---------- document helpers ----------
+# --------- document helpers ---------
 
 def find_section_ranges(doc: Document, section_titles: List[str]) -> Dict[str, Tuple[int, int]]:
+    """Return {lower_title: (start_idx, end_idx)} (end is exclusive)."""
     wants = [normalize_ws(t).lower() for t in section_titles]
     hits: Dict[str, int] = {}
     for i, p in enumerate(doc.paragraphs):
@@ -93,6 +78,7 @@ def find_section_ranges(doc: Document, section_titles: List[str]) -> Dict[str, T
     return ranges
 
 def paragraph_is_bullet(p: Paragraph) -> bool:
+    """Heuristic: list-like style or leading glyph."""
     try:
         name = (getattr(p.style, "name", "") or "").lower()
     except Exception:
@@ -103,6 +89,7 @@ def paragraph_is_bullet(p: Paragraph) -> bool:
     return t.startswith(("•", "-", "–", "·"))
 
 def copy_format(from_run: Run, to_run: Run):
+    """Copy common font + style hints."""
     try:
         to_run.font.name = from_run.font.name
         to_run.font.size = from_run.font.size
@@ -117,6 +104,7 @@ def copy_format(from_run: Run, to_run: Run):
         pass
 
 def _dominant_nonlink_run(p: Paragraph) -> Optional[Run]:
+    """Pick the longest non-hyperlink run as a formatting source."""
     best, best_len = None, -1
     for r in p.runs:
         txt = (r.text or "")
@@ -134,101 +122,241 @@ def _dominant_nonlink_run(p: Paragraph) -> Optional[Run]:
                 return r
     return best
 
-def _canon(s: str) -> str:
-    out = s or ""
-    for k in sorted(CANON.keys(), key=len, reverse=True):
-        out = re.sub(rf"\b{re.escape(k)}\b", CANON[k], out, flags=re.IGNORECASE)
-    return out
+def _clear_runs(p: Paragraph):
+    """Remove all runs (low-level)."""
+    for r in list(p.runs):
+        try:
+            r._element.getparent().remove(r._element)  # noqa
+        except Exception:
+            pass
 
-# ---------- inline injection ----------
+def _set_text_preserve_para_style(p: Paragraph, text: str, base: Optional[Run]):
+    """
+    Assign text as a single run, then re-apply base run formatting so
+    we don't end up with default run formatting everywhere.
+    """
+    p.text = text  # replaces runs with one run; keeps paragraph-level style. :contentReference[oaicite:2]{index=2}
+    if base and p.runs:
+        copy_format(base, p.runs[0])
 
-def _dedup_ordered(seq: List[str]) -> List[str]:
-    seen = set(); out = []
-    for x in seq:
-        k = (x or "").strip().lower()
-        if not k or k in seen:
+# --------- QUOTED LOGIC: Pass 1/2/3 IMPLEMENTATION ---------
+
+# --- Pass 1: listline priorities (Skills & similar) ---
+def inject_listline_priorities(doc: Document,
+                               jd_keywords: List[str],
+                               backoff_terms: List[str],
+                               log_change: Callable[[str, str, str, str], None]):
+    """
+    Reorder inline skill/tool lists and insert plausible synonyms.
+    - Detect paragraphs under Skills/Technical Skills sections.
+    - Split comma/semicolon lists, normalize tokens.
+    - Priority = JD hits (ordered) + backoff terms (ESCO/O*NET).
+    - Rebuild the same paragraph text preserving run formatting (best-effort).
+    """
+    ranges = find_section_ranges(doc, ["Technical Skills", "Skills", "Core Skills"])
+    if not ranges:
+        return 0
+
+    # choose the first matching skills section
+    key = next(iter([k for k in ("technical skills", "skills", "core skills") if k in ranges]), None)
+    if not key:
+        return 0
+
+    start, end = ranges[key]
+    changes = 0
+    jd_lc = [k.strip().lower() for k in jd_keywords if k and k.strip()]
+    backoff_lc = [k.strip().lower() for k in backoff_terms if k and k.strip()]
+
+    for i in range(start, end):
+        p = doc.paragraphs[i]
+        t = normalize_ws(p.text)
+        if not t or paragraph_is_bullet(p) or len(t) > 600:
             continue
-        seen.add(k); out.append(x)
-    return out
 
-def _choose_inline_targets(bullet_text: str,
+        # detect list-ish lines (commas/semicolons)
+        if "," not in t and ";" not in t:
+            continue
+
+        # split & normalize
+        raw_items = re.split(r"\s*[;,]\s*", t)
+        items = [normalize_ws(x) for x in raw_items if x.strip()]
+        if not items:
+            continue
+
+        present_tokens = tokens(t)
+        present_text = t.lower()
+
+        # Priority 1: JD hits that already exist in the line (preserve JD order)
+        prio = []
+        for k in jd_lc:
+            # match as token OR substring for multiword phrases
+            if k in present_tokens or k in present_text:
+                prio.append(k)
+
+        # Priority 2: backoff terms (ESCO/O*NET-derived) that are missing but plausible
+        # Only add if not already present as substring
+        to_add = [k for k in backoff_lc if k not in present_text]
+
+        # Reorder existing items by priority (stable)
+        by_lc = {x.lower(): x for x in items}
+        seen: Set[str] = set()
+        ordered: List[str] = []
+        for k in prio:
+            for cand in list(by_lc.keys()):
+                if k == cand and cand not in seen:
+                    ordered.append(by_lc[cand]); seen.add(cand)
+        for x in items:
+            if x.lower() not in seen:
+                ordered.append(x)
+
+        # Enrich: add plausible missing items at end (cap to avoid stuffing)
+        add_cap = 3
+        adds = []
+        for k in to_add:
+            if len(adds) >= add_cap:
+                break
+            adds.append(_canon(k))
+        after_text = ", ".join(ordered + adds)
+        after_text = _canon(after_text)
+
+        if after_text != p.text:
+            before = p.text
+            base = _dominant_nonlink_run(p)
+            _set_text_preserve_para_style(p, after_text, base)
+            log_change("Technical Skills", before, after_text, "Reordered/enriched inline skills list.")
+            changes += 1
+            # We stop after first meaningful skills line to avoid over-editing
+            break
+
+    return changes
+
+# --- small utility to locate first sentence boundary ---
+def _first_sentence_split(text: str) -> int:
+    m = re.search(r'([.!?])(\s|$)', text)
+    return (m.start(1) + 1) if m else len(text)
+
+# --- Pass 2: weave phrase into an existing bullet (no new sentence) ---
+def weave_phrase_into_bullet(paragraph: Paragraph,
+                             phrase: str,
+                             copy_format_fn: Callable[[Run, Run], None],
+                             log_change: Callable[[str, str, str, str, Optional[str], Optional[str]], None],
+                             section_label: str = "Work Experience") -> bool:
+    """
+    Insert ' using <phrase>' before the first sentence terminator.
+    Preserve dominant run format via copy_format(existing_run, new_run).
+    """
+    phrase = _canon(phrase or "").strip().rstrip(".")
+    if not phrase:
+        return False
+
+    base = _dominant_nonlink_run(paragraph)
+    txt = "".join(r.text for r in paragraph.runs) if paragraph.runs else paragraph.text
+    insert_at = _first_sentence_split(txt)
+    glue = " " if insert_at and insert_at <= len(txt) and txt[insert_at - 1].isalnum() else ""
+    pre, post = txt[:insert_at], txt[insert_at:]
+    new_text = pre + f"{glue} using {phrase}" + post
+
+    before = paragraph.text
+    # safest path: reset text, then reapply formatting
+    _set_text_preserve_para_style(paragraph, new_text, base)
+    log_change(section_label, before, paragraph.text,
+               reason="Wove JD-aligned phrase inline.",
+               inserted_sentence=f" using {phrase}",
+               anchor=f"{section_label} • bullet")
+    return True
+
+# --- Orchestrator hook inside your existing tailor_docx_in_place() ---
+def apply_universal_passes(doc: Document,
+                           sections: Optional[Dict[str, Tuple[int, int]]],
                            jd_keywords: List[str],
                            allowed_vocab: Set[str],
-                           cap: int = 3) -> List[str]:
-    present = tokens(bullet_text)
-    # Only inject terms we "allow" and that are missing from the bullet
-    cands = [k for k in jd_keywords if k and k.lower() in allowed_vocab and k.lower() not in present]
-    cands = [k for k in cands if len(k) <= 40]           # avoid very long phrases
-    cands = _dedup_ordered(cands)[:cap]
-    return cands
+                           backoff_terms: List[str],
+                           log_change: Callable[[str, str, str, str, Optional[str], Optional[str]], None]) -> int:
+    """
+    Run Pass 1 for Skills; Pass 2 over bullets; Pass 3 fallback 'Using ...' appends
+    if a section had 0 changes.
+    """
+    total = 0
+    # Pass 1: Skills
+    total += inject_listline_priorities(doc, jd_keywords, backoff_terms,
+                                        lambda sec, b, a, r: log_change(sec, b, a, r, None, sec))
 
-def _append_inline(p: Paragraph, phrase: str) -> str:
-    base = _dominant_nonlink_run(p)
-    added = f" — {phrase}"
-    if base is None:
-        p.add_run(added)
-        return added
-    r = p.add_run(added)
-    copy_format(base, r)
-    return added
+    # Prep sections map
+    sections = sections or find_section_ranges(doc, [
+        "Side Projects", "Projects", "Project Experience",
+        "Work Experience", "Professional Experience", "Experience",
+    ])
 
-def _inject_into_comma_list(text: str, add_items: List[str]) -> Optional[str]:
-    """
-    If a bullet already has a comma-separated list or (...) list,
-    add new items at the end of that list. Otherwise return None.
-    """
-    t = text
-    # parenthetical list
-    m = re.search(r"\(([^)]+)\)", t)
-    if m:
-        inside = m.group(1).strip()
-        if inside:
-            new_inside = inside
-            if not new_inside.endswith(",") and not new_inside.endswith(";"):
-                new_inside += ", "
-            new_inside += ", ".join(add_items)
-            return t[:m.start(1)] + new_inside + t[m.end(1):]
-    # plain comma list near the end
-    if "," in t and len(t) < 400:
-        if t.endswith("."):
-            t2 = t[:-1]
-            if not t2.endswith(","):
-                t2 += ", "
-            t2 += ", ".join(add_items)
-            return t2 + "."
-        else:
-            t2 = t
-            if not t2.endswith(","):
-                t2 += ", "
-            t2 += ", ".join(add_items)
-            return t2
-    return None
-
-def _inject_keywords_inline(p: Paragraph,
-                            jd_keywords: List[str],
-                            allowed_vocab: Set[str]) -> Optional[str]:
-    """
-    Try to inject keywords inline. Strategy:
-      1) If the bullet contains a (...) or comma list, append missing keywords there.
-      2) Else, append a short em-dash phrase: " — Adobe, Outlook".
-    Returns the exact added phrase (for change log), or None if nothing changed.
-    """
-    before = p.text
-    adds = _choose_inline_targets(before, jd_keywords, allowed_vocab, cap=3)
-    if not adds:
+    # Helper to choose top phrase from JD keywords within allowed vocab
+    def choose_top_phrase(jd_kws: List[str], allowed: Set[str]) -> Optional[str]:
+        for k in jd_kws:
+            if k and k.lower() in allowed and len(k) <= 48:
+                return _canon(k)
         return None
-    adds_canon = [_canon(a) for a in adds]
-    # attempt list injection
-    updated = _inject_into_comma_list(before, adds_canon)
-    if updated:
-        p.text = updated
-        return ", ".join(adds_canon)
-    # fallback: em-dash phrase
-    phrase = ", ".join(adds_canon)
-    _append_inline(p, phrase)
-    return phrase
 
-# ---------- optional policy (disabled when inline_only=True) ----------
+    # Pass 2: weave into existing bullets in Projects and Work Experience
+    def weave_section(sec_keys: List[str], label: str) -> bool:
+        changed = False
+        for key in sec_keys:
+            if key in sections:
+                s, e = sections[key]
+                for i in range(s, e):
+                    p = doc.paragraphs[i]
+                    if not paragraph_is_bullet(p):
+                        continue
+                    target = choose_top_phrase(jd_keywords, allowed_vocab)
+                    if target and weave_phrase_into_bullet(p, target, copy_format, log_change, section_label=label):
+                        changed = True
+        return changed
+
+    changed_projects = weave_section(["side projects", "projects", "project experience"], "Projects")
+    changed_work = weave_section(["work experience", "professional experience", "experience"], "Work Experience")
+    total += (1 if changed_projects else 0) + (1 if changed_work else 0)
+
+    # Pass 3: fallback appenders (only if no changes in a section)
+    def append_using_phrase_fallback(sec_keys: List[str], label: str) -> bool:
+        # find bullets and pick up to two shortest (<220 chars)
+        chosen_phrase = choose_top_phrase(jd_keywords, allowed_vocab)
+        if not chosen_phrase:
+            return False
+        for key in sec_keys:
+            if key not in sections:
+                continue
+            s, e = sections[key]
+            bullets = [(i, len(doc.paragraphs[i].text)) for i in range(s, e) if paragraph_is_bullet(doc.paragraphs[i])]
+            bullets = [b for b in bullets if b[1] < 220]
+            bullets.sort(key=lambda x: x[1])
+            made = False
+            for idx, _ in bullets[:2]:
+                p = doc.paragraphs[idx]
+                before = p.text
+                base = _dominant_nonlink_run(p)
+                suffix = f" Using {chosen_phrase}."
+                # ensure spacing / punctuation
+                text = before.rstrip()
+                if text.endswith("."):
+                    text = text[:-1]
+                new_text = text + suffix
+                _set_text_preserve_para_style(p, new_text, base)
+                log_change(label, before, p.text,
+                           reason="Fallback appender to ensure visible tailoring.",
+                           inserted_sentence=suffix.strip(),
+                           anchor=f"{label} • bullet")
+                made = True
+            if made:
+                return True
+        return False
+
+    if not changed_projects:
+        if append_using_phrase_fallback(["side projects", "projects", "project experience"], "Projects"):
+            total += 1
+    if not changed_work:
+        if append_using_phrase_fallback(["work experience", "professional experience", "experience"], "Work Experience"):
+            total += 1
+
+    return total
+
+# --------- existing policy machinery (optional/fallback) ---------
 
 _GENERIC = {"data", "software", "engineer", "engineering"}
 
@@ -273,140 +401,70 @@ def choose_policy_for_sentence(sentence: str,
     used_clauses.add(best["clause"].lower())
     return best["clause"]
 
-# ---------- passes ----------
-
-def reorder_or_annotate_skills(paragraphs: List[Paragraph],
-                               start: int, end: int,
-                               prioritized: List[str],
-                               logger: ChangeLog):
-    def reorder_line_text(text: str, prio: List[str]) -> str:
-        import re as _re
-        items = [normalize_ws(x) for x in _re.split(r",\s*", text) if x.strip()]
-        if not items:
-            return text
-        by_lc = {x.lower(): x for x in items}
-        seen, ordered = set(), []
-        for k in prio:
-            lc = k.lower()
-            if lc in by_lc and lc not in seen:
-                ordered.append(by_lc[lc]); seen.add(lc)
-        for x in items:
-            if x.lower() not in seen:
-                ordered.append(x)
-        return ", ".join(ordered)
-
-    for i in range(start, end):
-        p = paragraphs[i]
-        t = normalize_ws(p.text)
-        if not t or paragraph_is_bullet(p) or "," not in t or len(t) >= 500:
-            continue
-        prio_present = [k for k in prioritized if k.lower() in tokens(t)]
-        if len(p.runs) == 1:
-            before = p.runs[0].text
-            after = reorder_line_text(before, prio_present)
-            if after != before:
-                p.runs[0].text = after
-                logger.add("Technical Skills", before, after,
-                           reason="Reordered to surface JD-matching skills already present.")
-        else:
-            if prio_present:
-                before = p.text
-                r = p.add_run(f" (Priority: {', '.join(prio_present[:6])})")
-                last = next((run for run in reversed(p.runs) if normalize_ws(run.text)), None)
-                if last:
-                    copy_format(last, r)
-                logger.add("Technical Skills", before, p.text,
-                           reason="Annotated priorities without altering styling.")
-        return  # only the first candidate line
-
-def _rewrite_bullets_inline(paragraphs: List[Paragraph],
-                            start: int, end: int,
-                            jd_vocab: Set[str],
-                            allowed_vocab: Set[str],
-                            logger: ChangeLog,
-                            section_label: str):
-    added_any = False
-    for idx in range(start, end):
-        p = paragraphs[idx]
-        if not paragraph_is_bullet(p):
-            continue
-        before = p.text
-        phrase = _inject_keywords_inline(p, list(jd_vocab), allowed_vocab)
-        if phrase:
-            logger.add(section_label, before, p.text,
-                       reason="Injected inline JD keywords.",
-                       inserted_sentence=" — " + phrase,
-                       anchor=f"{section_label} • bullet")
-            added_any = True
-    return added_any
+# --------- public entrypoint ---------
 
 def tailor_docx_in_place(doc: Document,
                          jd_keywords: List[str],
                          allowed_vocab_list: List[str],
-                         inline_only: bool = True):
+                         backoff_terms: Optional[List[str]] = None,
+                         inline_only: bool = True) -> List[dict]:
     """
-    Tailor the existing resume **in place**:
-      - Skills line: reorder/annotate by JD priority.
-      - Projects & Work Experience: inject JD keywords **inline** (no fabricated sentences).
-      - If inline_only=False, we can still append short policy phrases as a fallback.
+    Tailor the existing resume **in place** with universal passes + optional policy fallback.
+      - Pass 1: reorder/enrich Skills inline list(s) using JD + backoff (ESCO/O*NET).
+      - Pass 2: weave short phrases into existing bullets (Projects, Work Experience).
+      - Pass 3: if a section saw 0 changes, append one concise 'Using <phrase>.' to 1–2 shortest bullets.
+      - If inline_only=False, also try short policy clauses (legacy behavior).
+    Returns the change log items.
     """
     logger = ChangeLog()
-    policies = load_policies()  # available if you ever re-enable clause append
-    jd_vocab = set(k.lower() for k in jd_keywords)
-    allowed_vocab = set(k.lower() for k in allowed_vocab_list)
-    used_clauses: Set[str] = set()
+    policies = load_policies()  # remains available if inline_only=False
+    jd_vocab = set(k.lower() for k in jd_keywords if k)
+    allowed_vocab = set(k.lower() for k in allowed_vocab_list if k)
+    backoff_terms = backoff_terms or []
 
-    ranges = find_section_ranges(doc, [
+    # sections map once
+    sections = find_section_ranges(doc, [
         "Education",
         "Side Projects", "Projects", "Project Experience",
         "Work Experience", "Professional Experience", "Experience",
         "Technical Skills", "Skills", "Core Skills",
         "Workshops", "References",
     ])
-    pars = doc.paragraphs
 
-    # Skills
-    for key in ("technical skills", "skills", "core skills"):
-        if key in ranges:
-            s, e = ranges[key]
-            reorder_or_annotate_skills(pars, s, e, list(jd_vocab), logger)
-            break
+    def log_change(sec, before, after, reason, inserted=None, anchor=None):
+        logger.add(sec, before, after, reason, inserted_sentence=inserted, anchor=anchor)
 
-    # Projects
-    for sec in ("side projects", "projects", "project experience"):
-        if sec in ranges:
-            s, e = ranges[sec]
-            _rewrite_bullets_inline(pars, s, e, jd_vocab, allowed_vocab, logger, "Projects")
+    # Universal passes
+    apply_universal_passes(doc, sections, jd_keywords, allowed_vocab, backoff_terms, log_change)
 
-    # Work Experience
-    for sec, label in (
-        ("work experience", "Work Experience"),
-        ("professional experience", "Work Experience"),
-        ("experience", "Work Experience"),
-    ):
-        if sec in ranges:
-            s, e = ranges[sec]
-            changed = _rewrite_bullets_inline(pars, s, e, jd_vocab, allowed_vocab, logger, label)
-            if (not changed) and (not inline_only):
-                # Optional fallback: at most 2 short clause appends
-                bullet_idxs = [i for i in range(s, e) if paragraph_is_bullet(pars[i])]
-                for i, para_idx in enumerate(bullet_idxs[:2]):
-                    p = pars[para_idx]
-                    before = p.text
-                    clause = choose_policy_for_sentence(before, jd_vocab, allowed_vocab, policies, used_clauses)
-                    if not clause or len(before) > 350:
-                        continue
-                    # append as very short em-dash phrase, NOT a new sentence
-                    phrase = re.sub(r"^(built|improved|optimized|implemented|designed|delivered|shipped|reduced|increased|created|developed|automated|migrated|refactored|scaled)\s+",
-                                    "", clause, flags=re.IGNORECASE).strip().rstrip(".")
-                    phrase = _canon(phrase)
-                    r = p.add_run(" — " + phrase)
-                    base = _dominant_nonlink_run(p)
-                    if base: copy_format(base, r)
-                    logger.add(label, before, p.text,
-                               reason=f"Aligned to JD via clause",
-                               inserted_sentence=" — " + phrase,
-                               anchor=f"{label} • bullet")
-            break
+    # Optional: policy-based micro-clauses as final fallback (very conservative)
+    if not inline_only:
+        used_clauses: Set[str] = set()
+        for sec_key, label in (
+            ("work experience", "Work Experience"),
+            ("professional experience", "Work Experience"),
+            ("experience", "Work Experience"),
+        ):
+            if sec_key not in sections:
+                continue
+            s, e = sections[sec_key]
+            for i in range(s, e):
+                p = doc.paragraphs[i]
+                if not paragraph_is_bullet(p) or len(p.text) > 350:
+                    continue
+                clause = choose_policy_for_sentence(p.text, jd_vocab, allowed_vocab, policies, used_clauses)
+                if not clause:
+                    continue
+                phrase = re.sub(r"^(built|improved|optimized|implemented|designed|delivered|shipped|reduced|increased|created|developed|automated|migrated|refactored|scaled)\s+",
+                                "", clause, flags=re.IGNORECASE).strip().rstrip(".")
+                phrase = _canon(phrase)
+                before = p.text
+                base = _dominant_nonlink_run(p)
+                suffix = f" — {phrase}"
+                _set_text_preserve_para_style(p, before.rstrip() + suffix, base)
+                logger.add(label, before, p.text,
+                           reason="Optional policy clause (fallback).",
+                           inserted_sentence=suffix.strip(),
+                           anchor=f"{label} • bullet")
 
     return logger.items
