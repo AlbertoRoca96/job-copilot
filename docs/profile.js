@@ -1,4 +1,4 @@
-// docs/profile.js — shortlist + drafting + render generated files from Storage
+// docs/profile.js — shortlist + drafting + render generated files from Storage + diff modal
 (async function () {
   await new Promise((r) => window.addEventListener("load", r));
 
@@ -8,7 +8,7 @@
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc"
   );
 
-  // DOM
+  // DOM helpers
   const el = (id) => document.getElementById(id);
   const signinOnly = el("signinOnly");
   const profBox    = el("profile");
@@ -41,10 +41,17 @@
   const runMsg   = el("runMsg");
   const refresh  = el("refresh");
 
-  // drafting controls
+  // drafting
   const runDrafts = el("runDrafts");
   const draftMsg  = el("draftMsg");
   const topNInput = el("topN");
+
+  // diff modal
+  const diffModal = el("diffModal");
+  const diffBody = el("diffBody");
+  const diffClose = el("diffClose");
+  diffClose.onclick = () => diffModal.classList.remove("open");
+  diffModal.addEventListener("click", (e) => { if (e.target === diffModal) diffModal.classList.remove("open"); });
 
   const getUser    = () => supabase.auth.getUser().then(r => r.data.user || null);
   const getSession = () => supabase.auth.getSession().then(r => r.data.session || null);
@@ -82,11 +89,11 @@
     el("updated").textContent = (prof?.updated_at || prof?.created_at || "—").toString();
 
     // fill form fields
-    titlesInput.value  = (prof?.target_titles || []).join(", ");
-    locsInput.value    = (prof?.locations || []).join(", ");
-    recencyInput.value = String(pol?.recency_days ?? 0);
-    remoteOnlyCb.checked  = !!pol?.remote_only;
-    requirePostCb.checked = !!pol?.require_posted_date;
+    el("desiredTitles").value  = (prof?.target_titles || []).join(", ");
+    el("desiredLocs").value    = (prof?.locations || []).join(", ");
+    el("recencyDays").value = String(pol?.recency_days ?? 0);
+    el("remoteOnly").checked  = !!pol?.remote_only;
+    el("requirePosted").checked = !!pol?.require_posted_date;
   } else {
     el("full_name").textContent = `Error: ${profErr?.message || "profile not found"}`;
   }
@@ -227,6 +234,56 @@
     el("noData").classList.add("hidden");
   }
 
+  // ---------- diff modal ----------
+  function renderDiffItem(it) {
+    const before = String(it.original_paragraph_text || "");
+    const after = String(it.modified_paragraph_text || "");
+    const added = String(it.inserted_sentence || "");
+    const sec = String(it.anchor_section || "");
+    const anchor = String(it.anchor || "");
+    const reason = String(it.reason || "");
+
+    return `
+      <div style="margin-bottom:14px">
+        <div style="margin-bottom:6px">
+          <span class="tag">${sec}</span>
+          ${anchor ? `<span class="tag" style="margin-left:6px">${anchor}</span>` : ""}
+        </div>
+        <div class="diff">
+          <div>
+            <div class="muted" style="margin-bottom:4px">Before</div>
+            <div class="mono">${before.replace(/</g,"&lt;")}</div>
+          </div>
+          <div>
+            <div class="muted" style="margin-bottom:4px">After</div>
+            <div class="mono">${after.replace(/</g,"&lt;").replace(added, `<span class="ins">${added}</span>`)}</div>
+          </div>
+        </div>
+        <div class="muted" style="margin-top:6px">${reason}</div>
+      </div>
+    `;
+  }
+
+  async function openDiffModal(jsonUrl) {
+    try {
+      const res = await fetch(jsonUrl, { cache: "no-cache" });
+      if (!res.ok) throw new Error("Failed to fetch change log");
+      const obj = await res.json();
+      let html = "";
+      const changes = Array.isArray(obj?.changes) ? obj.changes : [];
+      if (!changes.length) {
+        html = `<div class="muted">No granular changes recorded for this document.</div>`;
+      } else {
+        html = changes.map(renderDiffItem).join("");
+      }
+      diffBody.innerHTML = html;
+      diffModal.classList.add("open");
+    } catch (e) {
+      diffBody.innerHTML = `<div class="muted">Error loading diff: ${String(e)}</div>`;
+      diffModal.classList.add("open");
+    }
+  }
+
   // ---------- generated-materials loader ----------
   async function loadMaterials() {
     const u = await getUser(); if (!u) return;
@@ -249,7 +306,7 @@
     } catch {}
 
     // helper: render a file grid from a list of basenames under a prefix
-    async function renderFiles(prefix, names, box) {
+    async function renderFiles(prefix, names, box, options={}) {
       box.innerHTML = "";
       if (!Array.isArray(names) || names.length === 0) {
         box.innerHTML = "<div class='muted'>None</div>";
@@ -257,20 +314,29 @@
       }
       for (const name of names) {
         const p = `${u.id}/${prefix}/${name}`;
-        // 2) for each file, mint a signed URL (works for private buckets) — see Supabase docs. 
-        //    The client receives a temporary URL in data.signedUrl.  (Ref below)
         const { data, error } = await supabase.storage.from("outputs").createSignedUrl(p, 60);
         const url = !error && data?.signedUrl ? data.signedUrl : "#";
         const div = document.createElement("div");
         div.className = "file";
-        div.innerHTML = `<a href="${url}" target="_blank" rel="noopener">${name}</a>`;
+        if (options.kind === "changes") {
+          // JSON: download + a "View" button that opens the diff modal
+          div.innerHTML = `
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+              <a href="${url}" target="_blank" rel="noopener">${name}</a>
+              <button class="btn" data-url="${url}">View</button>
+            </div>`;
+          const btn = div.querySelector("button");
+          btn.onclick = () => openDiffModal(url);
+        } else {
+          div.innerHTML = `<a href="${url}" target="_blank" rel="noopener">${name}</a>`;
+        }
         box.appendChild(div);
       }
     }
 
     await renderFiles("outbox",  index.outbox,  coversBox);
     await renderFiles("resumes", index.resumes, resumesBox);
-    await renderFiles("changes", index.changes, changesBox);
+    await renderFiles("changes", index.changes, changesBox, { kind: "changes" });
 
     materials.classList.remove("hidden");
   }
