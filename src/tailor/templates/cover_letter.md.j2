@@ -1,23 +1,15 @@
-{# Domain-agnostic cover letter. Uses JD keywords + profile contact. #}
-{% set kws = (job.ats_keywords or []) %}
-Dear Hiring Team at {{ (job.company or '') | trim }},
+Dear Hiring Team at {{ (job.company or 'your company') | trim }},
 
-I’m excited to apply for the **{{ (job.title or 'the role') | trim }}** position.
+I'm excited to apply for the **{{ (job.title or 'position') | trim }}** role.
 
 **Why I’m a fit**
-- Background: {{ (profile.target_titles or []) | join(', ') if profile.target_titles else 'relevant experience' }}.
-- Strengths aligned to your needs:
-{%- if kws %}
-{%- for kw in kws[:5] %}
-  - {{ kw | capitalize }}
-{%- endfor %}
-{%- else %}
-  - Relevant achievements and skills tailored to the job description.
-{%- endif %}
+- Background: {{ (profile.target_titles or [])[:2] | join(' / ') or 'relevant experience' }}.
+- Relevant strengths: {% set topk = (jd_keywords or [])[:6] %}{{ topk|join(', ') if topk else (profile.skills or [])[:6]|join(', ') }}.
+- Approach: clear communication, organized execution, and measurable outcomes.
 
-I’d welcome the chance to share brief examples of related work and how I can contribute at {{ (job.company or 'your organization') | trim }}. Thank you for your time.
+I’ve attached my resume and would be happy to discuss related work and how I can support the team’s goals.  
+Thank you for your time.
 
-Best regards,
-
-{{ profile.full_name or profile.name or '' }}
+Best,  
+{{ profile.full_name or profile.name or '' }}  
 {{ profile.email or '' }}{% if profile.phone %} | {{ profile.phone }}{% endif %}
