@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import os, sys, re, json, time, argparse, hashlib, pathlib, logging
 from typing import List, Dict, Any, Optional, Tuple, Set
+
 import requests
 from bs4 import BeautifulSoup
 from docx import Document
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 # ----------------------- config -----------------------
 UA = "job-copilot/1.0 (+https://github.com/AlbertoRoca96/job-copilot)"
@@ -13,6 +16,9 @@ TIMEOUT = (10, 20)  # connect, read
 MAX_JD_CHARS = 120_000
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# OOXML namespaces
+NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
 
 # canonical casing map
 CANON = {
@@ -30,12 +36,6 @@ CANON = {
     "python": "Python", "javascript": "JavaScript"
 }
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{1,}")
-
-STOP = {
-    "the","a","an","and","or","to","of","for","in","on","at","by","with","from",
-    "is","are","was","were","be","been","as","that","this","these","those","it",
-    "you","your","we","our","their","they","he","she","them","i","not"
-}
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
@@ -98,10 +98,7 @@ def read_links(path: str) -> List[Dict[str, Any]]:
 
 # ----------------------- JD fetch -----------------------
 def fetch_jd_plaintext(url: str) -> str:
-    """
-    Fetch HTML and collapse to readable text. Also harvest <meta name="description"> and og:description
-    because some sites return thin/blocked pages to unauth'd clients.
-    """
+    """Fetch HTML and collapse to readable text (+ meta descriptions for gated sites)."""
     resp = requests.get(url, headers={
         "User-Agent": UA,
         "Accept": "text/html,application/xhtml+xml",
@@ -127,8 +124,7 @@ def fetch_jd_plaintext(url: str) -> str:
         if c: meta_bits.append(c)
 
     text = soup.get_text(separator=" ", strip=True)
-    blob = " ".join([text] + meta_bits)
-    blob = normalize_ws(blob)
+    blob = normalize_ws(" ".join([text] + meta_bits))
     return blob[:MAX_JD_CHARS]
 
 # ----------------------- local keyword miner (fallback) -----------------------
@@ -147,31 +143,20 @@ PHRASES = [
     "photoshop", "illustrator", "indesign"
 ]
 
-def mine_plan_from_text(resume_text: str, jd_text: str) -> Dict[str, Any]:
-    """
-    Deterministic plan when the LLM returns little or JD is thin.
-    - skills_additions: top phrases present in JD but not obviously present in resume skills.
-    - weaves: short prepositional phrases targeted at Work Experience.
-    """
+def mined_plan(resume_text: str, jd_text: str) -> Dict[str, Any]:
     jd_low = (jd_text or "").lower()
     res_low = (resume_text or "").lower()
-
     hits = []
     for ph in PHRASES:
         if ph in jd_low:
             hits.append(ph)
-
-    # dedupe, respect order
+    # dedupe keep-order
     seen, ordered = set(), []
     for h in hits:
         if h not in seen:
-            ordered.append(h)
-            seen.add(h)
-
-    # skills_additions (prefer phrases not already present)
+            ordered.append(h); seen.add(h)
     skills_additions = [canon(h) for h in ordered if h not in res_low][:6]
 
-    # build 2–4 weaves
     weave_pool = []
     if "ap style" in jd_low or "cms" in jd_low:
         weave_pool.append("to AP style and CMS guidelines")
@@ -183,25 +168,14 @@ def mine_plan_from_text(resume_text: str, jd_text: str) -> Dict[str, Any]:
         weave_pool.append("using Excel for tracking and reporting")
     if "pos" in jd_low or "inventory" in jd_low:
         weave_pool.append("via POS and inventory checks")
-
-    weaves = []
-    for phrase in weave_pool[:4]:
-        weaves.append({"section": "Work Experience", "cue": "", "phrase": phrase})
-
+    weaves = [{"section": "Work Experience", "cue": "", "phrase": p} for p in weave_pool[:4]]
     return {"skills_additions": skills_additions, "weaves": weaves}
 
 # ----------------------- LLM (chat completions JSON mode) -----------------------
 def call_llm_weaves(resume_text: str, jd_text: str, job_title: str = "", company: str = "") -> Dict[str, Any]:
-    """
-    Ask the model for structured suggestions:
-      - skills_additions: list[str]
-      - weaves: list[{cue, phrase, section}] where phrase is <= 18 words, factual & ATS-relevant
-
-    If the model is unavailable or returns empty, fall back to the deterministic miner above.
-    """
     if not OPENAI_API_KEY:
         logging.warning("OPENAI_API_KEY not set; using deterministic fallback plan.")
-        return mine_plan_from_text(resume_text, jd_text)
+        return mined_plan(resume_text, jd_text)
 
     try:
         from openai import OpenAI
@@ -213,7 +187,6 @@ def call_llm_weaves(resume_text: str, jd_text: str, job_title: str = "", company
             "'via POS and inventory checks') into bullets that already talk about the task. "
             "Keep phrases <= 18 words. Avoid buzzword stuffing. Output JSON only."
         )
-
         user_prompt = f"""Job title: {job_title or 'N/A'}
 Company: {company or 'N/A'}
 
@@ -231,8 +204,6 @@ Return JSON with exactly this shape:
     {{"section":"Projects","cue":"wrote","phrase":"with SEO keyword research and analytics"}}
   ]
 }}"""
-
-        # Chat Completions JSON mode; robust against Responses-API param mismatches
         resp = client.chat.completions.create(
             model=MODEL,
             messages=[{"role": "system", "content": sys_prompt},
@@ -246,59 +217,35 @@ Return JSON with exactly this shape:
         logging.warning("LLM call failed (%s). Falling back to deterministic miner.", e)
         plan = {}
 
-    # robust fallback / sanitation
-    if not isinstance(plan, dict):
-        plan = {}
-    skills_additions = plan.get("skills_additions") or []
-    weaves = plan.get("weaves") or []
-    if (not skills_additions) and (not weaves):
-        plan = mine_plan_from_text(resume_text, jd_text)
-    else:
-        # sanitize casing and lengths
-        skills_additions = [canon(x) for x in skills_additions if isinstance(x, str) and x.strip()]
-        cleaned_weaves = []
-        for w in weaves:
-            if not isinstance(w, dict): continue
-            phrase = canon((w.get("phrase") or "").strip())
-            if not phrase or len(phrase.split()) > 18: continue
-            section = (w.get("section") or "Work Experience").strip()
-            cue = (w.get("cue") or "").strip()
-            cleaned_weaves.append({"section": section, "cue": cue, "phrase": phrase})
-        plan = {"skills_additions": skills_additions[:8], "weaves": cleaned_weaves[:6]}
+    if not isinstance(plan, dict): plan = {}
+    skills_additions = [canon(x) for x in (plan.get("skills_additions") or []) if isinstance(x, str) and x.strip()]
+    cleaned_weaves = []
+    for w in (plan.get("weaves") or []):
+        if not isinstance(w, dict): continue
+        phrase = canon((w.get("phrase") or "").strip())
+        if not phrase or len(phrase.split()) > 18: continue
+        section = (w.get("section") or "Work Experience").strip()
+        cue = (w.get("cue") or "").strip()
+        cleaned_weaves.append({"section": section, "cue": cue, "phrase": phrase})
+    if not skills_additions and not cleaned_weaves:
+        return mined_plan(resume_text, jd_text)
+    return {"skills_additions": skills_additions[:8], "weaves": cleaned_weaves[:6]}
 
-    return plan
-
-# ----------------------- .docx helpers -----------------------
-def iter_all_paragraphs(doc: Document):
-    """Yield (scope, idx_tuple, paragraph) across body and all tables."""
-    for i, p in enumerate(doc.paragraphs):
-        yield ("body", (i,), p)
-    for ti, table in enumerate(doc.tables):
-        for ri, row in enumerate(table.rows):
-            for ci, cell in enumerate(row.cells):
-                for pi, p in enumerate(cell.paragraphs):
-                    yield (f"table[{ti}].r{ri}c{ci}", (ti, ri, ci, pi), p)
-
-def paragraph_has_numbering(p: Paragraph) -> bool:
-    """True if Word numbering/bullets are applied (w:numPr)."""
-    try:
-        pPr = p._p.pPr  # access underlying XML
-        return (pPr is not None) and (pPr.numPr is not None)
-    except Exception:
-        return False
-
+# ----------------------- .docx helpers (body/tables wrappers) -----------------------
 def paragraph_is_bullet(p: Paragraph) -> bool:
-    # 1) real numbering/bullets (Word stores this in numPr, not in visible glyphs)
-    if paragraph_has_numbering(p):
-        return True
-    # 2) style hints
+    # real numbering/bullets via numPr; python-docx exposes underlying XML
+    try:
+        pPr = p._p.pPr
+        if (pPr is not None) and (pPr.numPr is not None):
+            return True
+    except Exception:
+        pass
     try:
         name = (getattr(p.style, "name", "") or "").lower()
     except Exception:
         name = ""
     if any(k in name for k in ("list", "bullet", "number")):
         return True
-    # 3) visible glyphs as a last resort
     t = normalize_ws(p.text)
     return t.startswith(("•", "-", "–", "—", "·"))
 
@@ -307,10 +254,8 @@ def dominant_run(p: Paragraph) -> Optional[Run]:
     for r in p.runs:
         txt = (r.text or "")
         style_name = (getattr(r.style, "name", "") or "").lower()
-        if not txt.strip():
-            continue
-        if "hyperlink" in style_name:
-            continue
+        if not txt.strip(): continue
+        if "hyperlink" in style_name: continue
         L = len(txt.strip())
         if L > best_len:
             best, best_len = r, L
@@ -334,28 +279,42 @@ def copy_format(src: Run, dst: Run):
 
 def set_text_preserve_style(p: Paragraph, text: str):
     base = dominant_run(p)
-    p.text = text  # replaces runs with one run (paragraph style preserved)
+    p.text = text
     if base and p.runs:
         copy_format(base, p.runs[0])
 
-def first_sentence_split(text: str) -> int:
-    m = re.search(r'([.!?])(\s|$)', text)
-    return (m.start(1)+1) if m else len(text)
+# ----------------------- XML-level helpers (touch shapes/text boxes) -----------------------
+def el_text(p_el) -> str:
+    return "".join(t.text for t in p_el.xpath('.//w:t', namespaces=NS) if t.text)
 
-def weave_into_paragraph(p: Paragraph, phrase: str) -> Tuple[bool, str, str, str]:
+def el_is_bullet(p_el) -> bool:
+    return bool(p_el.xpath('./w:pPr/w:numPr', namespaces=NS))
+
+def el_append_run(p_el, text: str):
+    r = OxmlElement('w:r')
+    t = OxmlElement('w:t')
+    t.set(qn('xml:space'), 'preserve')  # keep leading space
+    t.text = text
+    r.append(t)
+    p_el.append(r)
+
+def weave_into_el(p_el, phrase: str) -> Tuple[bool, str, str, str]:
     phrase = canon((phrase or "").strip().rstrip("."))
-    if not phrase:
-        return (False, p.text, p.text, "")
-    txt = "".join(r.text for r in p.runs) if p.runs else p.text
-    before = txt
-    insert_at = first_sentence_split(txt)
-    glue = " " if insert_at and insert_at <= len(txt) and txt[insert_at-1].isalnum() else ""
-    inserted = f"{glue} using {phrase}"
-    new_text = txt[:insert_at] + inserted + txt[insert_at:]
-    set_text_preserve_style(p, new_text)
-    return (True, before, p.text, inserted.strip())
+    before = el_text(p_el)
+    if not phrase or not before.strip():
+        return (False, before, before, "")
+    to_add = f" Using {phrase}."
+    if phrase.lower() in before.lower():
+        return (False, before, before, "")
+    el_append_run(p_el, to_add)
+    after = el_text(p_el)
+    return (True, before, after, to_add.strip())
 
-# ----------------------- section find (for skills + optional fallback) -----------------------
+def xml_all_paragraphs(doc: Document):
+    # ALL paragraphs in the main document part, including shapes/text boxes and table cells
+    return list(doc.element.xpath('.//w:p', namespaces=NS))
+
+# ----------------------- skill list injection (body-only; best-effort) -----------------------
 def find_section_ranges(doc: Document, titles: List[str]) -> Dict[str, Tuple[int,int]]:
     wants = [normalize_ws(t).lower() for t in titles]
     hits: Dict[str,int] = {}
@@ -369,7 +328,6 @@ def find_section_ranges(doc: Document, titles: List[str]) -> Dict[str, Tuple[int
         ranges[k]=(start,end)
     return ranges
 
-# ----------------------- skill list injection -----------------------
 def inject_skills(doc: Document, additions: List[str]) -> Optional[Dict[str,str]]:
     if not additions:
         return None
@@ -377,7 +335,6 @@ def inject_skills(doc: Document, additions: List[str]) -> Optional[Dict[str,str]
     ranges = find_section_ranges(doc, ["Technical Skills", "Skills", "Core Skills"])
     if not ranges:
         return None
-
     key = next(iter([k for k in ("technical skills","skills","core skills") if k in ranges]), None)
     if not key:
         return None
@@ -393,83 +350,87 @@ def inject_skills(doc: Document, additions: List[str]) -> Optional[Dict[str,str]
         new = [a for a in additions if a.lower() not in present]
         if not new:
             return None
-        m = re.search(r"\(([^)]+)\)", t)
         before = p.text
-        if m:
-            inside = m.group(1).strip()
-            sep = ", " if inside and not inside.endswith(",") else ""
-            after = t[:m.start(1)] + inside + f"{sep}{', '.join(new)}" + t[m.end(1):]
+        t2 = t[:-1] if t.endswith(".") else t
+        if ("," in t2 or ";" in t2):
+            sep = ", " if not t2.endswith(",") else ""
+            after = t2 + f"{sep}{', '.join(new)}"
         else:
-            t2 = t[:-1] if t.endswith(".") else t
-            # choose a separator: if list-y already, append; else create a colon list
-            if ("," in t2 or ";" in t2):
-                sep = ", " if not t2.endswith(",") else ""
-                after = t2 + f"{sep}{', '.join(new)}"
-            else:
-                after = t2 + f": {', '.join(new)}"
+            after = t2 + f": {', '.join(new)}"
         set_text_preserve_style(p, after)
         return {
             "section": "Skills/Technical Skills",
             "before": before,
             "after": p.text,
             "inserted": None,
-            "reason": "Reordered/enriched inline skills list."
+            "reason": "Enriched inline skills list."
         }
     return None
 
-# ----------------------- weave application (section-agnostic, body+tables) -----------------------
-def apply_weaves(doc: Document, weaves: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    changes: List[Dict[str, str]] = []
-    if not weaves:
-        return changes
-
-    # Build candidate bullets from entire document
-    bullets = []
-    for scope, idx, p in iter_all_paragraphs(doc):
-        if paragraph_is_bullet(p) and normalize_ws(p.text):
-            bullets.append((scope, idx, p))
-
-    # If no bullets detected, fall back to any non-trivial paragraph
+# ----------------------- weaving (XML-first, body fallback) -----------------------
+def apply_weaves_anywhere(doc: Document, weaves: List[Dict[str,str]], default_phrase: str) -> List[Dict[str,str]]:
+    changes: List[Dict[str,str]] = []
+    # Preferred candidates: bullets (anywhere, including text boxes)
+    p_els = xml_all_paragraphs(doc)
+    bullets = [(i, p_el) for i, p_el in enumerate(p_els) if el_is_bullet(p_el) and normalize_ws(el_text(p_el))]
+    # Fallback to any non-trivial paragraphs if no bullets at all
     if not bullets:
-        for scope, idx, p in iter_all_paragraphs(doc):
-            if len(normalize_ws(p.text)) >= 25:
-                bullets.append((scope, idx, p))
+        bullets = [(i, p_el) for i, p_el in enumerate(p_els) if len(normalize_ws(el_text(p_el))) >= 25]
 
     used = set()
+    # Build phrase list: LLM weaves → skills → default
+    phrases = [w.get("phrase") for w in (weaves or []) if w.get("phrase")] or []
+    if default_phrase and default_phrase not in phrases:
+        phrases.append(default_phrase)
 
-    for w in weaves:
-        cue = (w.get("cue") or "").lower().strip()
-        phrase = w.get("phrase") or ""
-        if not phrase:
-            continue
-
-        best = None; best_ratio = -1.0
-        for k, (scope, idx, p) in enumerate(bullets):
-            if k in used:
-                continue
-            t = normalize_ws(p.text).lower()
-            if not t:
-                continue
+    inserted_any = False
+    for phrase in phrases[:4]:  # cap edits
+        best = None
+        best_ratio = -1.0
+        cue = ""
+        # If weave carries a cue, try to match it; otherwise just pick next unused bullet
+        # (We don't require cue here; this is “make sure something gets in”.)
+        for k, (idx, p_el) in enumerate(bullets):
+            if k in used: continue
+            t = normalize_ws(el_text(p_el)).lower()
+            if not t: continue
             if cue and cue in t:
-                best = (k, scope, idx, p)
-                break
+                best = (k, idx, p_el); break
             if cue:
                 import difflib
                 r = difflib.SequenceMatcher(None, cue, t).ratio()
                 if r > best_ratio:
-                    best_ratio, best = r, (k, scope, idx, p)
+                    best_ratio, best = r, (k, idx, p_el)
+            else:
+                best = (k, idx, p_el); break
         if best:
-            k, scope, idx, p = best
-            ok, before, after, inserted = weave_into_paragraph(p, phrase)
+            k, _, p_el = best
+            ok, before, after, ins = weave_into_el(p_el, phrase)
             if ok:
-                used.add(k)
+                used.add(k); inserted_any = True
                 changes.append({
-                    "anchor_section": "Work Experience",   # generic anchor; we’re section-agnostic
+                    "anchor_section": "Work Experience",
                     "original_paragraph_text": before,
                     "modified_paragraph_text": after,
-                    "inserted_sentence": inserted,
-                    "reason": "Injected inline JD keyword phrase."
+                    "inserted_sentence": ins,
+                    "reason": "Injected inline JD keyword phrase (XML)."
                 })
+
+    # If *still* nothing, add one hard append to the very first non-empty paragraph
+    if not inserted_any and default_phrase:
+        for p_el in p_els:
+            before = normalize_ws(el_text(p_el))
+            if before:
+                ok, b2, a2, ins = weave_into_el(p_el, default_phrase)
+                if ok:
+                    changes.append({
+                        "anchor_section": "Work Experience",
+                        "original_paragraph_text": b2,
+                        "modified_paragraph_text": a2,
+                        "inserted_sentence": ins,
+                        "reason": "Hard fallback to ensure visible tailoring."
+                    })
+                break
 
     return changes
 
@@ -505,9 +466,9 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
         company   = item.get("company") or item.get("org") or ""
         plan = call_llm_weaves(resume_plain, jd_text, job_title, company)
 
-        # Prepare slug and save the plan for debugging
-        slug = slugify(job_title or url)[:80]
-        (out_changes / f"{slug}_plan.json").write_text(
+        # Save the plan for debugging (we will NOT list this in drafts_index)
+        slug_base = slugify(job_title or url)[:80]
+        (out_changes / f"{slug_base}_plan.json").write_text(
             json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
@@ -515,7 +476,7 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
         doc = Document(resume_path)
         changes: List[Dict[str, Any]] = []
 
-        # Pass A: skills additions
+        # Pass A: skills additions (body-only; harmless if skills are in shapes)
         skills_change = inject_skills(doc, plan.get("skills_additions") or [])
         if skills_change:
             changes.append({
@@ -526,58 +487,22 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
                 "reason": skills_change["reason"]
             })
 
-        # Pass B: weave phrases into bullets (anywhere)
-        weave_changes = apply_weaves(doc, plan.get("weaves") or [])
+        # Pass B: XML-level weaving into bullets or any real paragraphs
+        # Pick a guaranteed default phrase if the plan mined nothing
+        cands = (plan.get("skills_additions") or []) + [w["phrase"] for w in (plan.get("weaves") or []) if w.get("phrase")]
+        default_phrase = canon(cands[0]) if cands else "per the job description requirements"
+        weave_changes = apply_weaves_anywhere(doc, plan.get("weaves") or [], default_phrase)
         changes.extend(weave_changes)
 
-        # Pass C: guaranteed fallback if still nothing injected into bullets
-        if not weave_changes:
-            # choose a safe top term (from skills or planned weaves)
-            cands = (plan.get("skills_additions") or []) + [w["phrase"] for w in (plan.get("weaves") or []) if w.get("phrase")]
-            top_phrase = canon(cands[0]) if cands else ""
-            # Prefer bullets in Work Experience if we can find the section; else any bullets in doc
-            secs = find_section_ranges(doc, ["Work Experience","Professional Experience","Experience"])
-            chosen_key = next(iter([k for k in ("work experience","professional experience","experience") if k in secs]), None)
-            candidate_paragraphs: List[Tuple[Paragraph,int]] = []
-            if chosen_key:
-                s,e = secs[chosen_key]
-                for i in range(s,e):
-                    p = doc.paragraphs[i]
-                    if paragraph_is_bullet(p):
-                        L = len(normalize_ws(p.text))
-                        if L and L < 220:
-                            candidate_paragraphs.append((p, L))
-            if not candidate_paragraphs:
-                for _, _, p in iter_all_paragraphs(doc):
-                    if paragraph_is_bullet(p):
-                        L = len(normalize_ws(p.text))
-                        if L and L < 220:
-                            candidate_paragraphs.append((p, L))
-
-            candidate_paragraphs.sort(key=lambda t: t[1])
-            for p, _ in candidate_paragraphs[:2]:
-                before = p.text
-                if top_phrase:
-                    set_text_preserve_style(p, before.rstrip().rstrip(".") + f" Using {top_phrase}.")
-                    changes.append({
-                        "anchor_section": "Work Experience",
-                        "original_paragraph_text": before,
-                        "modified_paragraph_text": p.text,
-                        "inserted_sentence": f"Using {top_phrase}.",
-                        "reason": "Fallback appender to ensure visible tailoring."
-                    })
-
-        # Always save JD text for inspection
-        jd_txt_path = out_changes / f"{slug}.jd.txt"
+        # Persist artifacts
+        jd_txt_path = out_changes / f"{slug_base}.jd.txt"
         jd_txt_path.write_text(jd_text, encoding="utf-8")
 
-        # Save resume
         h = hashlib.sha1((url + str(time.time())).encode()).hexdigest()[:8]
-        out_docx = out_resumes / f"{slug}_{h}.docx"
+        out_docx = out_resumes / f"{slug_base}_{h}.docx"
         doc.save(out_docx.as_posix())
 
-        # Write change log JSON (now includes paragraph-level before/after)
-        changes_path = out_changes / f"{slug}_{h}.json"
+        changes_path = out_changes / f"{slug_base}_{h}.json"
         changes_path.write_text(json.dumps(changes, ensure_ascii=False, indent=2), encoding="utf-8")
 
         index_items.append({
@@ -590,20 +515,23 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
             "ts": int(time.time())
         })
 
-    # Write drafts index for UI
+    # Write drafts index for UI (we exclude *_plan.json here)
     index_path = out_root / "drafts_index.json"
-    index_path.write_text(json.dumps(index_items, ensure_ascii=False, indent=2), encoding="utf-8")
+    index_path.write_text(json.dumps({
+        "outbox": [""],  # unchanged
+        "resumes": [pathlib.Path(i["resume_path"]).name for i in index_items],
+        "changes": [pathlib.Path(i["changes_path"]).name for i in index_items],
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
     logging.info("Wrote index: %s", index_path)
 
 # ----------------------- CLI -----------------------
 def main():
-    ap = argparse.ArgumentParser(description="Tailor resume from JD links with LLM-assisted weaving (+ deterministic fallback).")
+    ap = argparse.ArgumentParser(description="Tailor resume from JD links with LLM-assisted weaving (XML-level) + deterministic fallback.")
     ap.add_argument("--links", required=True, help="Path to JSON or .txt containing JD links.")
     ap.add_argument("--resume", required=True, help="Path to source .docx resume.")
     ap.add_argument("--out", required=True, help="Output prefix (e.g., outputs).")
     ap.add_argument("--user", default="user", help="User id folder under output prefix.")
     args = ap.parse_args()
-
     run_pipeline(args.links, args.resume, args.out, uid=args.user)
 
 if __name__ == "__main__":
