@@ -1,71 +1,96 @@
-# src/tailor/policies.yaml
 # Each policy adds ONE short clause to a bullet when BOTH the JD and the bullet context match.
-# Only applied if the candidate already claims at least one required skill (requires_any).
+# Clauses are concise and human/ATS-friendly. We never fabricate skills the candidate doesn't already claim.
 
-- id: ml_modeling
-  jd_cues: ["model", "training", "evaluation", "deploy", "inference"]
-  bullet_cues: ["model", "vision", "resnet", "pytorch", "classification", "inference"]
-  requires_any: ["python", "pytorch"]
-  clause: "shipped ML models with Python/PyTorch and iterative evaluation loops"
+# --- Editorial / Content / Admin ---
 
-- id: search_ranking_rag
-  jd_cues: ["search", "retrieval", "ranking", "rag"]
-  bullet_cues: ["search", "retrieve", "index", "dataset", "vector", "embedding"]
-  requires_any: ["python"]
-  clause: "experimented with retrieval/ranking and dataset curation for relevance"
+- id: copyediting_ap_style
+  jd_cues: ["copyediting", "copy edit", "ap style", "style guide", "editing"]
+  bullet_cues: ["edit", "edited", "copy", "proof", "style", "guide"]
+  requires_any: ["copyediting", "copy editing", "proofreading", "ap style", "editorial"]
+  clause: "edited copy to AP style and house guidelines"
+
+- id: proofreading
+  jd_cues: ["proofread", "proofreading", "grammar", "typos", "quality"]
+  bullet_cues: ["proof", "review", "edit", "errors", "draft"]
+  requires_any: ["proofreading", "copyediting", "editorial"]
+  clause: "proofread drafts for clarity, grammar, and consistency"
+
+- id: fact_checking
+  jd_cues: ["fact-check", "fact checking", "accuracy", "sources"]
+  bullet_cues: ["verify", "research", "source", "reference", "link"]
+  requires_any: ["editorial", "research"]
+  clause: "fact-checked names, dates, and sources prior to publication"
+
+- id: cms_publishing
+  jd_cues: ["cms", "wordpress", "content management", "publish", "production"]
+  bullet_cues: ["post", "publish", "format", "upload", "image", "caption"]
+  requires_any: ["cms", "wordpress", "editorial"]
+  clause: "published and formatted content in CMS with correct metadata"
+
+- id: editorial_calendar
+  jd_cues: ["calendar", "scheduling", "planning", "deadlines"]
+  bullet_cues: ["schedule", "coordinate", "calendar", "deadline"]
+  requires_any: ["scheduling", "editorial", "calendar"]
+  clause: "coordinated the editorial calendar and on-time handoffs"
+
+- id: seo_basics
+  jd_cues: ["seo", "search", "metadata", "keywords"]
+  bullet_cues: ["title", "slug", "meta", "keyword", "search"]
+  requires_any: ["seo", "editorial"]
+  clause: "applied basic SEO (titles, slugs, keywords, meta) to posts"
+
+- id: social_scheduling
+  jd_cues: ["social", "channels", "distribution", "schedule"]
+  bullet_cues: ["social", "draft", "schedule", "publish"]
+  requires_any: ["social", "scheduling"]
+  clause: "scheduled post distribution across social channels"
+
+- id: images_assets
+  jd_cues: ["image", "assets", "copyright", "alt text", "caption"]
+  bullet_cues: ["image", "photo", "graphics", "caption", "alt"]
+  requires_any: ["adobe", "photoshop", "indesign", "illustrator", "cms"]
+  clause: "sourced images with captions/alt text and basic rights checks"
+
+- id: accessibility_alt
+  jd_cues: ["accessibility", "a11y", "alt text"]
+  bullet_cues: ["alt", "caption", "image"]
+  requires_any: ["cms", "editorial"]
+  clause: "added alt text and descriptive captions for accessibility"
+
+- id: analytics_reporting
+  jd_cues: ["analytics", "metrics", "report", "performance", "insight"]
+  bullet_cues: ["report", "track", "metric", "view", "click", "open"]
+  requires_any: ["excel", "google sheets", "analytics", "powerbi"]
+  clause: "tracked basic analytics and reported actionable highlights"
+
+- id: stakeholder_comms
+  jd_cues: ["stakeholder", "communication", "coordination", "cross-functional"]
+  bullet_cues: ["coordinate", "email", "update", "meet", "brief"]
+  requires_any: ["customer service", "stakeholder management", "editorial"]
+  clause: "coordinated updates with stakeholders and clarified next steps"
+
+- id: templates_cleanup
+  jd_cues: ["template", "consistency", "formatting", "style"]
+  bullet_cues: ["template", "format", "standardize"]
+  requires_any: ["editorial", "microsoft office", "word"]
+  clause: "standardized document templates to speed production"
+
+- id: project_tracking
+  jd_cues: ["tracking", "kanban", "ticket", "process"]
+  bullet_cues: ["track", "ticket", "board", "queue"]
+  requires_any: ["scheduling", "editorial"]
+  clause: "organized tasks in a lightweight tracker to reduce misses"
+
+# --- Keep a few tech-friendly but neutral clauses (useful when resumes include tech) ---
 
 - id: data_pipelines
-  jd_cues: ["pipeline", "dataset", "data", "annotation"]
-  bullet_cues: ["pipeline", "cron", "github", "actions", "scrape", "supabase", "sql", "postgres"]
+  jd_cues: ["pipeline", "dataset", "data"]
+  bullet_cues: ["pipeline", "cron", "github", "actions", "sql", "postgres"]
   requires_any: ["github actions", "sql", "postgresql"]
   clause: "built reliable data/annotation pipelines (GitHub Actions + SQL/Postgres)"
 
-- id: mlops_infra
-  jd_cues: ["mlops", "observability", "ci", "monitor", "deployment"]
-  bullet_cues: ["github", "actions", "ci", "cron", "monitor", "deploy"]
-  requires_any: ["github actions"]
-  clause: "added CI/monitoring hooks for model/data jobs"
-
-- id: product_collab
-  jd_cues: ["product", "features", "impact", "cross-functional", "collaborate"]
-  bullet_cues: ["app", "pwa", "react", "ui", "prototype", "space"]
-  requires_any: ["react", "react native"]
-  clause: "partnered on user-facing features with quick prototypes (React/React Native)"
-
-# --- new concrete policies for C++ / browser perf / multiplayer / TS ---
-
-- id: cxx_perf
-  jd_cues: ["c++", "cpp", "performance", "latency", "memory"]
-  bullet_cues: ["opencv", "vision", "resnet", "performance"]
-  requires_any: ["c++"]
-  clause: "profiled hotspots and reduced latency/memory in C++ paths"
-
-- id: wasm_browser
-  jd_cues: ["webassembly", "wasm", "browser"]
-  bullet_cues: ["opencv", "vision", "performance"]
-  requires_any: ["c++"]
-  clause: "prepared C++ modules for browser targets and measured runtime impact"
-
-- id: multiplayer
-  jd_cues: ["multiplayer", "protocol", "collaboration", "realtime"]
-  bullet_cues: ["app", "pwa", "prototype"]
-  requires_any: ["javascript", "typescript", "react"]
-  clause: "validated real-time collaboration flows and basic protocol edge cases"
-
-- id: typescript_ui
-  jd_cues: ["typescript", "frontend", "ui"]
-  bullet_cues: ["react", "ui", "component", "app"]
-  requires_any: ["typescript", "react"]
-  clause: "built typed UI components in TypeScript with predictable props/state"
-
-- id: api_design
-  jd_cues: ["api", "sdk", "tooling"]
-  bullet_cues: ["app", "pwa", "prototype"]
-  requires_any: ["javascript", "python"]
-  clause: "exposed small, well-documented APIs to speed feature integration"
-
-- id: accessibility
-  jd_cues: ["accessibility", "a11y"]
-  bullet_cues: ["ui", "app", "component"]
-  requires_any: ["react"]
-  clause: "checked keyboard nav/labels to improve basic accessibility"
+- id: api_docs
+  jd_cues: ["api", "documentation", "tooling"]
+  bullet_cues: ["api", "doc", "write"]
+  requires_any: ["python", "javascript"]
+  clause: "documented small APIs so teammates could integrate quickly"
