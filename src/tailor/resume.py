@@ -17,29 +17,21 @@ MAX_JD_CHARS = 120_000
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# OOXML namespaces
-NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
-
-# canonical casing map
-CANON = {
-    # editorial / comms / general office
-    "ap style": "AP style", "cms": "CMS", "pos": "POS",
-    "crm": "CRM", "microsoft office": "Microsoft Office",
-    "word": "Word", "excel": "Excel", "powerpoint": "PowerPoint",
-    "outlook": "Outlook", "adobe": "Adobe", "photoshop": "Photoshop",
-    "illustrator": "Illustrator", "indesign": "InDesign",
-    "social media": "Social media", "content calendar": "Content calendar",
-    "copyediting": "Copyediting", "fact checking": "Fact-checking",
-    "proofreading": "Proofreading",
-    # tech common
-    "sql": "SQL", "supabase": "Supabase", "github actions": "GitHub Actions",
-    "python": "Python", "javascript": "JavaScript"
-}
-WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{1,}")
-
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 # ----------------------- utils -----------------------
+CANON = {
+    "ap style": "AP style", "cms": "CMS", "pos": "POS", "crm": "CRM",
+    "microsoft office": "Microsoft Office", "word": "Word", "excel": "Excel",
+    "powerpoint": "PowerPoint", "outlook": "Outlook", "adobe": "Adobe",
+    "photoshop": "Photoshop", "illustrator": "Illustrator", "indesign": "InDesign",
+    "social media": "Social media", "content calendar": "Content calendar",
+    "copyediting": "Copyediting", "fact checking": "Fact-checking",
+    "proofreading": "Proofreading", "sql": "SQL", "supabase": "Supabase",
+    "github actions": "GitHub Actions", "python": "Python", "javascript": "JavaScript"
+}
+WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{1,}")
+
 def normalize_ws(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "")).strip()
 
@@ -76,7 +68,8 @@ def read_links(path: str) -> List[Dict[str, Any]]:
                     out.append({"url": item})
                 elif isinstance(item, dict):
                     url = item.get("url") or item.get("link") or item.get("jd_url")
-                    if url: out.append({"url": url, **{k:v for k,v in item.items() if k not in ("url","link","jd_url")}})
+                    if url:
+                        out.append({"url": url, **{k:v for k,v in item.items() if k not in ("url","link","jd_url")}})
         elif isinstance(data, dict):
             arr = data.get("jobs") or data.get("items") or data.get("links") or []
             for item in arr:
@@ -84,7 +77,8 @@ def read_links(path: str) -> List[Dict[str, Any]]:
                     out.append({"url": item})
                 elif isinstance(item, dict):
                     url = item.get("url") or item.get("link") or item.get("jd_url")
-                    if url: out.append({"url": url, **{k:v for k,v in item.items() if k not in ("url","link","jd_url")}})
+                    if url:
+                        out.append({"url": url, **{k:v for k,v in item.items() if k not in ("url","link","jd_url")}})
         if out: return out
     except Exception:
         pass
@@ -108,7 +102,6 @@ def fetch_jd_plaintext(url: str) -> str:
     html = resp.text
     soup = BeautifulSoup(html, "html.parser")
 
-    # strip obvious cruft
     for tag in soup(["script", "style", "noscript", "svg", "img"]):
         tag.decompose()
     for sel in ["header", "footer", "nav"]:
@@ -129,27 +122,18 @@ def fetch_jd_plaintext(url: str) -> str:
 
 # ----------------------- local keyword miner (fallback) -----------------------
 PHRASES = [
-    # editorial / media
-    "ap style", "cms", "content calendar", "social media", "copyediting",
-    "fact checking", "proofreading", "editorial calendar", "pitching",
-    "seo", "analytics", "style guide",
-    # admin / ops
-    "calendar management", "travel arrangements", "expense reports",
-    "meeting notes", "inbox management", "crm", "data entry",
-    # retail / cx
-    "pos", "inventory", "front of house", "customer service",
-    # tools
-    "microsoft office", "excel", "powerpoint", "outlook", "adobe",
-    "photoshop", "illustrator", "indesign"
+    "ap style","cms","content calendar","social media","copyediting","fact checking",
+    "proofreading","editorial calendar","pitching","seo","analytics","style guide",
+    "calendar management","travel arrangements","expense reports","meeting notes",
+    "inbox management","crm","data entry","pos","inventory","front of house",
+    "customer service","microsoft office","excel","powerpoint","outlook","adobe",
+    "photoshop","illustrator","indesign"
 ]
 
 def mined_plan(resume_text: str, jd_text: str) -> Dict[str, Any]:
     jd_low = (jd_text or "").lower()
     res_low = (resume_text or "").lower()
-    hits = []
-    for ph in PHRASES:
-        if ph in jd_low:
-            hits.append(ph)
+    hits = [ph for ph in PHRASES if ph in jd_low]
     # dedupe keep-order
     seen, ordered = set(), []
     for h in hits:
@@ -168,7 +152,7 @@ def mined_plan(resume_text: str, jd_text: str) -> Dict[str, Any]:
         weave_pool.append("using Excel for tracking and reporting")
     if "pos" in jd_low or "inventory" in jd_low:
         weave_pool.append("via POS and inventory checks")
-    weaves = [{"section": "Work Experience", "cue": "", "phrase": p} for p in weave_pool[:4]]
+    weaves = [{"section":"Work Experience","cue":"","phrase":p} for p in weave_pool[:4]]
     return {"skills_additions": skills_additions, "weaves": weaves}
 
 # ----------------------- LLM (chat completions JSON mode) -----------------------
@@ -176,11 +160,9 @@ def call_llm_weaves(resume_text: str, jd_text: str, job_title: str = "", company
     if not OPENAI_API_KEY:
         logging.warning("OPENAI_API_KEY not set; using deterministic fallback plan.")
         return mined_plan(resume_text, jd_text)
-
     try:
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_API_KEY)
-
         sys_prompt = (
             "You inject ATS-relevant keywords into an existing resume without fabricating achievements. "
             "Prefer weaving short prepositional phrases (e.g., 'to AP style and CMS guidelines', "
@@ -231,23 +213,25 @@ Return JSON with exactly this shape:
         return mined_plan(resume_text, jd_text)
     return {"skills_additions": skills_additions[:8], "weaves": cleaned_weaves[:6]}
 
-# ----------------------- .docx helpers (body/tables wrappers) -----------------------
+# ----------------------- .docx helpers -----------------------
 def paragraph_is_bullet(p: Paragraph) -> bool:
-    # real numbering/bullets via numPr; python-docx exposes underlying XML
+    # true Word bullets/numbering:
     try:
         pPr = p._p.pPr
         if (pPr is not None) and (pPr.numPr is not None):
             return True
     except Exception:
         pass
+    # style hints:
     try:
         name = (getattr(p.style, "name", "") or "").lower()
     except Exception:
         name = ""
-    if any(k in name for k in ("list", "bullet", "number")):
+    if any(k in name for k in ("list","bullet","number")):
         return True
+    # visible glyphs as last resort:
     t = normalize_ws(p.text)
-    return t.startswith(("•", "-", "–", "—", "·"))
+    return t.startswith(("•","-","–","—","·"))
 
 def dominant_run(p: Paragraph) -> Optional[Run]:
     best, best_len = None, -1
@@ -283,12 +267,31 @@ def set_text_preserve_style(p: Paragraph, text: str):
     if base and p.runs:
         copy_format(base, p.runs[0])
 
-# ----------------------- XML-level helpers (touch shapes/text boxes) -----------------------
+def first_sentence_split(text: str) -> int:
+    m = re.search(r'([.!?])(\s|$)', text)
+    return (m.start(1)+1) if m else len(text)
+
+def weave_into_paragraph(p: Paragraph, phrase: str) -> Tuple[bool, str, str, str]:
+    phrase = canon((phrase or "").strip().rstrip("."))
+    if not phrase:
+        return (False, p.text, p.text, "")
+    txt = "".join(r.text for r in p.runs) if p.runs else p.text
+    before = txt
+    insert_at = first_sentence_split(txt)
+    glue = " " if insert_at and insert_at <= len(txt) and txt[insert_at-1].isalnum() else ""
+    inserted = f"{glue} using {phrase}"
+    new_text = txt[:insert_at] + inserted + txt[insert_at:]
+    set_text_preserve_style(p, new_text)
+    return (True, before, p.text, inserted.strip())
+
+# ----------------------- XML-level helpers (no namespaces arg) -----------------------
 def el_text(p_el) -> str:
-    return "".join(t.text for t in p_el.xpath('.//w:t', namespaces=NS) if t.text)
+    # get all 'w:t' regardless of ns bindings via local-name()
+    return "".join(t.text for t in p_el.xpath('.//*[local-name()="t"]') if t.text)
 
 def el_is_bullet(p_el) -> bool:
-    return bool(p_el.xpath('./w:pPr/w:numPr', namespaces=NS))
+    # paragraph is bullet/numbered if it has w:pPr/w:numPr
+    return bool(p_el.xpath('./*[local-name()="pPr"]/*[local-name()="numPr"]'))
 
 def el_append_run(p_el, text: str):
     r = OxmlElement('w:r')
@@ -311,10 +314,11 @@ def weave_into_el(p_el, phrase: str) -> Tuple[bool, str, str, str]:
     return (True, before, after, to_add.strip())
 
 def xml_all_paragraphs(doc: Document):
-    # ALL paragraphs in the main document part, including shapes/text boxes and table cells
-    return list(doc.element.xpath('.//w:p', namespaces=NS))
+    # ALL paragraphs in the main document part, including tables & text boxes
+    # local-name() avoids any namespaces arg (works with python-docx wrapper)
+    return list(doc.element.xpath('.//*[local-name()="p"]'))
 
-# ----------------------- skill list injection (body-only; best-effort) -----------------------
+# ----------------------- skills: find + inject -----------------------
 def find_section_ranges(doc: Document, titles: List[str]) -> Dict[str, Tuple[int,int]]:
     wants = [normalize_ws(t).lower() for t in titles]
     hits: Dict[str,int] = {}
@@ -370,39 +374,25 @@ def inject_skills(doc: Document, additions: List[str]) -> Optional[Dict[str,str]
 # ----------------------- weaving (XML-first, body fallback) -----------------------
 def apply_weaves_anywhere(doc: Document, weaves: List[Dict[str,str]], default_phrase: str) -> List[Dict[str,str]]:
     changes: List[Dict[str,str]] = []
-    # Preferred candidates: bullets (anywhere, including text boxes)
     p_els = xml_all_paragraphs(doc)
     bullets = [(i, p_el) for i, p_el in enumerate(p_els) if el_is_bullet(p_el) and normalize_ws(el_text(p_el))]
-    # Fallback to any non-trivial paragraphs if no bullets at all
     if not bullets:
         bullets = [(i, p_el) for i, p_el in enumerate(p_els) if len(normalize_ws(el_text(p_el))) >= 25]
 
     used = set()
-    # Build phrase list: LLM weaves → skills → default
     phrases = [w.get("phrase") for w in (weaves or []) if w.get("phrase")] or []
     if default_phrase and default_phrase not in phrases:
         phrases.append(default_phrase)
 
     inserted_any = False
-    for phrase in phrases[:4]:  # cap edits
+    for phrase in phrases[:4]:
         best = None
-        best_ratio = -1.0
         cue = ""
-        # If weave carries a cue, try to match it; otherwise just pick next unused bullet
-        # (We don't require cue here; this is “make sure something gets in”.)
         for k, (idx, p_el) in enumerate(bullets):
             if k in used: continue
             t = normalize_ws(el_text(p_el)).lower()
             if not t: continue
-            if cue and cue in t:
-                best = (k, idx, p_el); break
-            if cue:
-                import difflib
-                r = difflib.SequenceMatcher(None, cue, t).ratio()
-                if r > best_ratio:
-                    best_ratio, best = r, (k, idx, p_el)
-            else:
-                best = (k, idx, p_el); break
+            best = (k, idx, p_el); break
         if best:
             k, _, p_el = best
             ok, before, after, ins = weave_into_el(p_el, phrase)
@@ -416,7 +406,6 @@ def apply_weaves_anywhere(doc: Document, weaves: List[Dict[str,str]], default_ph
                     "reason": "Injected inline JD keyword phrase (XML)."
                 })
 
-    # If *still* nothing, add one hard append to the very first non-empty paragraph
     if not inserted_any and default_phrase:
         for p_el in p_els:
             before = normalize_ws(el_text(p_el))
@@ -431,7 +420,6 @@ def apply_weaves_anywhere(doc: Document, weaves: List[Dict[str,str]], default_ph
                         "reason": "Hard fallback to ensure visible tailoring."
                     })
                 break
-
     return changes
 
 # ----------------------- pipeline -----------------------
@@ -466,7 +454,7 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
         company   = item.get("company") or item.get("org") or ""
         plan = call_llm_weaves(resume_plain, jd_text, job_title, company)
 
-        # Save the plan for debugging (we will NOT list this in drafts_index)
+        # Save the plan for debugging (we won't include this file in the index we write)
         slug_base = slugify(job_title or url)[:80]
         (out_changes / f"{slug_base}_plan.json").write_text(
             json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -488,7 +476,6 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
             })
 
         # Pass B: XML-level weaving into bullets or any real paragraphs
-        # Pick a guaranteed default phrase if the plan mined nothing
         cands = (plan.get("skills_additions") or []) + [w["phrase"] for w in (plan.get("weaves") or []) if w.get("phrase")]
         default_phrase = canon(cands[0]) if cands else "per the job description requirements"
         weave_changes = apply_weaves_anywhere(doc, plan.get("weaves") or [], default_phrase)
@@ -515,10 +502,10 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
             "ts": int(time.time())
         })
 
-    # Write drafts index for UI (we exclude *_plan.json here)
+    # Write drafts index for UI (exclude *_plan.json here)
     index_path = out_root / "drafts_index.json"
     index_path.write_text(json.dumps({
-        "outbox": [""],  # unchanged
+        "outbox": [""],
         "resumes": [pathlib.Path(i["resume_path"]).name for i in index_items],
         "changes": [pathlib.Path(i["changes_path"]).name for i in index_items],
     }, ensure_ascii=False, indent=2), encoding="utf-8")
