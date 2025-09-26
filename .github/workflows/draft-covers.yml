@@ -160,12 +160,21 @@ jobs:
           base="docs/${uid}"
           mkdir -p docs/data
           shopt -s nullglob
+
           OUTBOX_LIST=()
           for f in "$base/outbox/"*.md; do OUTBOX_LIST+=("$(basename "$f")"); done
+
           RESUME_LIST=()
           for f in "$base/resumes/"*.docx; do RESUME_LIST+=("$(basename "$f")"); done
+
+          # --- Only include five-field change JSONs; exclude *_plan.json ---
           CHANGES_LIST=()
-          for f in "$base/changes/"*.json; do CHANGES_LIST+=("$(basename "$f")"); done
+          for f in "$base/changes/"*.json; do
+            b="$(basename "$f")"
+            [[ $b == *_plan.json ]] && continue
+            CHANGES_LIST+=("$b")
+          done
+
           jq -n \
             --argjson outbox  "$(printf '%s\n' "${OUTBOX_LIST[@]:-}"  | jq -R . | jq -s .)" \
             --argjson resumes "$(printf '%s\n' "${RESUME_LIST[@]:-}" | jq -R . | jq -s .)" \
@@ -220,7 +229,9 @@ jobs:
           uid="${{ github.event.inputs.user_id }}"
           shopt -s nullglob
           for f in "docs/${uid}/changes/"*.json; do
-            key="outputs/${uid}/changes/$(basename "$f")"
+            b="$(basename "$f")"
+            [[ $b == *_plan.json ]] && continue
+            key="outputs/${uid}/changes/$b"
             curl -sS -X POST \
               "${SUPABASE_URL%/}/storage/v1/object/$key" \
               -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
