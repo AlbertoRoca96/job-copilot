@@ -25,7 +25,7 @@
     .files a { text-decoration:none; }
     .files .btn { margin-left:auto; }
 
-    /* Changes modal (used by supabase.js UI helper) */
+    /* Changes modal */
     .modal { position:fixed; inset:0; background:rgba(0,0,0,.35); display:none; align-items:center; justify-content:center; z-index:1000; }
     .modal.open { display:flex; }
     .modal-content { width:min(920px, 92vw); max-height:86vh; overflow:auto; background:#fff; border-radius:10px; box-shadow:0 8px 30px rgba(0,0,0,.2); }
@@ -38,16 +38,6 @@
     .change-reason { color:#555; font-size:12px; margin-top:6px; }
     .change-card pre { white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; background:#fff; border:1px dashed #eee; padding:8px; border-radius:6px; }
   </style>
-
-  <!-- Expose Supabase config for the UI helper -->
-  <script>
-    // TODO: set these to your project values (safe to expose anon key)
-    window.SUPABASE_URL = "https://<YOUR-PROJECT-REF>.supabase.co";
-    window.SUPABASE_ANON_KEY = "<YOUR-ANON-KEY>";
-  </script>
-
-  <!-- UI helper that lists files and opens the changes modal (ESM; per-file signing) -->
-  <script type="module" src="./supabase.js?v=2025-09-26-1"></script>
 </head>
 
 <body>
@@ -140,7 +130,6 @@
       <p class="muted">These are written by the “Draft covers & tailored resumes” run.</p>
 
       <h3 style="margin-top:8px">Cover letters</h3>
-      <!-- UL lists filled by JobCopilotUI (per-file signed URLs) -->
       <ul id="outbox-list" class="files"></ul>
 
       <h3 style="margin-top:14px">Tailored resumes</h3>
@@ -151,7 +140,7 @@
     </section>
   </main>
 
-  <!-- Changes modal (opened by JobCopilotUI) -->
+  <!-- Changes modal -->
   <div id="change-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="changeTitle">
     <div class="modal-content">
       <div class="modal-header">
@@ -162,25 +151,23 @@
     </div>
   </div>
 
-  <!-- Your existing page logic (auth, upload, run buttons, etc.) -->
+  <!-- Supabase config for profile.js -->
+  <script>
+    window.SUPABASE_URL = "https://imozfqawxpsasjdmgdkh.supabase.co";
+    window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc";
+  </script>
+  <!-- keep the UMD client and then your app script -->
+  <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
   <!-- IMPORTANT: absolute path for GitHub Pages project sites -->
   <script defer src="/job-copilot/profile.js?v=2025-09-26-1"></script>
 
-  <!-- Kick off the new UI helper once we know the uid -->
+  <!-- Optional: kick off UI helper hooks if your JS exposes them -->
   <script>
     (function () {
       const params = new URLSearchParams(location.search);
-      // Prefer URL ?uid=..., fall back to what your profile.js may set
       const uid = params.get("uid") || window.CURRENT_USER_ID || localStorage.getItem("uid") || "";
-      if (uid && window.JobCopilotUI && typeof window.JobCopilotUI.init === "function") {
-        window.JobCopilotUI.init(uid);
-      }
-      // Optional: expose a refresh hook if profile.js updates outbox
-      window.refreshOutboxList = () => {
-        if (uid && window.JobCopilotUI && typeof window.JobCopilotUI.refreshOutbox === "function") {
-          window.JobCopilotUI.refreshOutbox(uid);
-        }
-      };
+      // If profile.js exposes a refresh hook, wire up here.
+      window.refreshOutboxList?.();
     })();
   </script>
 </body>
