@@ -1,11 +1,12 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <title>job-copilot — Profile</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="style.css" />
-  <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+
+  <!-- Page-local styles -->
   <style>
     .wrap { max-width: 960px; margin: 20px auto; }
     .card { border:1px solid #e5e5e5; border-radius:10px; padding:14px; background:#fcfcfc; }
@@ -17,22 +18,38 @@
     th, td { border-bottom:1px solid #eee; padding:6px 8px; text-align:left; }
     .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
     .ctl { margin:6px 8px 0 0; min-width:280px; }
-    .files { display:grid; grid-template-columns: repeat(auto-fill,minmax(280px,1fr)); gap:8px; }
-    .file { padding:8px; border:1px solid #eee; background:#fff; border-radius:8px; }
-    label small { color:#666; font-weight:400; }
-    /* Diff modal */
+
+    /* Files lists */
+    .files { list-style:none; padding-left:0; display:grid; grid-template-columns: repeat(auto-fill,minmax(280px,1fr)); gap:8px; }
+    .files li { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px; border:1px solid #eee; background:#fff; border-radius:8px; }
+    .files a { text-decoration:none; }
+    .files .btn { margin-left:auto; }
+
+    /* Changes modal (used by supabase.js UI helper) */
     .modal { position:fixed; inset:0; background:rgba(0,0,0,.35); display:none; align-items:center; justify-content:center; z-index:1000; }
     .modal.open { display:flex; }
-    .modal .panel { width:min(920px, 92vw); max-height:86vh; overflow:auto; background:#fff; border-radius:10px; box-shadow:0 8px 30px rgba(0,0,0,.2); }
-    .modal header { display:flex; justify-content:space-between; align-items:center; padding:12px 14px; border-bottom:1px solid #eee; position:sticky; top:0; background:#fff; }
-    .modal h3 { margin:0; font-size:16px; }
-    .modal .body { padding:14px; }
-    .diff { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; white-space:pre-wrap; background:#fafafa; border:1px dashed #eee; padding:10px; border-radius:8px; }
-    .ins { background:#e6ffed; }
-    .tag { display:inline-block; padding:2px 6px; font-size:12px; border:1px solid #ddd; border-radius:999px; background:#f8f8f8; }
+    .modal-content { width:min(920px, 92vw); max-height:86vh; overflow:auto; background:#fff; border-radius:10px; box-shadow:0 8px 30px rgba(0,0,0,.2); }
+    .modal-header { display:flex; justify-content:space-between; align-items:center; padding:12px 14px; border-bottom:1px solid #eee; position:sticky; top:0; background:#fff; }
+    .modal-body { padding:14px; }
+
+    .change-card { border:1px solid #eee; border-radius:8px; padding:10px; margin-bottom:10px; background:#fafafa; }
+    .change-title { font-weight:600; margin-bottom:6px; }
+    .change-insert { display:inline-block; padding:2px 6px; font-size:12px; border:1px solid #ddd; border-radius:999px; background:#e6ffed; margin:6px 0; }
+    .change-reason { color:#555; font-size:12px; margin-top:6px; }
+    .change-card pre { white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; background:#fff; border:1px dashed #eee; padding:8px; border-radius:6px; }
   </style>
+
+  <!-- Expose Supabase config for the UI helper -->
+  <script>
+    // TODO: set these to your project values (safe to expose anon key)
+    window.SUPABASE_URL = "https://<YOUR-PROJECT-REF>.supabase.co";
+    window.SUPABASE_ANON_KEY = "<YOUR-ANON-KEY>";
+  </script>
+
+  <!-- UI helper that lists files and opens the changes modal (ESM; per-file signing) -->
+  <script type="module" src="./supabase.js?v=2025-09-26-1"></script>
 </head>
+
 <body>
   <main class="wrap">
     <h1>Your profile</h1>
@@ -123,28 +140,48 @@
       <p class="muted">These are written by the “Draft covers & tailored resumes” run.</p>
 
       <h3 style="margin-top:8px">Cover letters</h3>
-      <div id="covers" class="files"></div>
+      <!-- UL lists filled by JobCopilotUI (per-file signed URLs) -->
+      <ul id="outbox-list" class="files"></ul>
 
       <h3 style="margin-top:14px">Tailored resumes</h3>
-      <div id="resumes" class="files"></div>
+      <ul id="resumes-list" class="files"></ul>
 
       <h3 style="margin-top:14px">Change logs</h3>
-      <div id="changes" class="files"></div>
+      <ul id="changes-list" class="files"></ul>
     </section>
   </main>
 
-  <!-- Diff modal -->
-  <div id="diffModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="diffTitle">
-    <div class="panel">
-      <header>
-        <h3 id="diffTitle">Resume change</h3>
-        <button id="diffClose" class="btn" aria-label="Close">Close</button>
-      </header>
-      <div class="body" id="diffBody"></div>
+  <!-- Changes modal (opened by JobCopilotUI) -->
+  <div id="change-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="changeTitle">
+    <div class="modal-content">
+      <div class="modal-header">
+        <strong id="changeTitle">Resume change</strong>
+        <button class="close btn" aria-label="Close">Close</button>
+      </div>
+      <div class="modal-body">Loading…</div>
     </div>
   </div>
 
+  <!-- Your existing page logic (auth, upload, run buttons, etc.) -->
   <!-- IMPORTANT: absolute path for GitHub Pages project sites -->
-  <script defer src="/job-copilot/profile.js?v=2025-09-25-4"></script>
+  <script defer src="/job-copilot/profile.js?v=2025-09-26-1"></script>
+
+  <!-- Kick off the new UI helper once we know the uid -->
+  <script>
+    (function () {
+      const params = new URLSearchParams(location.search);
+      // Prefer URL ?uid=..., fall back to what your profile.js may set
+      const uid = params.get("uid") || window.CURRENT_USER_ID || localStorage.getItem("uid") || "";
+      if (uid && window.JobCopilotUI && typeof window.JobCopilotUI.init === "function") {
+        window.JobCopilotUI.init(uid);
+      }
+      // Optional: expose a refresh hook if profile.js updates outbox
+      window.refreshOutboxList = () => {
+        if (uid && window.JobCopilotUI && typeof window.JobCopilotUI.refreshOutbox === "function") {
+          window.JobCopilotUI.refreshOutbox(uid);
+        }
+      };
+    })();
+  </script>
 </body>
 </html>
