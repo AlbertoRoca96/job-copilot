@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os, sys, re, json, time, argparse, hashlib, pathlib, logging
 from typing import List, Dict, Any, Optional, Tuple, Set
+from copy import deepcopy
 
 import requests
 from bs4 import BeautifulSoup
@@ -144,15 +145,15 @@ def mined_plan(resume_text: str, jd_text: str) -> Dict[str, Any]:
 
     weave_pool = []
     if "ap style" in jd_low or "cms" in jd_low:
-        weave_pool.append("to AP style and CMS guidelines")
+        weave_pool.append("AP style and CMS guidelines")
     if "social media" in jd_low:
-        weave_pool.append("via social media scheduling and analytics")
+        weave_pool.append("social media scheduling and analytics")
     if "crm" in jd_low:
-        weave_pool.append("using CRM tracking and follow-ups")
+        weave_pool.append("CRM tracking and follow-ups")
     if "excel" in jd_low or "spreadsheet" in jd_low:
-        weave_pool.append("using Excel for tracking and reporting")
+        weave_pool.append("Excel for tracking and reporting")
     if "pos" in jd_low or "inventory" in jd_low:
-        weave_pool.append("via POS and inventory checks")
+        weave_pool.append("POS and inventory checks")
     weaves = [{"section":"Work Experience","cue":"","phrase":p} for p in weave_pool[:4]]
     return {"skills_additions": skills_additions, "weaves": weaves}
 
@@ -166,7 +167,7 @@ def call_llm_weaves(resume_text: str, jd_text: str, job_title: str = "", company
         client = OpenAI(api_key=OPENAI_API_KEY)
         sys_prompt = (
             "You inject ATS-relevant keywords into an existing resume without fabricating achievements. "
-            "Prefer weaving short prepositional phrases (e.g., 'to AP style and CMS guidelines', "
+            "Prefer weaving short prepositional phrases (e.g., 'with CRM tracking and follow-ups', "
             "'via POS and inventory checks') into bullets that already talk about the task. "
             "Keep phrases <= 18 words. Avoid buzzword stuffing. Output JSON only."
         )
@@ -183,8 +184,8 @@ Return JSON with exactly this shape:
 {{
   "skills_additions": ["AP style", "CMS", "Excel"],
   "weaves": [
-    {{"section":"Work Experience","cue":"edited","phrase":"to AP style and CMS guidelines"}},
-    {{"section":"Projects","cue":"wrote","phrase":"with SEO keyword research and analytics"}}
+    {{"section":"Work Experience","cue":"edited","phrase":"AP style and CMS guidelines"}},
+    {{"section":"Projects","cue":"wrote","phrase":"SEO keyword research and analytics"}}
   ]
 }}"""
         resp = client.chat.completions.create(
@@ -262,167 +263,81 @@ def copy_format(src: Run, dst: Run):
     except Exception:
         pass
 
-def set_text_preserve_style(p: Paragraph, text: str):
-    base = dominant_run(p)
-    p.text = text
-    if base and p.runs:
-        copy_format(base, p.runs[0])
-
-def first_sentence_split(text: str) -> int:
-    m = re.search(r'([.!?])(\s|$)', text)
-    return (m.start(1)+1) if m else len(text)
-
-def weave_into_paragraph(p: Paragraph, phrase: str) -> Tuple[bool, str, str, str]:
-    phrase = canon((phrase or "").strip().rstrip("."))
-    if not phrase:
-        return (False, p.text, p.text, "")
-    txt = "".join(r.text for r in p.runs) if p.runs else p.text
-    before = txt
-    insert_at = first_sentence_split(txt)
-    glue = " " if insert_at and insert_at <= len(txt) and txt[insert_at-1].isalnum() else ""
-    inserted = f"{glue} using {phrase}"
-    new_text = txt[:insert_at] + inserted + txt[insert_at:]
-    set_text_preserve_style(p, new_text)
-    return (True, before, p.text, inserted.strip())
-
-# ----------------------- XML-level helpers (no namespaces arg) -----------------------
+# ---- XML-level helpers (for exact formatting preservation) ----
 def el_text(p_el) -> str:
-    # collect all descendant text nodes named 't' (works for w:t and a:t)
     return "".join(t.text for t in p_el.xpath('.//*[local-name()="t"]') if t.text)
 
 def el_is_bullet(p_el) -> bool:
-    # paragraph is bullet/numbered if it has w:pPr/w:numPr
     return bool(p_el.xpath('./*[local-name()="pPr"]/*[local-name()="numPr"]'))
 
+def el_clone_rpr_from(src_r) -> Optional[OxmlElement]:
+    try:
+        rPr = getattr(src_r, "rPr", None)
+        return deepcopy(rPr) if rPr is not None else None
+    except Exception:
+        return None
+
+def el_last_meaningful_r(p_el):
+    rs = p_el.xpath('./*[local-name()="r"]')
+    for r in reversed(rs):
+        texts = r.xpath('.//*[local-name()="t"]')
+        if any((t.text or "").strip() for t in texts):
+            return r
+    return rs[-1] if rs else None
+
 def el_append_run(p_el, text: str):
+    base = el_last_meaningful_r(p_el)
     r = OxmlElement('w:r')
+    rPr = el_clone_rpr_from(base) if base is not None else None
+    if rPr is not None:
+        r.append(rPr)
     t = OxmlElement('w:t')
-    t.set(qn('xml:space'), 'preserve')  # keep leading space
+    t.set(qn('xml:space'), 'preserve')
     t.text = text
     r.append(t)
     p_el.append(r)
 
-def weave_into_el(p_el, phrase: str) -> Tuple[bool, str, str, str]:
-    phrase = canon((phrase or "").strip().rstrip("."))
-    before = el_text(p_el)
-    if not phrase or not before.strip():
-        return (False, before, before, "")
-    to_add = f" Using {phrase}."
-    if phrase.lower() in before.lower():
-        return (False, before, before, "")
-    el_append_run(p_el, to_add)
-    after = el_text(p_el)
-    return (True, before, after, to_add.strip())
-
 def xml_all_paragraphs(doc: Document):
-    # ALL paragraphs in the main document part, including tables & many text boxes
     return list(doc.element.xpath('.//*[local-name()="p"]'))
 
-# ----------------------- weaving helpers -----------------------
-def apply_weaves_xml(doc: Document, weaves: List[Dict[str,str]], default_phrase: str) -> List[Dict[str,str]]:
-    """XML-level weaving; returns list of five-field change records."""
-    changes: List[Dict[str,str]] = []
-    p_els = xml_all_paragraphs(doc)
-    bullets = [(i, p_el) for i, p_el in enumerate(p_els) if el_is_bullet(p_el) and normalize_ws(el_text(p_el))]
-    if not bullets:
-        bullets = [(i, p_el) for i, p_el in enumerate(p_els) if len(normalize_ws(el_text(p_el))) >= 25]
+# ----------------------- grammar bridge -----------------------
+_LEADS_TO_KEEP = ("to ", "for ")
+_STRIP_LEADS = ("using ", "with ", "via ", "through ", "by ")
+_GERUNDS = ("managing", "coordinating", "handling", "scheduling", "maintaining",
+            "performing", "providing", "ensuring", "tracking", "verifying",
+            "triaging", "documenting", "updating", "supporting", "resolving")
 
-    used = set()
-    phrases = [w.get("phrase") for w in (weaves or []) if w.get("phrase")] or []
-    if default_phrase and default_phrase not in phrases:
-        phrases.append(default_phrase)
+def bridge_phrase(raw: str) -> str:
+    """
+    Normalize a phrase and choose a natural connector.
+    Returns text WITHOUT leading space; caller adds spacing.
+    """
+    p = canon((raw or "").strip())
+    p = p.rstrip(". ")
+    low = p.lower()
 
-    inserted_any = False
-    for phrase in phrases[:4]:
-        best = None
-        for k, (idx, p_el) in enumerate(bullets):
-            if k in used: continue
-            t = normalize_ws(el_text(p_el)).lower()
-            if not t: continue
-            best = (k, idx, p_el); break
-        if best:
-            k, _, p_el = best
-            ok, before, after, ins = weave_into_el(p_el, phrase)
-            if ok:
-                used.add(k); inserted_any = True
-                changes.append({
-                    "anchor_section": "Work Experience",
-                    "original_paragraph_text": before,
-                    "modified_paragraph_text": after,
-                    "inserted_sentence": ins,
-                    "reason": "Injected inline JD keyword phrase (XML)."
-                })
+    for lead in _STRIP_LEADS:
+        if low.startswith(lead):
+            p = p[len(lead):]
+            low = p.lower()
+            break
 
-    # If still nothing, try a hard fallback with default phrase
-    if not inserted_any and default_phrase:
-        for p_el in p_els:
-            before = normalize_ws(el_text(p_el))
-            if before:
-                ok, b2, a2, ins = weave_into_el(p_el, default_phrase)
-                if ok:
-                    changes.append({
-                        "anchor_section": "Work Experience",
-                        "original_paragraph_text": b2,
-                        "modified_paragraph_text": a2,
-                        "inserted_sentence": ins,
-                        "reason": "Hard fallback to ensure visible tailoring (XML)."
-                    })
-                break
-    return changes
+    # keep if already "to ..." or "for ..."
+    for keep in _LEADS_TO_KEEP:
+        if low.startswith(keep):
+            return p
 
-def apply_weaves_inline(doc: Document, weaves: List[Dict[str,str]], default_phrase: str) -> List[Dict[str,str]]:
-    """Paragraph-level (python-docx) weaving to maximize reliability on styled resumes."""
-    changes: List[Dict[str,str]] = []
-    # choose bullets first; otherwise long paragraphs
-    bullets = [p for p in doc.paragraphs if normalize_ws(p.text) and paragraph_is_bullet(p)]
-    cands = bullets or [p for p in doc.paragraphs if len(normalize_ws(p.text)) >= 25]
+    if any(low.startswith(g+" ") for g in _GERUNDS):
+        return f"by {p}"
+    # default nouny case
+    return f"with {p}"
 
-    phrases = [w.get("phrase") for w in (weaves or []) if w.get("phrase")] or []
-    if default_phrase and default_phrase not in phrases:
-        phrases.append(default_phrase)
+# ----------------------- section detection -----------------------
+SECTION_NAMES = [
+    "work experience", "experience", "professional experience",
+    "employment", "relevant experience"
+]
 
-    used_idx: Set[int] = set()
-    for phrase in phrases[:4]:
-        target = None
-        for i, p in enumerate(cands):
-            if i in used_idx: continue
-            t = normalize_ws(p.text)
-            if not t: continue
-            if phrase.lower() in t.lower():  # already present
-                continue
-            target = (i, p); break
-        if target is None:
-            continue
-        i, p = target
-        ok, before, after, ins = weave_into_paragraph(p, phrase)
-        if ok:
-            used_idx.add(i)
-            changes.append({
-                "anchor_section": "Work Experience",
-                "original_paragraph_text": before,
-                "modified_paragraph_text": after,
-                "inserted_sentence": ins,
-                "reason": "Injected inline JD keyword phrase (paragraph)."
-            })
-
-    # As a last resort, force one insertion with the default phrase
-    if not changes and default_phrase:
-        for p in doc.paragraphs:
-            t = normalize_ws(p.text)
-            if not t: continue
-            ok, before, after, ins = weave_into_paragraph(p, default_phrase)
-            if ok:
-                changes.append({
-                    "anchor_section": "Work Experience",
-                    "original_paragraph_text": before,
-                    "modified_paragraph_text": after,
-                    "inserted_sentence": ins,
-                    "reason": "Hard fallback to ensure visible tailoring (paragraph)."
-                })
-                break
-    return changes
-
-# ----------------------- skills: find + inject -----------------------
 def find_section_ranges(doc: Document, titles: List[str]) -> Dict[str, Tuple[int,int]]:
     wants = [normalize_ws(t).lower() for t in titles]
     hits: Dict[str,int] = {}
@@ -436,6 +351,184 @@ def find_section_ranges(doc: Document, titles: List[str]) -> Dict[str, Tuple[int
         ranges[k]=(start,end)
     return ranges
 
+def work_experience_start(doc: Document) -> int:
+    ranges = find_section_ranges(doc, SECTION_NAMES)
+    for name in SECTION_NAMES:
+        k = name
+        if k in ranges: return ranges[k][0]
+    # fallback: skip top 8 paragraphs (headers/summary region)
+    return min(len(doc.paragraphs), 8)
+
+# ----------------------- candidate discovery -----------------------
+def candidate_paragraphs(doc: Document) -> List[Paragraph]:
+    start_idx = work_experience_start(doc)
+    bullets = []
+    bodies = []
+    for i, p in enumerate(doc.paragraphs):
+        if i < start_idx:  # keep above-work-experience pristine
+            continue
+        t = normalize_ws(p.text)
+        if not t: 
+            continue
+        if paragraph_is_bullet(p):
+            bullets.append((i, p))
+        elif len(t) >= 25:
+            bodies.append((i, p))
+    # prefer bullets, then longer bodies
+    return [p for _, p in bullets] + [p for _, p in bodies]
+
+def candidate_paragraph_els(doc: Document):
+    p_els = xml_all_paragraphs(doc)
+    # approximate start index by matching the Nth python-docx paragraph element
+    start = work_experience_start(doc)
+    # map python paragraphs to xml nodes by text match (best-effort)
+    # simpler: just skip first ~start*2 xml p's as a heuristic
+    return p_els[max(0, start):]
+
+# ----------------------- injectors -----------------------
+def insert_run_at_end(p: Paragraph, bridge: str) -> Tuple[bool, str, str, str]:
+    """
+    Append a styled run to the paragraph (no rewrite). Returns (ok, before, after, inserted).
+    """
+    base = dominant_run(p)
+    before = "".join(r.text for r in p.runs) if p.runs else p.text
+    if not before.strip():
+        return (False, before, before, "")
+    if bridge.lower() in before.lower():
+        return (False, before, before, "")
+
+    prefix = "" if before.endswith((" ", "—", "–")) else " "
+    inserted_text = f"{prefix}{bridge}"
+    r = p.add_run(inserted_text)
+    if base:
+        copy_format(base, r)
+    after = before + inserted_text
+    return (True, before, after, bridge)
+
+def weave_into_el(p_el, bridge: str) -> Tuple[bool, str, str, str]:
+    before = el_text(p_el)
+    if not before.strip():
+        return (False, before, before, "")
+    if bridge.lower() in before.lower():
+        return (False, before, before, "")
+    prefix = "" if before.endswith((" ", "—", "–")) else " "
+    el_append_run(p_el, f"{prefix}{bridge}")
+    after = el_text(p_el)
+    return (True, before, after, bridge)
+
+# cue-scoring
+def cue_score(text: str, cue: str) -> int:
+    if not cue: return 0
+    toks = token_set(text)
+    cue_toks = token_set(cue)
+    return sum(1 for c in cue_toks if c in toks)
+
+# ----------------------- weaving helpers -----------------------
+def apply_weaves_xml(doc: Document, weaves: List[Dict[str,str]], default_phrase: str) -> List[Dict[str,str]]:
+    changes: List[Dict[str,str]] = []
+    p_els = candidate_paragraph_els(doc)
+    bullets = [(i, p_el) for i, p_el in enumerate(p_els) if el_is_bullet(p_el) and normalize_ws(el_text(p_el))] \
+              or [(i, p_el) for i, p_el in enumerate(p_els) if len(normalize_ws(el_text(p_el))) >= 25]
+
+    used = set()
+    phrases = [w.get("phrase") for w in (weaves or []) if w.get("phrase")] or []
+    cues    = [w.get("cue","") for w in (weaves or [])] or []
+    if default_phrase and default_phrase not in phrases:
+        phrases.append(default_phrase); cues.append("")
+
+    inserted_any = False
+    for idx, phrase in enumerate(phrases[:4]):
+        bridge = bridge_phrase(phrase)
+        # pick best bullet by cue score
+        best = None
+        best_score = -1
+        for k, (_, p_el) in enumerate(bullets):
+            if k in used: continue
+            t = normalize_ws(el_text(p_el))
+            s = cue_score(t, cues[idx] if idx < len(cues) else "")
+            if s > best_score:
+                best_score = s
+                best = (k, p_el, t)
+        if best:
+            k, p_el, _ = best
+            ok, before, after, ins = weave_into_el(p_el, bridge)
+            if ok:
+                used.add(k); inserted_any = True
+                changes.append({
+                    "anchor_section": "Work Experience",
+                    "original_paragraph_text": before,
+                    "modified_paragraph_text": after,
+                    "inserted_sentence": ins,
+                    "reason": "Injected inline JD keyword phrase (XML; formatting preserved)."
+                })
+
+    if not inserted_any and default_phrase:
+        for p_el in p_els:
+            before = normalize_ws(el_text(p_el))
+            if before:
+                ok, b2, a2, ins = weave_into_el(p_el, bridge_phrase(default_phrase))
+                if ok:
+                    changes.append({
+                        "anchor_section": "Work Experience",
+                        "original_paragraph_text": b2,
+                        "modified_paragraph_text": a2,
+                        "inserted_sentence": ins,
+                        "reason": "Hard fallback to ensure visible tailoring (XML; formatting preserved)."
+                    })
+                break
+    return changes
+
+def apply_weaves_inline(doc: Document, weaves: List[Dict[str,str]], default_phrase: str) -> List[Dict[str,str]]:
+    """
+    Paragraph-level weaving WITHOUT rewriting the paragraph:
+    we append a styled run so original formatting is untouched.
+    """
+    changes: List[Dict[str,str]] = []
+    cands = candidate_paragraphs(doc)
+    phrases = [w.get("phrase") for w in (weaves or []) if w.get("phrase")] or []
+    cues    = [w.get("cue","") for w in (weaves or [])] or []
+    if default_phrase and default_phrase not in phrases:
+        phrases.append(default_phrase); cues.append("")
+
+    used_idx: Set[int] = set()
+    for idx, phrase in enumerate(phrases[:4]):
+        bridge = bridge_phrase(phrase)
+        # choose best candidate by cue score
+        best_i, best_p, best_score = -1, None, -1
+        for i, p in enumerate(cands):
+            if i in used_idx: continue
+            t = normalize_ws(p.text)
+            if not t: continue
+            s = cue_score(t, cues[idx] if idx < len(cues) else "")
+            if s > best_score:
+                best_i, best_p, best_score = i, p, s
+        if best_p is None:
+            continue
+        ok, before, after, ins = insert_run_at_end(best_p, bridge)
+        if ok:
+            used_idx.add(best_i)
+            changes.append({
+                "anchor_section": "Work Experience",
+                "original_paragraph_text": before,
+                "modified_paragraph_text": after,
+                "inserted_sentence": ins,
+                "reason": "Injected inline JD keyword phrase (paragraph; formatting preserved)."
+            })
+
+    if not changes and default_phrase and cands:
+        p = cands[0]
+        ok, before, after, ins = insert_run_at_end(p, bridge_phrase(default_phrase))
+        if ok:
+            changes.append({
+                "anchor_section": "Work Experience",
+                "original_paragraph_text": before,
+                "modified_paragraph_text": after,
+                "inserted_sentence": ins,
+                "reason": "Hard fallback to ensure visible tailoring (paragraph; formatting preserved)."
+            })
+    return changes
+
+# ----------------------- skills: find + inject (unchanged API) -----------------------
 def inject_skills(doc: Document, additions: List[str]) -> Optional[Dict[str,str]]:
     if not additions:
         return None
@@ -458,34 +551,40 @@ def inject_skills(doc: Document, additions: List[str]) -> Optional[Dict[str,str]
         new = [a for a in additions if a.lower() not in present]
         if not new:
             return None
-        before = p.text
+        before = "".join(r.text for r in p.runs) if p.runs else p.text
         t2 = t[:-1] if t.endswith(".") else t
         if ("," in t2 or ";" in t2):
             sep = ", " if not t2.endswith(",") else ""
-            after = t2 + f"{sep}{', '.join(new)}"
+            appended = f"{sep}{', '.join(new)}"
+            after = t2 + appended
         else:
             after = t2 + f": {', '.join(new)}"
-        set_text_preserve_style(p, after)
+        # append as styled run to preserve inline formatting of existing text
+        base = dominant_run(p)
+        if p.text != t2:
+            # normalize the displayed text if needed
+            pass
+        run = p.add_run(after[len(t2):])
+        if base:
+            copy_format(base, run)
         return {
             "section": "Skills/Technical Skills",
             "before": before,
-            "after": p.text,
+            "after": "".join(r.text for r in p.runs),
             "inserted": None,
-            "reason": "Enriched inline skills list."
+            "reason": "Enriched inline skills list (formatting preserved)."
         }
     return None
 
-# ----------------------- weaving orchestrator -----------------------
+# ----------------------- orchestrator -----------------------
 def apply_weaves_anywhere(doc: Document, weaves: List[Dict[str,str]], default_phrase: str) -> List[Dict[str,str]]:
-    """Choose weaving strategy based on env flag; ensure we return at least one change if at all possible."""
     if TAILOR_INLINE_ONLY:
-        logging.info("TAILOR_INLINE_ONLY=1 → using paragraph-level weaving.")
+        logging.info("TAILOR_INLINE_ONLY=1 → using paragraph-level weaving (styled run append).")
         changes = apply_weaves_inline(doc, weaves, default_phrase)
         if not changes:
             logging.info("Paragraph weaving produced no changes; nothing to record.")
         return changes
 
-    # XML-first, then paragraph fallback
     logging.info("Using XML-level weaving (with paragraph fallback).")
     changes = apply_weaves_xml(doc, weaves, default_phrase)
     if not changes:
@@ -535,7 +634,7 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
         doc = Document(resume_path)
         changes: List[Dict[str, Any]] = []
 
-        # Pass A: skills additions
+        # Pass A: skills additions (kept minimal; no new headers ever)
         skills_change = inject_skills(doc, plan.get("skills_additions") or [])
         if skills_change:
             changes.append({
@@ -546,9 +645,9 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
                 "reason": skills_change["reason"]
             })
 
-        # Pass B: weaving
+        # Pass B: weaving (experience and below)
         cands = (plan.get("skills_additions") or []) + [w["phrase"] for w in (plan.get("weaves") or []) if w.get("phrase")]
-        default_phrase = canon(cands[0]) if cands else "per the job description requirements"
+        default_phrase = canon(cands[0]) if cands else "requirements from the job description"
         weave_changes = apply_weaves_anywhere(doc, plan.get("weaves") or [], default_phrase)
         changes.extend(weave_changes)
 
@@ -584,7 +683,7 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
 
 # ----------------------- CLI -----------------------
 def main():
-    ap = argparse.ArgumentParser(description="Tailor resume from JD links with LLM-assisted weaving (XML-level + paragraph fallback) with deterministic fallback.")
+    ap = argparse.ArgumentParser(description="Tailor resume from JD links with LLM-assisted weaving (format-preserving, Experience+ only).")
     ap.add_argument("--links", required=True, help="Path to JSON or .txt containing JD links.")
     ap.add_argument("--resume", required=True, help="Path to source .docx resume.")
     ap.add_argument("--out", required=True, help="Output prefix (e.g., outputs).")
