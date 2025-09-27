@@ -1,19 +1,51 @@
 #!/usr/bin/env python3
+"""
+Draft cover letters and tailor resumes using the new resume.py flow.
+
+- Uses src.tailor.resume.{call_llm_weaves, inject_skills, apply_weaves_anywhere, fetch_jd_plaintext}
+  to create per-job tailored resumes (format-preserving weaving).
+- Keeps the same output shape your UI expects:
+  docs/<uid>/outbox/*.md
+  docs/<uid>/resumes/*.docx
+  docs/<uid>/changes/*.json  (object with company/title/paths/cover_meta/changes[])
+  docs/<uid>/changes/*.jd.txt
+
+Reads the shortlist from docs/data/scores.top.json (preferred, built by the GH step),
+or falls back to docs/data/scores.json.
+
+This script does NOT write drafts_index.json; your workflow step already builds it
+by scanning docs/<uid>/* and uploads to Storage.
+"""
+
 import os, sys, json, re, yaml, hashlib, pathlib
 from typing import Set, List, Dict, Optional, Tuple
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.tailor.cover import generate_cover_letter, get_company_context, pick_company_themes
-from src.tailor.resume import tailor_docx_in_place
-from src.skills.taxonomy import augment_allowed_vocab
+# repo root
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, ROOT)
+
 from docx import Document
+
+# covers
+from src.tailor.cover import generate_cover_letter, get_company_context, pick_company_themes
+
+# new resume flow helpers
+from src.tailor.resume import (
+    call_llm_weaves,
+    inject_skills,
+    apply_weaves_anywhere,
+    fetch_jd_plaintext,
+    canon,
+)
+
+# vocab augmentation (existing)
+from src.skills.taxonomy import augment_allowed_vocab
 
 import requests
 from bs4 import BeautifulSoup
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
-# ---------- helpers ----------
+# ------------------ misc helpers ------------------
 def safe_slug(s: str) -> str:
     s = (s or "").strip()
     return "".join([c for c in s if c.isalnum() or c in ('-','_',' ')])[:150].strip().replace(" ", "_")
@@ -39,35 +71,11 @@ STOPWORDS = {
     "strong","plus","bonus","including","include","etc","ability","skills","excellent","communication",
 }
 
-# ---------- JD fetch ----------
-_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                  "AppleWebKit/537.36 (KHTML, like Gecko) "
-                  "Chrome/124.0.0.0 Safari/537.36",
-    "Accept-Language": "en-US,en;q=0.9",
-}
-def fetch_jd_plaintext(job_url: str, timeout=20) -> str:
-    if not job_url:
-        return ""
-    try:
-        r = requests.get(job_url, timeout=timeout, headers=_HEADERS)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
-        main = soup.select_one(".content, .opening, .job, .application, article, main, #content") or soup
-        for tag in main(["script","style","noscript","nav","header","footer","form"]):
-            tag.decompose()
-        return " ".join(main.get_text(separator=" ", strip=True).split())
-    except Exception:
-        return ""
+def jd_sha(s: str) -> str:
+    return hashlib.sha1((s or "").encode("utf-8")).hexdigest()[:8]
 
-def pick_jd_text(job_obj: dict) -> str:
-    desc = (job_obj.get("description") or "").strip()
-    if len(desc) >= 800:
-        return desc
-    live = fetch_jd_plaintext(job_obj.get("url",""))
-    return live if len(live) > len(desc) else desc
 
-# ---------- Supabase profile ----------
+# ------------------ Supabase profile ------------------
 SUPABASE_URL = os.environ.get("SUPABASE_URL","").rstrip("/")
 SRK = os.environ.get("SUPABASE_SERVICE_ROLE_KEY","")
 
@@ -80,7 +88,8 @@ def load_profile_for_user(user_id: str) -> dict:
     arr = r.json()
     return (arr[0] if arr else {}) or {}
 
-# ---------- allowed vocab ----------
+
+# ------------------ allowed vocab ------------------
 def _allowed_vocab_from_profile(profile: dict, portfolio: dict) -> Set[str]:
     skills = {str(s).lower() for s in (profile.get("skills") or [])}
     titles = {str(t).lower() for t in (profile.get("target_titles") or [])}
@@ -98,7 +107,8 @@ def allowed_vocab(profile: dict, portfolio: dict) -> List[str]:
     titles = list(profile.get("target_titles") or [])
     return sorted(set(augment_allowed_vocab(base, titles)))
 
-# ---------- keyword scoring ----------
+
+# ------------------ keyword scoring (for cover context / ATS list) ------------------
 def _count_phrase(text: str, phrase: str) -> int:
     if not phrase:
         return 0
@@ -140,7 +150,37 @@ def extract_jd_terms(job: dict, allowed: set, cap=24) -> List[str]:
     ranked = [k for k,_ in sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))]
     return ranked[:cap]
 
-# ---------- main ----------
+
+# ------------------ shortlist IO ------------------
+def read_shortlist() -> List[dict]:
+    """Prefer docs/data/scores.top.json (built by GH step); fallback to docs/data/scores.json."""
+    top_path = os.path.join(ROOT, "docs", "data", "scores.top.json")
+    base_path = os.path.join(ROOT, "docs", "data", "scores.json")
+    if os.path.exists(top_path):
+        with open(top_path) as f:
+            data = json.load(f)
+    elif os.path.exists(base_path):
+        with open(base_path) as f:
+            data = json.load(f)
+    else:
+        return []
+    return data if isinstance(data, list) else \
+           data.get("jobs") or data.get("items") or data.get("links") or []
+
+
+def best_url(job: dict) -> str:
+    return job.get("url") or job.get("link") or job.get("jd_url") or ""
+
+
+def best_desc(job: dict) -> str:
+    desc = (job.get("description") or "").strip()
+    if len(desc) >= 800:
+        return desc
+    live = fetch_jd_plaintext(best_url(job)) if best_url(job) else ""
+    return live if len(live) > len(desc) else desc
+
+
+# ------------------ main ------------------
 def main(top: int, user: Optional[str]):
     if not user:
         print("Missing --user; required for per-user output folders.")
@@ -184,26 +224,15 @@ def main(top: int, user: Optional[str]):
 
     allowed = set(allowed_vocab(profile, portfolio))
 
-    # shortlist (as on the dashboard)
-    DATA_JSONL = os.path.join(ROOT, "data", "scores.jsonl")
-    DATA_JSON  = os.path.join(ROOT, "docs", "data", "scores.json")
-
-    jobs: List[dict] = []
-    if os.path.exists(DATA_JSON):
-        with open(DATA_JSON) as f:
-            jobs = json.load(f)
-    elif os.path.exists(DATA_JSONL):
-        with open(DATA_JSONL) as f:
-            for line in f:
-                jobs.append(json.loads(line))
-    else:
-        print('No scores found; run scripts/rank.py first.')
+    # shortlist (Your Shortlist built earlier in the workflow)
+    jobs: List[dict] = read_shortlist()
+    if not jobs:
+        print('No shortlist data found. Ensure the "Build TOP-N shortlist" step created docs/data/scores.top.json.')
         return
-
     # Keep order & dedupe by URL
     seen = set(); deduped = []
     for j in jobs:
-        key = (j.get("url") or "").strip().lower() or f"no-url::{j.get('company','')}::{j.get('title','')}"
+        key = (best_url(j) or "").strip().lower() or f"no-url::{j.get('company','')}::{j.get('title','')}"
         if key in seen: continue
         seen.add(key); deduped.append(j)
     jobs = deduped[: max(1, min(20, int(top or 5)))]
@@ -223,44 +252,49 @@ def main(top: int, user: Optional[str]):
         banlist = []
     banset = {x.strip().lower() for x in banlist}
 
-    use_llm = os.getenv("USE_LLM","0") == "1" and bool(os.getenv("OPENAI_API_KEY"))
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    print(f"LLM: {'enabled' if use_llm else 'disabled'}")
-    if use_llm: print(f"LLM model: {model}")
-
-    def jd_sha(s: str) -> str:
-        return hashlib.sha1((s or "").encode("utf-8")).hexdigest()[:8]
-
     # choose base resume
     CURRENT_RESUME = os.path.join(ROOT, "assets", "current.docx")
     FALLBACK_RESUME= os.path.join(ROOT, "assets", "Resume-2025.docx")
     base_resume_path = CURRENT_RESUME if os.path.isfile(CURRENT_RESUME) else FALLBACK_RESUME
     print(f"Using base resume: {base_resume_path}")
 
+    # summarize LLM usage
+    use_llm = bool(os.getenv("OPENAI_API_KEY"))
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    print(f"LLM for resume weaving: {'enabled' if use_llm else 'disabled'} (model={model if use_llm else 'n/a'})")
+
     drafted_covers = drafted_resumes = 0
     llm_summary = {"used": use_llm, "model": (model if use_llm else None), "jobs": []}
 
-    for j in jobs:
-        safe_company = safe_slug(j.get('company',''))
-        safe_title   = safe_slug(j.get('title',''))
-        slug = f"{safe_company}_{safe_title}"[:150]
+    # We'll compute resume_plain once (from base resume) for planning
+    base_doc_for_plain = Document(base_resume_path)
+    resume_plain = "\n".join([p.text for p in base_doc_for_plain.paragraphs])
 
-        jd_text = pick_jd_text(j) or (j.get("description") or "")
+    for j in jobs:
+        company = j.get('company','') or j.get('org','')
+        title   = j.get('title','') or j.get('job_title','')
+        url     = best_url(j)
+
+        safe_company = safe_slug(company)
+        safe_title   = safe_slug(title)
+        slug = f"{safe_company}_{safe_title}"[:150] or safe_slug(url) or "job"
+
+        # ----- JD text -----
+        jd_text = best_desc(j)
         tmp_job = dict(j); tmp_job["description"] = jd_text
         jd_kws = extract_jd_terms(tmp_job, allowed, cap=24)
 
-        # keep JD raw for UI
+        # save JD for UI (no hash in filename; see UI default)
         jd_txt_path = os.path.join(CHANGES_DIR, f"{slug}.jd.txt")
-        with open(jd_txt_path, "w") as f:
+        with open(jd_txt_path, "w", encoding="utf-8") as f:
             f.write(jd_text[:20000])
 
         jd_hash = jd_sha(jd_text)
 
-        # company themes for UI (and pass-through to generator)
+        # ----- cover letter (LLM-first; deterministic fallback handled in generate_cover_letter) -----
         ctx = get_company_context(j)
         company_themes = pick_company_themes(ctx)
 
-        # COVER (LLM-first; deterministic fallback)
         cover_fname = f"{slug}.md"
         cover_md = generate_cover_letter(
             job=j,
@@ -268,73 +302,101 @@ def main(top: int, user: Optional[str]):
             jd_text=jd_text,
             jd_keywords=jd_kws,
             allowed_vocab=sorted(allowed),
-            tone=os.getenv("COVER_TONE", "professional")
+            tone=os.getenv("COVER_TONE", "professional"),
         )
-        with open(os.path.join(OUTBOX_MD, cover_fname), 'w') as f:
+        with open(os.path.join(OUTBOX_MD, cover_fname), 'w', encoding="utf-8") as f:
             f.write(cover_md)
         j['cover_path'] = f"outbox/{cover_fname}"
 
-        # RESUME (tailor inside the actual doc)
+        # ----- resume tailoring via new resume helpers -----
         out_docx_name = f"{slug}_{jd_hash}.docx"
         out_docx = os.path.join(RESUMES_MD, out_docx_name)
 
+        # fresh copy of the resume for this job
         doc = Document(base_resume_path)
 
-        # metadata (ATS keywords = jd_kws)
+        # core properties for ATS/debug
         try:
             cp = doc.core_properties
             cp.comments = f"job-copilot:{slug}:{jd_hash}"
-            cp.subject = j.get("title","")
+            cp.subject = title
+            # include up to 16 keywords for discoverability
             cp.keywords = ", ".join([k for k in jd_kws if k][:16])
         except Exception:
             pass
 
-        granular_changes = tailor_docx_in_place(
-            doc,
-            jd_keywords=jd_kws,
-            allowed_vocab_list=sorted(allowed),
-            inline_only=(os.getenv("TAILOR_INLINE_ONLY","1") == "1"),
-        )
+        # plan weaves with LLM (or deterministic fallback inside call_llm_weaves)
+        plan = call_llm_weaves(resume_plain, jd_text, job_title=title, company=company)
+        llm_phrases = [canon((w.get("phrase") or "").strip()) for w in (plan.get("weaves") or []) if (w.get("phrase") or "").strip()]
+        # Apply skills (minimally, never creating new headers)
+        skills_change = inject_skills(doc, plan.get("skills_additions") or [])
+        granular_changes: List[Dict[str, str]] = []
+        if skills_change:
+            granular_changes.append({
+                "anchor_section": skills_change["section"],
+                "original_paragraph_text": skills_change["before"],
+                "modified_paragraph_text": skills_change["after"],
+                "inserted_sentence": None,
+                "reason": skills_change["reason"],
+            })
+
+        # Weaving in Work Experience and below
+        cands = (plan.get("skills_additions") or []) + llm_phrases
+        default_phrase = canon(cands[0]) if cands else "requirements from the job description"
+        weave_changes = apply_weaves_anywhere(doc, plan.get("weaves") or [], default_phrase)
+        granular_changes.extend(weave_changes)
+
+        # save tailored resume
         doc.save(out_docx)
 
-        # Explain changes (UI-friendly; now includes cover meta + paths)
+        # ----- explain JSON with paths + cover meta (UI expects this object shape) -----
         explain = {
-            "company": j.get("company",""),
-            "title": j.get("title",""),
+            "company": company,
+            "title": title,
+            "url": url,
             "ats_keywords": jd_kws,
-            "llm_keywords": [],
-            "changes": list(granular_changes or []),
+            "llm_keywords": llm_phrases[:12],
+            "changes": granular_changes,
             "jd_hash": jd_hash,
             "paths": {
                 "resume_docx": f"resumes/{out_docx_name}",
                 "cover_md": f"outbox/{cover_fname}",
-                "jd_text": f"changes/{slug}.jd.txt"
+                "jd_text": f"changes/{slug}.jd.txt",
             },
             "cover_meta": {
                 "company_themes": company_themes[:8],
-                "tone": os.getenv("COVER_TONE", "professional")
-            }
+                "tone": os.getenv("COVER_TONE", "professional"),
+            },
         }
-        with open(os.path.join(CHANGES_DIR, f"{slug}.json"), 'w') as f:
-            json.dump(explain, f, indent=2)
+        with open(os.path.join(CHANGES_DIR, f"{slug}_{jd_hash}.json"), 'w', encoding="utf-8") as f:
+            json.dump(explain, f, ensure_ascii=False, indent=2)
 
-        llm_summary["jobs"].append({"slug": slug, "cover": True, "resume_injected": True, "changes": len(explain["changes"])})
-        drafted_covers += 1; drafted_resumes += 1
+        # summary stats
+        llm_summary["jobs"].append({
+            "slug": slug,
+            "cover": True,
+            "resume_injected": bool(granular_changes),
+            "changes": len(granular_changes),
+        })
+        drafted_covers += 1
+        drafted_resumes += 1
 
-    with open(os.path.join(ROOT, "docs", "data", "scores.json"), 'w') as f:
-        json.dump(jobs, f, indent=2)
-    with open(os.path.join(ROOT, "docs", "data", "llm_info.json"), "w") as f:
-        json.dump(llm_summary, f, indent=2)
-    with open(os.path.join(ROOT, "docs", "data", "banlist.json"), 'w') as bf:
-        json.dump(sorted(list(banset)), bf, indent=2)
+    # Persist a minimal mirror of the shortlist + LLM summary (informational)
+    with open(os.path.join(ROOT, "docs", "data", "scores.json"), 'w', encoding="utf-8") as f:
+        json.dump(jobs, f, ensure_ascii=False, indent=2)
+    with open(os.path.join(ROOT, "docs", "data", "llm_info.json"), "w", encoding="utf-8") as f:
+        json.dump(llm_summary, f, ensure_ascii=False, indent=2)
+    with open(os.path.join(ROOT, "docs", "data", "banlist.json"), 'w', encoding="utf-8") as bf:
+        json.dump(sorted(list(banset)), bf, ensure_ascii=False, indent=2)
 
     print(f"Drafted {drafted_covers} cover letters -> {OUTBOX_MD}")
     print(f"Drafted {drafted_resumes} tailored resumes -> {RESUMES_MD}")
 
+
 if __name__ == '__main__':
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument('--top', type=int, default=5)
+    ap.add_argument('--top', type=int, default=5, help="Top-N from shortlist to draft (will still use docs/data/scores.top.json if present).")
     ap.add_argument('--user', type=str, required=True)
     args = ap.parse_args()
     main(args.top, args.user)
