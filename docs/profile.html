@@ -6,14 +6,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="style.css" />
 
-  <!-- Page-local styles -->
+  <!-- Page-local styles (minimal helpers for the new preview cards) -->
   <style>
-    .wrap { max-width: 960px; margin: 20px auto; }
-    .card { border:1px solid #e5e5e5; border-radius:10px; padding:14px; background:#fcfcfc; }
+    .wrap { max-width: 1100px; margin: 20px auto; padding: 0 12px; }
+    .card { border:1px solid #e5e5e5; border-radius:12px; padding:16px; background:#fcfcfc; }
     .muted { color:#666; } .hidden { display:none; }
     .pill { display:inline-block; padding:2px 8px; margin:2px; border:1px solid #e0e0e0; border-radius:999px; font-size:12px; background:#f6f6f6; }
     dt { font-weight:600; } dd { margin:0 0 10px 0; }
-    .btn { padding:6px 10px; border:1px solid #ccc; background:#fff; border-radius:6px; cursor:pointer; }
+    .btn { padding:6px 10px; border:1px solid #ccc; background:#fff; border-radius:8px; cursor:pointer; }
     table { width:100%; border-collapse:collapse; }
     th, td { border-bottom:1px solid #eee; padding:6px 8px; text-align:left; }
     .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
@@ -25,10 +25,22 @@
     .files a { text-decoration:none; }
     .files .btn { margin-left:auto; }
 
+    /* Preview cards */
+    .cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
+    .card .card-head { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:10px; }
+    .card .title { font-weight:600; font-size:15px; }
+    .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+    .pane { background:#fff; border:1px solid #eee; border-radius:10px; padding:10px; }
+    .pane .small { font-size:12px; }
+    .jd { white-space: pre-wrap; font-size: 13px; line-height: 1.35; }
+    .bullets { margin:6px 0 0 18px; }
+    .mono { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; background:#fff; border:1px dashed #eee; padding:10px; border-radius:8px; }
+    details.cover summary { cursor: pointer; margin-top: 8px; }
+
     /* Changes modal */
     .modal { position:fixed; inset:0; background:rgba(0,0,0,.35); display:none; align-items:center; justify-content:center; z-index:1000; }
     .modal.open { display:flex; }
-    .modal-content { width:min(920px, 92vw); max-height:86vh; overflow:auto; background:#fff; border-radius:10px; box-shadow:0 8px 30px rgba(0,0,0,.2); }
+    .modal-content { width:min(980px, 92vw); max-height:86vh; overflow:auto; background:#fff; border-radius:12px; box-shadow:0 8px 30px rgba(0,0,0,.2); }
     .modal-header { display:flex; justify-content:space-between; align-items:center; padding:12px 14px; border-bottom:1px solid #eee; position:sticky; top:0; background:#fff; }
     .modal-body { padding:14px; }
 
@@ -127,9 +139,14 @@
     <!-- Generated materials -->
     <section id="materials" class="card hidden" style="margin-top:16px">
       <h2>Your generated materials</h2>
-      <p class="muted">These are written by the “Draft covers & tailored resumes” run.</p>
+      <p class="muted">Created by “Draft covers & tailored resumes”.</p>
 
-      <h3 style="margin-top:8px">Cover letters</h3>
+      <!-- New: JD-aware preview cards -->
+      <h3 style="margin-top:8px">JD-aware previews</h3>
+      <div id="cards" class="cards"></div>
+
+      <!-- Still expose raw lists below for power users -->
+      <h3 style="margin-top:14px">Cover letters</h3>
       <ul id="outbox-list" class="files"></ul>
 
       <h3 style="margin-top:14px">Tailored resumes</h3>
@@ -156,19 +173,8 @@
     window.SUPABASE_URL = "https://imozfqawxpsasjdmgdkh.supabase.co";
     window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc";
   </script>
-  <!-- keep the UMD client and then your app script -->
   <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
   <!-- IMPORTANT: absolute path for GitHub Pages project sites -->
-  <script defer src="/job-copilot/profile.js?v=2025-09-26-1"></script>
-
-  <!-- Optional: kick off UI helper hooks if your JS exposes them -->
-  <script>
-    (function () {
-      const params = new URLSearchParams(location.search);
-      const uid = params.get("uid") || window.CURRENT_USER_ID || localStorage.getItem("uid") || "";
-      // If profile.js exposes a refresh hook, wire up here.
-      window.refreshOutboxList?.();
-    })();
-  </script>
+  <script defer src="/job-copilot/profile.js?v=2025-09-26-2"></script>
 </body>
 </html>
