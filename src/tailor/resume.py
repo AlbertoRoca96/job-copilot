@@ -19,6 +19,20 @@ MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TAILOR_INLINE_ONLY = str(os.getenv("TAILOR_INLINE_ONLY", "")).strip().lower() not in ("", "0", "false", "no")
 
+# grammar/placement toggles
+def _env_flag(name: str, default: bool = True) -> bool:
+    return str(os.getenv(name, "1" if default else "0")).strip().lower() not in ("", "0", "false", "no")
+
+def _env_opt(name: str, default: str) -> str:
+    v = str(os.getenv(name, default)).strip().lower()
+    return v or default
+
+TAILOR_SMART_INSERT      = _env_flag("TAILOR_SMART_INSERT", True)
+TAILOR_MID_SENTENCE_STYLE= _env_opt("TAILOR_MID_SENTENCE_STYLE", "comma")  # comma|dash|auto
+TAILOR_DASH_THRESHOLD    = int(os.getenv("TAILOR_DASH_THRESHOLD", "7"))
+TAILOR_CAP_SENTENCE      = _env_flag("TAILOR_CAP_SENTENCE", True)
+TAILOR_END_PERIOD        = _env_flag("TAILOR_END_PERIOD", True)
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 # ----------------------- utils -----------------------
@@ -302,10 +316,30 @@ def xml_all_paragraphs(doc: Document):
 
 # ----------------------- grammar bridge -----------------------
 _LEADS_TO_KEEP = ("to ", "for ")
-_STRIP_LEADS = ("using ", "with ", "via ", "through ", "by ")
+_STRIP_LEADS = (
+    "using ", "with ", "via ", "through ", "by ",
+    "while ", "as ", "as part of ", "in order to ", "in accordance with ",
+    "per "
+)
 _GERUNDS = ("managing", "coordinating", "handling", "scheduling", "maintaining",
             "performing", "providing", "ensuring", "tracking", "verifying",
             "triaging", "documenting", "updating", "supporting", "resolving")
+
+def _sentence_case(s: str) -> str:
+    for i, ch in enumerate(s):
+        if ch.isalpha():
+            return s[:i] + ch.upper() + s[i+1:]
+    return s
+
+def _choose_mid_delim(bridge: str) -> str:
+    style = TAILOR_MID_SENTENCE_STYLE
+    if style == "comma":
+        return ", "
+    if style == "dash":
+        return " — "
+    # auto
+    n = len((bridge or "").split())
+    return " — " if n >= TAILOR_DASH_THRESHOLD else ", "
 
 def bridge_phrase(raw: str) -> str:
     """
@@ -316,6 +350,7 @@ def bridge_phrase(raw: str) -> str:
     p = p.rstrip(". ")
     low = p.lower()
 
+    # strip awkward leads
     for lead in _STRIP_LEADS:
         if low.startswith(lead):
             p = p[len(lead):]
@@ -368,7 +403,7 @@ def candidate_paragraphs(doc: Document) -> List[Paragraph]:
         if i < start_idx:  # keep above-work-experience pristine
             continue
         t = normalize_ws(p.text)
-        if not t: 
+        if not t:
             continue
         if paragraph_is_bullet(p):
             bullets.append((i, p))
@@ -385,10 +420,46 @@ def candidate_paragraph_els(doc: Document):
     # simpler: just skip first ~start*2 xml p's as a heuristic
     return p_els[max(0, start):]
 
+# ----------------------- low-level run insertion (format-safe) -----------------------
+def _insert_run_after(p: Paragraph, after_run: Run, text: str, style_src: Optional[Run] = None) -> Run:
+    """
+    Insert a run directly after `after_run` (preserving formatting).
+    """
+    base_el = after_run._r
+    new_r = OxmlElement('w:r')
+    src = style_src or after_run
+    try:
+        rPr = deepcopy(src._r.rPr) if getattr(src._r, "rPr", None) is not None else None
+    except Exception:
+        rPr = None
+    if rPr is not None:
+        new_r.append(rPr)
+    t = OxmlElement('w:t')
+    t.set(qn('xml:space'), 'preserve')
+    t.text = text
+    new_r.append(t)
+    base_el.addnext(new_r)
+    return Run(new_r, p)
+
 # ----------------------- injectors -----------------------
+_TRAILING_RE = re.compile(
+    r"\b(including|using|via|through|resulting in|while|which|that)\b", re.IGNORECASE
+)
+
+def _find_trailing_spot(text: str) -> Optional[int]:
+    """
+    Find a reasonable point to insert BEFORE trailing add-ons.
+    Returns absolute char index or None.
+    """
+    if not TAILOR_SMART_INSERT:
+        return None
+    m = _TRAILING_RE.search(text or "")
+    return m.start() if m else None
+
 def insert_run_at_end(p: Paragraph, bridge: str) -> Tuple[bool, str, str, str]:
     """
-    Append a styled run to the paragraph (no rewrite). Returns (ok, before, after, inserted).
+    Grammar-aware append that preserves formatting.
+    Returns (ok, before, after, inserted_core_text).
     """
     base = dominant_run(p)
     before = "".join(r.text for r in p.runs) if p.runs else p.text
@@ -397,13 +468,51 @@ def insert_run_at_end(p: Paragraph, bridge: str) -> Tuple[bool, str, str, str]:
     if bridge.lower() in before.lower():
         return (False, before, before, "")
 
-    prefix = "" if before.endswith((" ", "—", "–")) else " "
-    inserted_text = f"{prefix}{bridge}"
+    # Try smart mid-sentence insertion BEFORE trailing phrases (format-safe split)
+    cut = _find_trailing_spot(before)
+    if cut is not None and p.runs:
+        # choose delimiter
+        delim = _choose_mid_delim(bridge)
+        insertion = f"{delim}{bridge}"
+
+        # locate run containing `cut`
+        acc = 0
+        for r in p.runs:
+            txt = r.text or ""
+            nxt = acc + len(txt)
+            if cut <= nxt:
+                local = cut - acc
+                try:
+                    left, right = txt[:local], txt[local:]
+                    r.text = left
+                    ins_run = _insert_run_after(p, r, insertion, style_src=base or r)
+                    _insert_run_after(p, ins_run, right, style_src=r)
+                    after = "".join(rr.text for rr in p.runs)
+                    return (True, before, after, insertion.strip())
+                except Exception:
+                    # fall back to end-append
+                    break
+            acc = nxt
+
+    # End-of-paragraph path (no risky mid-sentence surgery)
+    trimmed = before.rstrip()
+    end_ch = trimmed[-1] if trimmed else ""
+    if end_ch in ".!?":
+        # New sentence: Capitalize + (optional) trailing period.
+        insertion_core = bridge
+        if TAILOR_CAP_SENTENCE:
+            insertion_core = _sentence_case(insertion_core)
+        inserted_text = (" " + insertion_core + ( "." if TAILOR_END_PERIOD and not insertion_core.endswith(".") else "" ))
+    else:
+        # Continue current sentence with comma or dash.
+        delim = _choose_mid_delim(bridge)
+        inserted_text = f"{delim}{bridge}"
+
     r = p.add_run(inserted_text)
     if base:
         copy_format(base, r)
     after = before + inserted_text
-    return (True, before, after, bridge)
+    return (True, before, after, inserted_text.strip())
 
 def weave_into_el(p_el, bridge: str) -> Tuple[bool, str, str, str]:
     before = el_text(p_el)
@@ -411,10 +520,24 @@ def weave_into_el(p_el, bridge: str) -> Tuple[bool, str, str, str]:
         return (False, before, before, "")
     if bridge.lower() in before.lower():
         return (False, before, before, "")
-    prefix = "" if before.endswith((" ", "—", "–")) else " "
-    el_append_run(p_el, f"{prefix}{bridge}")
+
+    # XML path: stick to safe end-append; grammar-aware spacing/punct only.
+    trimmed = before.rstrip()
+    end_ch = trimmed[-1] if trimmed else ""
+    if end_ch in ".!?":
+        insertion_core = bridge
+        if TAILOR_CAP_SENTENCE:
+            # naive sentence case for XML path
+            insertion_core = _sentence_case(insertion_core)
+        prefix = " "
+        suffix = "." if TAILOR_END_PERIOD and not insertion_core.endswith(".") else ""
+        ins_text = f"{prefix}{insertion_core}{suffix}"
+    else:
+        ins_text = f"{_choose_mid_delim(bridge)}{bridge}"
+
+    el_append_run(p_el, ins_text)
     after = el_text(p_el)
-    return (True, before, after, bridge)
+    return (True, before, after, ins_text.strip())
 
 # cue-scoring
 def cue_score(text: str, cue: str) -> int:
@@ -562,7 +685,6 @@ def inject_skills(doc: Document, additions: List[str]) -> Optional[Dict[str,str]
         # append as styled run to preserve inline formatting of existing text
         base = dominant_run(p)
         if p.text != t2:
-            # normalize the displayed text if needed
             pass
         run = p.add_run(after[len(t2):])
         if base:
@@ -627,9 +749,7 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
         # Save the plan for debugging (not used by the UI)
         slug_base = slugify(job_title or url)[:80]
         (out_changes / f"{slug_base}_plan.json").write_text(
-            json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-
+            json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
         # Apply to a fresh copy of the resume per job
         doc = Document(resume_path)
         changes: List[Dict[str, Any]] = []
