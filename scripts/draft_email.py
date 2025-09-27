@@ -1,9 +1,9 @@
-# scripts/draft_email.py
-import os, sys, json, re, yaml, hashlib
+#!/usr/bin/env python3
+import os, sys, json, re, yaml, hashlib, pathlib
 from typing import Set, List, Dict, Optional, Tuple
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.tailor.cover import generate_cover_letter
+from src.tailor.cover import generate_cover_letter, get_company_context, pick_company_themes
 from src.tailor.resume import tailor_docx_in_place
 from src.skills.taxonomy import augment_allowed_vocab
 from docx import Document
@@ -11,36 +11,22 @@ from docx import Document
 import requests
 from bs4 import BeautifulSoup
 
-# ---------- paths ----------
-DATA_JSONL = os.path.join(os.path.dirname(__file__), '..', 'data', 'scores.jsonl')
-DATA_JSON  = os.path.join(os.path.dirname(__file__), '..', 'docs', 'data', 'scores.json')
-OUTBOX_MD  = os.path.join(os.path.dirname(__file__), '..', 'docs', 'outbox')
-RESUMES_MD = os.path.join(os.path.dirname(__file__), '..', 'docs', 'resumes')
-CHANGES_DIR= os.path.join(os.path.dirname(__file__), '..', 'docs', 'changes')
-DATA_DIR   = os.path.join(os.path.dirname(__file__), '..', 'docs', 'data')
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
-PROFILE_YAML   = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'profile.yaml')
-PORTFOLIO_YAML = os.path.join(os.path.dirname(__file__), '..', 'src', 'core', 'portfolio.yaml')
-TMPL_DIR       = os.path.join(os.path.dirname(__file__), '..', 'src', 'tailor', 'templates')
+# ---------- helpers ----------
+def safe_slug(s: str) -> str:
+    s = (s or "").strip()
+    return "".join([c for c in s if c.isalnum() or c in ('-','_',' ')])[:150].strip().replace(" ", "_")
 
-CURRENT_RESUME = os.path.join(os.path.dirname(__file__), '..', 'assets', 'current.docx')
-FALLBACK_RESUME= os.path.join(os.path.dirname(__file__), '..', 'assets', 'Resume-2025.docx')
-
-BANLIST_JSON   = os.path.join(DATA_DIR, 'banlist.json')
-
-SUPABASE_URL = os.environ.get("SUPABASE_URL","").rstrip("/")
-SRK = os.environ.get("SUPABASE_SERVICE_ROLE_KEY","")
-INLINE_ONLY = os.getenv("TAILOR_INLINE_ONLY","1") == "1"
-
-# ---------- keyword normalization ----------
-SYNONYMS = {
-  "js":"javascript","reactjs":"react","ts":"typescript","ml":"machine learning",
-  "cv":"computer vision","postgres":"postgresql","gh actions":"github actions",
-  "gh-actions":"github actions","ci/cd":"ci","llm":"machine learning","rest":"rest api",
-  "etl":"data pipeline"
-}
 def norm(w: str) -> str:
-    return SYNONYMS.get((w or "").strip().lower(), (w or "").strip().lower())
+    SYN = {
+      "js":"javascript","reactjs":"react","ts":"typescript","ml":"machine learning",
+      "cv":"computer vision","postgres":"postgresql","gh actions":"github actions",
+      "gh-actions":"github actions","ci/cd":"ci","llm":"machine learning","rest":"rest api",
+      "etl":"data pipeline"
+    }
+    w2 = (w or "").strip().lower()
+    return SYN.get(w2, w2)
 
 def tokens(text: str) -> Set[str]:
     WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+./-]{1,}")
@@ -53,32 +39,13 @@ STOPWORDS = {
     "strong","plus","bonus","including","include","etc","ability","skills","excellent","communication",
 }
 
-# ---------- profile/portfolio -> allowed vocab ----------
-def _allowed_vocab_from_profile(profile: dict, portfolio: dict) -> Set[str]:
-    skills = {str(s).lower() for s in (profile.get("skills") or [])}
-    titles = {str(t).lower() for t in (profile.get("target_titles") or [])}
-    tags = set()
-    for section in ("projects", "work_experience", "workshops"):
-        for item in (portfolio.get(section, []) or []):
-            for b in (item.get("bullets", []) or []):
-                for t in (b.get("tags", []) or []):
-                    tags.add(str(t).lower())
-    expanded = {norm(w) for w in (skills | tags | titles)}
-    return set(expanded | skills | tags | titles)
-
-def allowed_vocab(profile: dict, portfolio: dict) -> List[str]:
-    base = _allowed_vocab_from_profile(profile, portfolio)
-    titles = list(profile.get("target_titles") or [])
-    return sorted(set(augment_allowed_vocab(base, titles)))
-
-# ---------- JD processing ----------
+# ---------- JD fetch ----------
 _HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                   "AppleWebKit/537.36 (KHTML, like Gecko) "
                   "Chrome/124.0.0.0 Safari/537.36",
     "Accept-Language": "en-US,en;q=0.9",
 }
-
 def fetch_jd_plaintext(job_url: str, timeout=20) -> str:
     if not job_url:
         return ""
@@ -100,20 +67,9 @@ def pick_jd_text(job_obj: dict) -> str:
     live = fetch_jd_plaintext(job_obj.get("url",""))
     return live if len(live) > len(desc) else desc
 
-# ---------- profile YAML for cover template ----------
-def write_profile_yaml_from_dict(d: dict):
-    y = {
-        "full_name": d.get("full_name"),
-        "email": d.get("email"),
-        "phone": d.get("phone"),
-        "skills": d.get("skills") or [],
-        "target_titles": d.get("target_titles") or [],
-        "locations": d.get("locations") or [],
-        "github": d.get("github"),
-    }
-    os.makedirs(os.path.dirname(PROFILE_YAML), exist_ok=True)
-    with open(PROFILE_YAML, "w") as f:
-        yaml.safe_dump({k:v for k,v in y.items() if v is not None}, f)
+# ---------- Supabase profile ----------
+SUPABASE_URL = os.environ.get("SUPABASE_URL","").rstrip("/")
+SRK = os.environ.get("SUPABASE_SERVICE_ROLE_KEY","")
 
 def load_profile_for_user(user_id: str) -> dict:
     if not (SUPABASE_URL and SRK and user_id):
@@ -124,24 +80,23 @@ def load_profile_for_user(user_id: str) -> dict:
     arr = r.json()
     return (arr[0] if arr else {}) or {}
 
-def _dedup_by_url_keep_order(items: List[dict]) -> List[dict]:
-    seen = set()
-    out = []
-    for j in items:
-        u = (j.get("url") or "").strip().lower()
-        key = u or f"no-url::{j.get('company','')}::{j.get('title','')}"
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(j)
-    return out
+# ---------- allowed vocab ----------
+def _allowed_vocab_from_profile(profile: dict, portfolio: dict) -> Set[str]:
+    skills = {str(s).lower() for s in (profile.get("skills") or [])}
+    titles = {str(t).lower() for t in (profile.get("target_titles") or [])}
+    tags = set()
+    for section in ("projects", "work_experience", "workshops"):
+        for item in (portfolio.get(section, []) or []):
+            for b in (item.get("bullets", []) or []):
+                for t in (b.get("tags", []) or []):
+                    tags.add(str(t).lower())
+    expanded = {norm(w) for w in (skills | tags | titles)}
+    return set(expanded | skills | tags | titles)
 
-def _select_base_resume() -> str:
-    if os.path.isfile(CURRENT_RESUME):
-        print(f"Using base resume: {CURRENT_RESUME}")
-        return CURRENT_RESUME
-    print(f"Using fallback resume: {FALLBACK_RESUME}")
-    return FALLBACK_RESUME
+def allowed_vocab(profile: dict, portfolio: dict) -> List[str]:
+    base = _allowed_vocab_from_profile(profile, portfolio)
+    titles = list(profile.get("target_titles") or [])
+    return sorted(set(augment_allowed_vocab(base, titles)))
 
 # ---------- keyword scoring ----------
 def _count_phrase(text: str, phrase: str) -> int:
@@ -187,10 +142,34 @@ def extract_jd_terms(job: dict, allowed: set, cap=24) -> List[str]:
 
 # ---------- main ----------
 def main(top: int, user: Optional[str]):
-    # Load profile fresh from Supabase (parse_resume step updated it)
-    prof = load_profile_for_user(user) if user else {}
+    if not user:
+        print("Missing --user; required for per-user output folders.")
+        sys.exit(1)
+
+    # Resolve per-user paths
+    BASE_USER_DIR = os.path.join(ROOT, "docs", user)
+    OUTBOX_MD   = os.path.join(BASE_USER_DIR, "outbox")
+    RESUMES_MD  = os.path.join(BASE_USER_DIR, "resumes")
+    CHANGES_DIR = os.path.join(BASE_USER_DIR, "changes")
+    DATA_DIR    = os.path.join(ROOT, "docs", "data")
+    PROFILE_YAML   = os.path.join(ROOT, "src", "core", "profile.yaml")
+    PORTFOLIO_YAML = os.path.join(ROOT, "src", "core", "portfolio.yaml")
+
+    # Load profile fresh (parse_resume step updated it)
+    prof = load_profile_for_user(user)
     if prof:
-        write_profile_yaml_from_dict(prof)
+        y = {
+            "full_name": prof.get("full_name"),
+            "email": prof.get("email"),
+            "phone": prof.get("phone"),
+            "skills": prof.get("skills") or [],
+            "target_titles": prof.get("target_titles") or [],
+            "locations": prof.get("locations") or [],
+            "github": prof.get("github"),
+        }
+        os.makedirs(os.path.dirname(PROFILE_YAML), exist_ok=True)
+        with open(PROFILE_YAML, "w") as f:
+            yaml.safe_dump({k:v for k,v in y.items() if v is not None}, f)
 
     # Ensure portfolio file exists
     if not os.path.exists(PORTFOLIO_YAML):
@@ -198,18 +177,17 @@ def main(top: int, user: Optional[str]):
         with open(PORTFOLIO_YAML, "w") as f:
             yaml.safe_dump({"projects": [], "work_experience": [], "workshops": []}, f)
 
-    profile = {}
     with open(PROFILE_YAML, 'r') as f:
         profile = yaml.safe_load(f) or {}
-
-    portfolio = {}
-    if os.path.exists(PORTFOLIO_YAML):
-        with open(PORTFOLIO_YAML, 'r') as f:
-            portfolio = yaml.safe_load(f) or {}
+    with open(PORTFOLIO_YAML, 'r') as f:
+        portfolio = yaml.safe_load(f) or {}
 
     allowed = set(allowed_vocab(profile, portfolio))
 
-    # shortlist as on the dashboard
+    # shortlist (as on the dashboard)
+    DATA_JSONL = os.path.join(ROOT, "data", "scores.jsonl")
+    DATA_JSON  = os.path.join(ROOT, "docs", "data", "scores.json")
+
     jobs: List[dict] = []
     if os.path.exists(DATA_JSON):
         with open(DATA_JSON) as f:
@@ -222,8 +200,13 @@ def main(top: int, user: Optional[str]):
         print('No scores found; run scripts/rank.py first.')
         return
 
-    jobs = _dedup_by_url_keep_order(jobs)
-    jobs = jobs[: max(1, min(20, int(top or 5)))]
+    # Keep order & dedupe by URL
+    seen = set(); deduped = []
+    for j in jobs:
+        key = (j.get("url") or "").strip().lower() or f"no-url::{j.get('company','')}::{j.get('title','')}"
+        if key in seen: continue
+        seen.add(key); deduped.append(j)
+    jobs = deduped[: max(1, min(20, int(top or 5)))]
 
     # dirs
     os.makedirs(OUTBOX_MD, exist_ok=True)
@@ -231,7 +214,7 @@ def main(top: int, user: Optional[str]):
     os.makedirs(CHANGES_DIR, exist_ok=True)
     os.makedirs(DATA_DIR, exist_ok=True)
 
-    # banlist
+    BANLIST_JSON = os.path.join(DATA_DIR, 'banlist.json')
     try:
         with open(BANLIST_JSON, 'r') as bf:
             banlist = json.load(bf)
@@ -248,25 +231,34 @@ def main(top: int, user: Optional[str]):
     def jd_sha(s: str) -> str:
         return hashlib.sha1((s or "").encode("utf-8")).hexdigest()[:8]
 
-    base_resume_path = _select_base_resume()
+    # choose base resume
+    CURRENT_RESUME = os.path.join(ROOT, "assets", "current.docx")
+    FALLBACK_RESUME= os.path.join(ROOT, "assets", "Resume-2025.docx")
+    base_resume_path = CURRENT_RESUME if os.path.isfile(CURRENT_RESUME) else FALLBACK_RESUME
+    print(f"Using base resume: {base_resume_path}")
 
     drafted_covers = drafted_resumes = 0
     llm_summary = {"used": use_llm, "model": (model if use_llm else None), "jobs": []}
 
     for j in jobs:
-        safe_company = ''.join(c for c in (j.get('company','')) if c.isalnum() or c in ('-','_')).strip()
-        safe_title   = ''.join(c for c in (j.get('title',''))   if c.isalnum() or c in ('-','_')).strip()
+        safe_company = safe_slug(j.get('company',''))
+        safe_title   = safe_slug(j.get('title',''))
         slug = f"{safe_company}_{safe_title}"[:150]
 
-        # choose best JD text (live page if needed)
         jd_text = pick_jd_text(j) or (j.get("description") or "")
         tmp_job = dict(j); tmp_job["description"] = jd_text
         jd_kws = extract_jd_terms(tmp_job, allowed, cap=24)
 
-        # keep JD raw for debugging
-        with open(os.path.join(CHANGES_DIR, f"{slug}.jd.txt"), "w") as f:
+        # keep JD raw for UI
+        jd_txt_path = os.path.join(CHANGES_DIR, f"{slug}.jd.txt")
+        with open(jd_txt_path, "w") as f:
             f.write(jd_text[:20000])
+
         jd_hash = jd_sha(jd_text)
+
+        # company themes for UI (and pass-through to generator)
+        ctx = get_company_context(j)
+        company_themes = pick_company_themes(ctx)
 
         # COVER (LLM-first; deterministic fallback)
         cover_fname = f"{slug}.md"
@@ -301,34 +293,39 @@ def main(top: int, user: Optional[str]):
             doc,
             jd_keywords=jd_kws,
             allowed_vocab_list=sorted(allowed),
-            inline_only=INLINE_ONLY,
+            inline_only=(os.getenv("TAILOR_INLINE_ONLY","1") == "1"),
         )
-
         doc.save(out_docx)
-        j['resume_docx'] = f"resumes/{out_docx_name}"
-        j['resume_docx_hash'] = jd_hash
 
-        # Explain changes (UI-friendly)
+        # Explain changes (UI-friendly; now includes cover meta + paths)
         explain = {
             "company": j.get("company",""),
             "title": j.get("title",""),
             "ats_keywords": jd_kws,
             "llm_keywords": [],
             "changes": list(granular_changes or []),
-            "jd_hash": jd_hash
+            "jd_hash": jd_hash,
+            "paths": {
+                "resume_docx": f"resumes/{out_docx_name}",
+                "cover_md": f"outbox/{cover_fname}",
+                "jd_text": f"changes/{slug}.jd.txt"
+            },
+            "cover_meta": {
+                "company_themes": company_themes[:8],
+                "tone": os.getenv("COVER_TONE", "professional")
+            }
         }
         with open(os.path.join(CHANGES_DIR, f"{slug}.json"), 'w') as f:
             json.dump(explain, f, indent=2)
-        j['changes_path'] = f"changes/{slug}.json"
 
         llm_summary["jobs"].append({"slug": slug, "cover": True, "resume_injected": True, "changes": len(explain["changes"])})
         drafted_covers += 1; drafted_resumes += 1
 
-    with open(DATA_JSON, 'w') as f:
+    with open(os.path.join(ROOT, "docs", "data", "scores.json"), 'w') as f:
         json.dump(jobs, f, indent=2)
-    with open(os.path.join(DATA_DIR, "llm_info.json"), "w") as f:
+    with open(os.path.join(ROOT, "docs", "data", "llm_info.json"), "w") as f:
         json.dump(llm_summary, f, indent=2)
-    with open(BANLIST_JSON, 'w') as bf:
+    with open(os.path.join(ROOT, "docs", "data", "banlist.json"), 'w') as bf:
         json.dump(sorted(list(banset)), bf, indent=2)
 
     print(f"Drafted {drafted_covers} cover letters -> {OUTBOX_MD}")
@@ -338,6 +335,6 @@ if __name__ == '__main__':
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument('--top', type=int, default=5)
-    ap.add_argument('--user', type=str, default='')
+    ap.add_argument('--user', type=str, required=True)
     args = ap.parse_args()
-    main(args.top, args.user or None)
+    main(args.top, args.user)
