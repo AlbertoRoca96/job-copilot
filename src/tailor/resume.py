@@ -341,6 +341,45 @@ def _choose_mid_delim(bridge: str) -> str:
     n = len((bridge or "").split())
     return " — " if n >= TAILOR_DASH_THRESHOLD else ", "
 
+# NEW: punctuation-aware helpers
+_JOINER_PUNCT = {",", ";", ":", "—", "–", "-"}
+
+def _prev_nonspace_char(s: str, idx: int) -> str:
+    """Return the previous non-space char before s[idx], or ''."""
+    j = idx - 1
+    while j >= 0 and s[j].isspace():
+        j -= 1
+    return s[j] if j >= 0 else ""
+
+def _tail_word(s: str, idx: int, k: int = 5) -> str:
+    """Lowercased tail snippet ending at idx (used to detect ' and' / ' or')."""
+    return (s[max(0, idx - k):idx] or "").lower()
+
+def _contextual_prefix(before: str, cut: Optional[int], bridge: str) -> str:
+    """
+    Choose the prefix to place *before* `bridge` based on local context.
+    - If there is already a joiner (comma/dash/semicolon/colon), prefer a single space.
+    - If text ends with ' and' / ' or', prefer a single space.
+    - Otherwise, fall back to the configured mid-sentence delimiter.
+    """
+    if cut is None:
+        # end-append context: look at the final non-space char
+        trimmed = before.rstrip()
+        prev = trimmed[-1] if trimmed else ""
+        end_has_space = before.endswith(" ")
+        if prev in _JOINER_PUNCT:
+            return "" if end_has_space else " "
+        if trimmed.endswith(" and") or trimmed.endswith(" or"):
+            return "" if end_has_space else " "
+        return _choose_mid_delim(bridge)
+
+    # mid-sentence context: look just before the cut
+    prev = _prev_nonspace_char(before, cut)
+    tail = _tail_word(before, cut)
+    if prev in _JOINER_PUNCT or tail.endswith(" and") or tail.endswith(" or"):
+        return "" if (cut > 0 and before[cut - 1].isspace()) else " "
+    return _choose_mid_delim(bridge)
+
 def bridge_phrase(raw: str) -> str:
     """
     Normalize a phrase and choose a natural connector.
@@ -471,9 +510,12 @@ def insert_run_at_end(p: Paragraph, bridge: str) -> Tuple[bool, str, str, str]:
     # Try smart mid-sentence insertion BEFORE trailing phrases (format-safe split)
     cut = _find_trailing_spot(before)
     if cut is not None and p.runs:
-        # choose delimiter
-        delim = _choose_mid_delim(bridge)
-        insertion = f"{delim}{bridge}"
+        # context-aware delimiter/prefix
+        prefix = _contextual_prefix(before, cut, bridge)
+        insertion = f"{prefix}{bridge}"
+        # avoid double space if left side already ends with space
+        if insertion.startswith(" ") and cut > 0 and before[cut - 1].isspace():
+            insertion = insertion.lstrip()
 
         # locate run containing `cut`
         acc = 0
@@ -504,9 +546,11 @@ def insert_run_at_end(p: Paragraph, bridge: str) -> Tuple[bool, str, str, str]:
             insertion_core = _sentence_case(insertion_core)
         inserted_text = (" " + insertion_core + ( "." if TAILOR_END_PERIOD and not insertion_core.endswith(".") else "" ))
     else:
-        # Continue current sentence with comma or dash.
-        delim = _choose_mid_delim(bridge)
-        inserted_text = f"{delim}{bridge}"
+        # Continue current sentence with context-aware prefix (avoid ", —", "— —", etc.)
+        prefix = _contextual_prefix(before, None, bridge)
+        inserted_text = f"{prefix}{bridge}"
+        if inserted_text.startswith(" ") and before.endswith(" "):
+            inserted_text = inserted_text.lstrip()
 
     r = p.add_run(inserted_text)
     if base:
@@ -533,7 +577,10 @@ def weave_into_el(p_el, bridge: str) -> Tuple[bool, str, str, str]:
         suffix = "." if TAILOR_END_PERIOD and not insertion_core.endswith(".") else ""
         ins_text = f"{prefix}{insertion_core}{suffix}"
     else:
-        ins_text = f"{_choose_mid_delim(bridge)}{bridge}"
+        prefix = _contextual_prefix(before, None, bridge)
+        ins_text = f"{prefix}{bridge}"
+        if ins_text.startswith(" ") and before.endswith(" "):
+            ins_text = ins_text.lstrip()
 
     el_append_run(p_el, ins_text)
     after = el_text(p_el)
