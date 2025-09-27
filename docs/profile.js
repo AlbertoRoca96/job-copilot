@@ -1,9 +1,10 @@
-// docs/profile.js — auth + profile + shortlist + drafting + per-file signing + robust change-log modal
+// docs/profile.js — auth + profile + shortlist + drafting + per-file signing
+// Adds JD-aware preview cards: side-by-side JD excerpt + company themes + cover preview.
 (async function () {
   // Wait for DOM
   await new Promise((r) => window.addEventListener("load", r));
 
-  // ---------- Supabase bootstrap (works with or without a preloaded UMD client) ----------
+  // ---------- Supabase bootstrap ----------
   const SUPABASE_URL =
     window.SUPABASE_URL || "https://imozfqawxpsasjdmgdkh.supabase.co";
   const SUPABASE_ANON_KEY =
@@ -22,7 +23,6 @@
     });
     return window.supabase;
   }
-
   const sbLib = await ensureSupabase();
   const supabase = sbLib.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -36,7 +36,10 @@
   const jobsBody = jobsTable.querySelector("tbody");
   const materials = $("materials");
 
-  // file lists (ULs in the new HTML)
+  // new previews container
+  const cardsEl = $("cards");
+
+  // file lists (ULs)
   const outboxList = $("outbox-list");
   const resumesList = $("resumes-list");
   const changesList = $("changes-list");
@@ -67,7 +70,7 @@
   const draftMsg = $("draftMsg");
   const topNInput = $("topN");
 
-  // changes modal (new structure)
+  // changes modal
   const changeModal = $("change-modal");
   const changeBody = changeModal?.querySelector(".modal-body");
   const changeClose = changeModal?.querySelector(".close");
@@ -87,12 +90,26 @@
       ? arr.map((x) => `<span class="pill">${String(x)}</span>`).join(" ")
       : "—";
 
+  const esc = (s) => String(s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  const truncate = (s, n) => (s && s.length > n ? s.slice(0, n) + "…" : s || "");
+
   const sign = async (bucket, key, expires = 60) => {
     const { data, error } = await supabase.storage
       .from(bucket)
       .createSignedUrl(key, expires);
     return error ? null : data?.signedUrl || null;
   };
+
+  async function fetchJSON(url) {
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) throw new Error(`${url} ${r.status}`);
+    return r.json();
+  }
+  async function fetchText(url) {
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) return "";
+    return r.text();
+  }
 
   // ---------- auth gate ----------
   const user = await getUser();
@@ -173,13 +190,9 @@
     // Save targets
     try {
       const titles = (titlesInput.value || "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
+        .split(",").map((s) => s.trim()).filter(Boolean);
       const locs = (locsInput.value || "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
+        .split(",").map((s) => s.trim()).filter(Boolean);
       const { error } = await supabase
         .from("profiles")
         .update({ target_titles: titles, locations: locs })
@@ -202,7 +215,7 @@
         headers: {
           "Content-Type": "application/json",
           apikey: SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${(await getSession())?.access_token}`,
         },
         body: JSON.stringify({
           note: "user run from profile",
@@ -215,9 +228,7 @@
       });
 
       let out = {};
-      try {
-        out = await resp.json();
-      } catch {}
+      try { out = await resp.json(); } catch {}
       if (!resp.ok) {
         runMsg.textContent = `Error: ${out.detail || out.error || resp.status}`;
         return;
@@ -249,17 +260,13 @@
       });
 
       let out = {};
-      try {
-        out = await resp.json();
-      } catch {}
+      try { out = await resp.json(); } catch {}
       if (!resp.ok) {
         draftMsg.textContent = `Error: ${out.detail || out.error || resp.status}`;
         return;
       }
 
-      draftMsg.textContent = `Drafts queued: ${out.request_id || "ok"} (top=${
-        out.top || top
-      })`;
+      draftMsg.textContent = `Drafts queued: ${out.request_id || "ok"} (top=${out.top || top})`;
       setTimeout(loadMaterials, 3000);
     } catch (e) {
       draftMsg.textContent = "Error: " + String(e);
@@ -333,7 +340,6 @@
   }
 
   // ---------- change-log modal ----------
-  const esc = (s) => String(s || "").replace(/</g, "&lt;");
   function renderChangeCard(it) {
     const before = String(it.original_paragraph_text || "");
     const after = String(it.modified_paragraph_text || "");
@@ -342,7 +348,6 @@
     const anchor = String(it.anchor || "");
     const reason = String(it.reason || "");
 
-    // Lightweight highlight of the inserted snippet if present
     const afterHTML = esc(after).replace(
       esc(added),
       `<span class="change-insert">${esc(added)}</span>`
@@ -351,12 +356,12 @@
     return `
       <div class="change-card">
         <div class="change-title">
-          <span class="tag">${esc(sec)}</span>
-          ${anchor ? `<span class="tag" style="margin-left:6px">${esc(anchor)}</span>` : ""}
+          <span class="pill">${esc(sec)}</span>
+          ${anchor ? `<span class="pill" style="margin-left:6px">${esc(anchor)}</span>` : ""}
         </div>
         <div>
           <div class="muted" style="margin-bottom:4px">Before</div>
-          <pre>${esc(before)}</pre>
+          <pre>${afterHTML ? esc(before) : esc(before)}</pre>
         </div>
         <div style="margin-top:8px">
           <div class="muted" style="margin-bottom:4px">After</div>
@@ -374,7 +379,6 @@
       if (!res.ok) throw new Error(`Fetch ${res.status}`);
       const obj = await res.json();
 
-      // Accept either a top-level array OR { changes: [...] }
       const changes = Array.isArray(obj)
         ? obj
         : Array.isArray(obj?.changes)
@@ -385,26 +389,27 @@
         ? changes.map(renderChangeCard).join("")
         : `<div class="muted">No granular changes recorded for this document.</div>`;
     } catch (e) {
-      changeBody.innerHTML = `<div class="muted">Error loading diff: ${String(
-        e
-      )}</div>`;
+      changeBody.innerHTML = `<div class="muted">Error loading diff: ${String(e)}</div>`;
     }
     changeModal.classList.add("open");
   }
 
-  // ---------- generated-materials loader (per-file signing, never folders) ----------
+  // ---------- materials loader (lists + preview cards) ----------
   async function loadMaterials() {
     const u = await getUser();
     if (!u) return;
 
+    // drafts_index.json from Storage
     const ixKey = `${u.id}/drafts_index.json`;
     const ixUrl = await sign("outputs", ixKey, 60);
 
+    // If we can't find the index, clear UI
     if (!ixUrl) {
       materials.classList.remove("hidden");
       outboxList.innerHTML = `<li class="muted">No generated files yet.</li>`;
       resumesList.innerHTML = "";
       changesList.innerHTML = "";
+      cardsEl.innerHTML = `<div class="muted">No drafts yet.</div>`;
       return;
     }
 
@@ -414,14 +419,12 @@
       if (res.ok) index = await res.json();
     } catch {}
 
-    // Normalize/clean names (index may contain an empty string for outbox)
     const clean = (arr) => (Array.isArray(arr) ? arr.filter(Boolean) : []);
-
     const outbox = clean(index.outbox);
     const resumes = clean(index.resumes);
     const changes = clean(index.changes);
 
-    // Render helpers
+    // ----- Render raw lists (unchanged) -----
     async function renderList(ul, names, prefix, opts = {}) {
       ul.innerHTML = "";
       if (!names.length) {
@@ -444,10 +447,138 @@
         ul.appendChild(li);
       }
     }
-
     await renderList(outboxList, outbox, "outbox");
     await renderList(resumesList, resumes, "resumes");
     await renderList(changesList, changes, "changes", { kind: "changes" });
+
+    // ----- Render JD-aware preview cards (iterate change JSON files) -----
+    cardsEl.innerHTML = "<div class='muted'>Loading previews…</div>";
+    const cards = [];
+
+    for (const fname of changes) {
+      try {
+        const slug = fname.replace(/\.json$/,"");
+
+        // Signed URL for this change JSON
+        const changeUrl = await sign("outputs", `${u.id}/changes/${fname}`, 60);
+        if (!changeUrl) continue;
+
+        const change = await fetchJSON(changeUrl);
+
+        const company = change.company || "(company)";
+        const title   = change.title   || "(title)";
+
+        // Paths inside the JSON (emitted by draft_email.py)
+        const coverRel = change.paths?.cover_md || `outbox/${slug}.md`;
+        const resumeRel = change.paths?.resume_docx || null;
+        const jdTextRel = change.paths?.jd_text || `changes/${slug}.jd.txt`;
+
+        // Signed URLs for assets
+        const coverUrl = await sign("outputs", `${u.id}/${coverRel}`, 60);
+        const resumeUrl = resumeRel ? await sign("outputs", `${u.id}/${resumeRel}`, 60) : null;
+        const jdUrl = await sign("outputs", `${u.id}/${jdTextRel}`, 60);
+
+        // Fetch texts for preview
+        const [coverMd, jdTxt] = await Promise.all([
+          coverUrl ? fetchText(coverUrl) : "",
+          jdUrl ? fetchText(jdUrl) : ""
+        ]);
+
+        const themes = (change.cover_meta?.company_themes || []).slice(0, 6);
+
+        // Card DOM
+        const card = document.createElement("div");
+        card.className = "card";
+
+        const head = document.createElement("div");
+        head.className = "card-head";
+        const titleEl = document.createElement("div");
+        titleEl.className = "title";
+        titleEl.innerHTML = `${esc(company)} — ${esc(title)}`;
+        head.appendChild(titleEl);
+
+        if (resumeUrl) {
+          const a = document.createElement("a");
+          a.className = "btn";
+          a.href = resumeUrl;
+          a.target = "_blank";
+          a.rel = "noopener";
+          a.textContent = "Resume (.docx)";
+          head.appendChild(a);
+        }
+
+        const viewChanges = document.createElement("button");
+        viewChanges.className = "btn";
+        viewChanges.textContent = "View Change Log";
+        viewChanges.onclick = () => openChangeModal(changeUrl);
+        head.appendChild(viewChanges);
+
+        card.appendChild(head);
+
+        // side-by-side JD + themes
+        const grid = document.createElement("div");
+        grid.className = "grid2";
+
+        const left = document.createElement("div");
+        left.className = "pane";
+        left.innerHTML = `<h3>JD excerpt</h3><div class="muted small">pulled from the posting</div><div class="jd">${esc(truncate(jdTxt, 1600))}</div>`;
+
+        const right = document.createElement("div");
+        right.className = "pane";
+        right.innerHTML = `<h3>Company themes</h3>`;
+        if (themes.length) {
+          const ul = document.createElement("ul");
+          ul.className = "bullets";
+          themes.forEach((t) => {
+            const li = document.createElement("li");
+            li.textContent = t;
+            ul.appendChild(li);
+          });
+          right.appendChild(ul);
+        } else {
+          const none = document.createElement("div");
+          none.className = "muted";
+          none.textContent = "No themes detected.";
+          right.appendChild(none);
+        }
+
+        grid.appendChild(left); grid.appendChild(right);
+        card.appendChild(grid);
+
+        // cover letter preview (raw Markdown as monospaced preview)
+        const details = document.createElement("details");
+        details.className = "cover";
+        const summary = document.createElement("summary");
+        summary.textContent = "Cover letter preview";
+        details.appendChild(summary);
+
+        const pre = document.createElement("pre");
+        pre.className = "mono";
+        pre.textContent = coverMd || "(cover not found)";
+        details.appendChild(pre);
+
+        // link to open cover in new tab if needed
+        if (coverUrl) {
+          const open = document.createElement("a");
+          open.className = "btn";
+          open.href = coverUrl;
+          open.target = "_blank";
+          open.rel = "noopener";
+          open.textContent = "Open cover";
+          details.appendChild(document.createTextNode(" "));
+          details.appendChild(open);
+        }
+
+        card.appendChild(details);
+        cards.push(card);
+      } catch (e) {
+        console.error("Preview build error:", e);
+      }
+    }
+
+    cardsEl.innerHTML = "";
+    if (cards.length) cards.forEach((c) => cardsEl.appendChild(c));
+    else cardsEl.innerHTML = `<div class="muted">No drafts yet.</div>`;
 
     materials.classList.remove("hidden");
   }
