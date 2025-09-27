@@ -27,8 +27,16 @@ env:
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
   USE_LLM: "1"
-  TAILOR_INLINE_ONLY: "1"
   OPENAI_MODEL: gpt-4o-mini
+  # resume weaving toggles (Option A you approved)
+  TAILOR_INLINE_ONLY: "1"
+  TAILOR_SMART_INSERT: "1"
+  TAILOR_MID_SENTENCE_STYLE: "dash"   # comma | dash | auto
+  TAILOR_DASH_THRESHOLD: "7"
+  TAILOR_CAP_SENTENCE: "1"
+  TAILOR_END_PERIOD: "1"
+  # cover letter tone (tweak as you like)
+  COVER_TONE: professional
 
 jobs:
   build:
@@ -139,17 +147,15 @@ jobs:
           set -euo pipefail
           python scripts/parse_resume.py --user "${{ github.event.inputs.user_id }}"
 
-      - name: Tailor resumes from live JDs (LLM-assisted weaving)
+      - name: Draft covers + tailor resumes (single pass)
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ env.OPENAI_MODEL }}
         shell: bash
         run: |
           set -euo pipefail
-          python src/tailor/resume.py \
-            --links docs/data/scores.top.json \
-            --resume assets/current.docx \
-            --out docs \
+          python scripts/draft_email.py \
+            --top "${{ github.event.inputs.top }}" \
             --user "${{ github.event.inputs.user_id }}"
 
       - name: Build drafts_index.json (based on docs/<uid>/*)
