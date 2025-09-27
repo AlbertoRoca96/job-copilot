@@ -1,5 +1,6 @@
-// docs/profile.js — auth + profile + shortlist + drafting + per-file signing
-// Adds JD-aware preview cards: side-by-side JD excerpt + company themes + cover preview.
+// docs/profile.js — auth + profile + shortlist + drafting + JD-aware preview cards only
+// This version removes the legacy raw file lists and makes the JD excerpt scrollable.
+
 (async function () {
   // Wait for DOM
   await new Promise((r) => window.addEventListener("load", r));
@@ -38,11 +39,6 @@
 
   // new previews container
   const cardsEl = $("cards");
-
-  // file lists (ULs)
-  const outboxList = $("outbox-list");
-  const resumesList = $("resumes-list");
-  const changesList = $("changes-list");
 
   // header / auth
   const who = $("who");
@@ -90,7 +86,8 @@
       ? arr.map((x) => `<span class="pill">${String(x)}</span>`).join(" ")
       : "—";
 
-  const esc = (s) => String(s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  const esc = (s) =>
+    String(s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
   const truncate = (s, n) => (s && s.length > n ? s.slice(0, n) + "…" : s || "");
 
   const sign = async (bucket, key, expires = 60) => {
@@ -394,7 +391,7 @@
     changeModal.classList.add("open");
   }
 
-  // ---------- materials loader (lists + preview cards) ----------
+  // ---------- materials loader (cards only) ----------
   async function loadMaterials() {
     const u = await getUser();
     if (!u) return;
@@ -406,50 +403,18 @@
     // If we can't find the index, clear UI
     if (!ixUrl) {
       materials.classList.remove("hidden");
-      outboxList.innerHTML = `<li class="muted">No generated files yet.</li>`;
-      resumesList.innerHTML = "";
-      changesList.innerHTML = "";
       cardsEl.innerHTML = `<div class="muted">No drafts yet.</div>`;
       return;
     }
 
-    let index = { outbox: [], resumes: [], changes: [] };
+    let index = { changes: [] };
     try {
       const res = await fetch(ixUrl, { cache: "no-cache" });
       if (res.ok) index = await res.json();
     } catch {}
 
     const clean = (arr) => (Array.isArray(arr) ? arr.filter(Boolean) : []);
-    const outbox = clean(index.outbox);
-    const resumes = clean(index.resumes);
     const changes = clean(index.changes);
-
-    // ----- Render raw lists (unchanged) -----
-    async function renderList(ul, names, prefix, opts = {}) {
-      ul.innerHTML = "";
-      if (!names.length) {
-        ul.innerHTML = `<li class="muted">None</li>`;
-        return;
-      }
-      for (const name of names) {
-        const storageKey = `${u.id}/${prefix}/${name}`;
-        const url = await sign("outputs", storageKey, 60);
-        const li = document.createElement("li");
-        if (opts.kind === "changes") {
-          li.innerHTML = `
-            <a href="${url}" target="_blank" rel="noopener">${name}</a>
-            <button class="btn" type="button">View</button>`;
-          const btn = li.querySelector("button");
-          btn.onclick = () => openChangeModal(url);
-        } else {
-          li.innerHTML = `<a href="${url}" target="_blank" rel="noopener">${name}</a>`;
-        }
-        ul.appendChild(li);
-      }
-    }
-    await renderList(outboxList, outbox, "outbox");
-    await renderList(resumesList, resumes, "resumes");
-    await renderList(changesList, changes, "changes", { kind: "changes" });
 
     // ----- Render JD-aware preview cards (iterate change JSON files) -----
     cardsEl.innerHTML = "<div class='muted'>Loading previews…</div>";
@@ -521,7 +486,8 @@
 
         const left = document.createElement("div");
         left.className = "pane";
-        left.innerHTML = `<h3>JD excerpt</h3><div class="muted small">pulled from the posting</div><div class="jd">${esc(truncate(jdTxt, 1600))}</div>`;
+        // No truncation; the .jd class now scrolls at a compact height.
+        left.innerHTML = `<h3>JD excerpt</h3><div class="muted small">pulled from the posting</div><div class="jd">${esc(jdTxt || "")}</div>`;
 
         const right = document.createElement("div");
         right.className = "pane";
