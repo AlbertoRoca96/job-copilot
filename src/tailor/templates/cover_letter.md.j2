@@ -1,17 +1,28 @@
-Dear Hiring Team at {{ (job.company or '') | trim }},
+{# Structured, JD- and company-aware cover letter #}
+{%- set company = (job.company or '') | trim -%}
+{%- set contact = (plan.greeting_name or 'Hiring Manager') | trim -%}
 
-I'm excited to apply for the **{{ job.title }}** role.
+Dear {{ contact }}{% if company %} at {{ company }}{% endif %},
 
-**Why I’m a fit**
-- Background: {{ (profile.target_titles or []) | join(' / ') if profile.target_titles else 'relevant experience for this role' }}.
-- Strengths aligned to the posting: {{ (jd_keywords[:6] or profile.skills[:6] or []) | map('string') | join(', ') }}.
-- I work with clear process, crisp communication, and measurable outcomes.
+{{ plan.intro }}
 
-I’d welcome the chance to share details on relevant projects and how I can help the team.  
-Thank you for your time.
+{%- if plan.evidence and plan.evidence|length > 1 -%}
+{% for para in plan.evidence %}
+{{ para }}
+{% endfor %}
+{%- elif plan.evidence and plan.evidence|length == 1 -%}
+{{ plan.evidence[0] }}
+{%- endif %}
 
-Best,  
+{{ plan.why_company }}
+
+{{ plan.closing }}
+
+{{ plan.signoff }},
 {{ profile.full_name or '' }}
-{% if profile.email or profile.phone -%}
+{%- if profile.email or profile.phone %}
 {{ profile.email or '' }}{% if profile.email and profile.phone %} | {% endif %}{{ profile.phone or '' }}
+{%- endif %}
+{%- if profile.github %}
+GitHub: {{ profile.github }}
 {%- endif %}
