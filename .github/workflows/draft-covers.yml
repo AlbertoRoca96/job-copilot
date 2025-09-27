@@ -247,11 +247,31 @@ jobs:
               --data-binary @"$f"
           done
 
+      - name: Upload JD excerpts (txt)
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          uid="${{ github.event.inputs.user_id }}"
+          shopt -s nullglob
+          for f in "docs/${uid}/changes/"*.jd.txt; do
+            key="outputs/${uid}/changes/$(basename "$f")"
+            curl -sS -X POST \
+              "${SUPABASE_URL%/}/storage/v1/object/$key" \
+              -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+              -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+              -H "Content-Type: text/plain" \
+              -H "x-upsert: true" \
+              --data-binary @"$f"
+          done
+
       - name: Upload drafts_index.json
         if: ${{ always() }}
         shell: bash
         run: |
           set -euo pipefail
+          # Ensure file exists even if a previous step was skipped
+          test -f docs/data/drafts_index.json || echo '{"outbox":[],"resumes":[],"changes":[]}' > docs/data/drafts_index.json
           key="outputs/${{ github.event.inputs.user_id }}/drafts_index.json"
           curl -sS -X POST \
             "${SUPABASE_URL%/}/storage/v1/object/$key" \
