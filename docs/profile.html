@@ -19,7 +19,7 @@
     .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
     .ctl { margin:6px 8px 0 0; min-width:280px; }
 
-    /* Files lists */
+    /* Files lists (legacy UI) – removed from DOM; keep styles in case we re-enable later */
     .files { list-style:none; padding-left:0; display:grid; grid-template-columns: repeat(auto-fill,minmax(280px,1fr)); gap:8px; }
     .files li { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px; border:1px solid #eee; background:#fff; border-radius:8px; }
     .files a { text-decoration:none; }
@@ -32,7 +32,20 @@
     .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
     .pane { background:#fff; border:1px solid #eee; border-radius:10px; padding:10px; }
     .pane .small { font-size:12px; }
-    .jd { white-space: pre-wrap; font-size: 13px; line-height: 1.35; }
+
+    /* JD excerpt: compact + scrollable for readability */
+    .jd {
+      white-space: pre-wrap;
+      font-size: 13px;
+      line-height: 1.35;
+      max-height: 220px;        /* makes it smaller */
+      overflow: auto;           /* scrollable */
+      padding: 8px;
+      border: 1px solid #eee;
+      border-radius: 8px;
+      background: #fff;
+    }
+
     .bullets { margin:6px 0 0 18px; }
     .mono { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; background:#fff; border:1px dashed #eee; padding:10px; border-radius:8px; }
     details.cover summary { cursor: pointer; margin-top: 8px; }
@@ -141,19 +154,9 @@
       <h2>Your generated materials</h2>
       <p class="muted">Created by “Draft covers & tailored resumes”.</p>
 
-      <!-- New: JD-aware preview cards -->
+      <!-- JD-aware preview cards ONLY -->
       <h3 style="margin-top:8px">JD-aware previews</h3>
       <div id="cards" class="cards"></div>
-
-      <!-- Still expose raw lists below for power users -->
-      <h3 style="margin-top:14px">Cover letters</h3>
-      <ul id="outbox-list" class="files"></ul>
-
-      <h3 style="margin-top:14px">Tailored resumes</h3>
-      <ul id="resumes-list" class="files"></ul>
-
-      <h3 style="margin-top:14px">Change logs</h3>
-      <ul id="changes-list" class="files"></ul>
     </section>
   </main>
 
@@ -175,6 +178,6 @@
   </script>
   <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
   <!-- IMPORTANT: absolute path for GitHub Pages project sites -->
-  <script defer src="/job-copilot/profile.js?v=2025-09-26-2"></script>
+  <script defer src="/job-copilot/profile.js?v=2025-09-27-1"></script>
 </body>
 </html>
