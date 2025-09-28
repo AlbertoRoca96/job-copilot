@@ -12,7 +12,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
 # ----------------------- config -----------------------
-UA = "job-copilot/1.0 (+https://github.com/AlbertoRoca96/job-copilot)"
+UA = "job-copilot/1.1 (+https://github.com/AlbertoRoca96/job-copilot)"
 TIMEOUT = (10, 20)  # connect, read
 MAX_JD_CHARS = 120_000
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -27,11 +27,17 @@ def _env_opt(name: str, default: str) -> str:
     v = str(os.getenv(name, default)).strip().lower()
     return v or default
 
-TAILOR_SMART_INSERT      = _env_flag("TAILOR_SMART_INSERT", True)
-TAILOR_MID_SENTENCE_STYLE= _env_opt("TAILOR_MID_SENTENCE_STYLE", "comma")  # comma|dash|auto
-TAILOR_DASH_THRESHOLD    = int(os.getenv("TAILOR_DASH_THRESHOLD", "7"))
-TAILOR_CAP_SENTENCE      = _env_flag("TAILOR_CAP_SENTENCE", True)
-TAILOR_END_PERIOD        = _env_flag("TAILOR_END_PERIOD", True)
+TAILOR_SMART_INSERT       = _env_flag("TAILOR_SMART_INSERT", True)
+TAILOR_MID_SENTENCE_STYLE = _env_opt("TAILOR_MID_SENTENCE_STYLE", "comma")  # comma|dash|auto
+TAILOR_DASH_THRESHOLD     = int(os.getenv("TAILOR_DASH_THRESHOLD", "7"))
+TAILOR_CAP_SENTENCE       = _env_flag("TAILOR_CAP_SENTENCE", True)
+TAILOR_END_PERIOD         = _env_flag("TAILOR_END_PERIOD", True)
+
+# NEW: complex-weave controls
+TAILOR_COMPLEX_MODE        = _env_flag("TAILOR_COMPLEX_MODE", True)
+TAILOR_COMPLEX_MAX_WORDS   = int(os.getenv("TAILOR_COMPLEX_MAX_WORDS", "28"))
+TAILOR_COMPLEX_MIN_BULLETS = int(os.getenv("TAILOR_COMPLEX_MIN_BULLETS", "6"))
+TAILOR_COMPLEX_MAX_BULLETS = int(os.getenv("TAILOR_COMPLEX_MAX_BULLETS", "10"))
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
@@ -67,6 +73,10 @@ def slugify(s: str) -> str:
     s = (s or "").lower()
     s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
     return s or "job"
+
+def trim_to_words(s: str, cap: int) -> str:
+    ws = normalize_ws(s).split()
+    return " ".join(ws[:cap])
 
 # ----------------------- shortlist / links -----------------------
 def read_links(path: str) -> List[Dict[str, Any]]:
@@ -169,10 +179,13 @@ def mined_plan(resume_text: str, jd_text: str) -> Dict[str, Any]:
     if "pos" in jd_low or "inventory" in jd_low:
         weave_pool.append("POS and inventory checks")
     weaves = [{"section":"Work Experience","cue":"","phrase":p} for p in weave_pool[:4]]
-    return {"skills_additions": skills_additions, "weaves": weaves}
+    return {"skills_additions": skills_additions, "weaves": weaves, "jd_terms": [canon(x) for x in ordered[:12]]}
 
 # ----------------------- LLM (chat completions JSON mode) -----------------------
 def call_llm_weaves(resume_text: str, jd_text: str, job_title: str = "", company: str = "") -> Dict[str, Any]:
+    """
+    Existing weaving planner; returns phrases to integrate and (now) jd_terms for complex mode.
+    """
     if not OPENAI_API_KEY:
         logging.warning("OPENAI_API_KEY not set; using deterministic fallback plan.")
         return mined_plan(resume_text, jd_text)
@@ -200,7 +213,8 @@ Return JSON with exactly this shape:
   "weaves": [
     {{"section":"Work Experience","cue":"edited","phrase":"AP style and CMS guidelines"}},
     {{"section":"Projects","cue":"wrote","phrase":"SEO keyword research and analytics"}}
-  ]
+  ],
+  "jd_terms": ["CRM","cross-functional collaboration","AP style","CMS","SEO","Analytics"]
 }}"""
         resp = client.chat.completions.create(
             model=MODEL,
@@ -225,9 +239,11 @@ Return JSON with exactly this shape:
         section = (w.get("section") or "Work Experience").strip()
         cue = (w.get("cue") or "").strip()
         cleaned_weaves.append({"section": section, "cue": cue, "phrase": phrase})
-    if not skills_additions and not cleaned_weaves:
+    jd_terms = [canon(x) for x in (plan.get("jd_terms") or []) if isinstance(x, str) and x.strip()]
+    if not skills_additions and not cleaned_weaves and not jd_terms:
         return mined_plan(resume_text, jd_text)
-    return {"skills_additions": skills_additions[:8], "weaves": cleaned_weaves[:6]}
+    out = {"skills_additions": skills_additions[:8], "weaves": cleaned_weaves[:6], "jd_terms": jd_terms[:24]}
+    return out
 
 # ----------------------- .docx helpers -----------------------
 def paragraph_is_bullet(p: Paragraph) -> bool:
@@ -453,10 +469,7 @@ def candidate_paragraphs(doc: Document) -> List[Paragraph]:
 
 def candidate_paragraph_els(doc: Document):
     p_els = xml_all_paragraphs(doc)
-    # approximate start index by matching the Nth python-docx paragraph element
     start = work_experience_start(doc)
-    # map python paragraphs to xml nodes by text match (best-effort)
-    # simpler: just skip first ~start*2 xml p's as a heuristic
     return p_els[max(0, start):]
 
 # ----------------------- low-level run insertion (format-safe) -----------------------
@@ -480,26 +493,18 @@ def _insert_run_after(p: Paragraph, after_run: Run, text: str, style_src: Option
     base_el.addnext(new_r)
     return Run(new_r, p)
 
-# ----------------------- injectors -----------------------
+# ----------------------- injectors (append bridging phrases) -----------------------
 _TRAILING_RE = re.compile(
     r"\b(including|using|via|through|resulting in|while|which|that)\b", re.IGNORECASE
 )
 
 def _find_trailing_spot(text: str) -> Optional[int]:
-    """
-    Find a reasonable point to insert BEFORE trailing add-ons.
-    Returns absolute char index or None.
-    """
     if not TAILOR_SMART_INSERT:
         return None
     m = _TRAILING_RE.search(text or "")
     return m.start() if m else None
 
 def insert_run_at_end(p: Paragraph, bridge: str) -> Tuple[bool, str, str, str]:
-    """
-    Grammar-aware append that preserves formatting.
-    Returns (ok, before, after, inserted_core_text).
-    """
     base = dominant_run(p)
     before = "".join(r.text for r in p.runs) if p.runs else p.text
     if not before.strip():
@@ -507,17 +512,12 @@ def insert_run_at_end(p: Paragraph, bridge: str) -> Tuple[bool, str, str, str]:
     if bridge.lower() in before.lower():
         return (False, before, before, "")
 
-    # Try smart mid-sentence insertion BEFORE trailing phrases (format-safe split)
     cut = _find_trailing_spot(before)
     if cut is not None and p.runs:
-        # context-aware delimiter/prefix
         prefix = _contextual_prefix(before, cut, bridge)
         insertion = f"{prefix}{bridge}"
-        # avoid double space if left side already ends with space
         if insertion.startswith(" ") and cut > 0 and before[cut - 1].isspace():
             insertion = insertion.lstrip()
-
-        # locate run containing `cut`
         acc = 0
         for r in p.runs:
             txt = r.text or ""
@@ -532,21 +532,17 @@ def insert_run_at_end(p: Paragraph, bridge: str) -> Tuple[bool, str, str, str]:
                     after = "".join(rr.text for rr in p.runs)
                     return (True, before, after, insertion.strip())
                 except Exception:
-                    # fall back to end-append
                     break
             acc = nxt
 
-    # End-of-paragraph path (no risky mid-sentence surgery)
     trimmed = before.rstrip()
     end_ch = trimmed[-1] if trimmed else ""
     if end_ch in ".!?":
-        # New sentence: Capitalize + (optional) trailing period.
         insertion_core = bridge
         if TAILOR_CAP_SENTENCE:
             insertion_core = _sentence_case(insertion_core)
         inserted_text = (" " + insertion_core + ( "." if TAILOR_END_PERIOD and not insertion_core.endswith(".") else "" ))
     else:
-        # Continue current sentence with context-aware prefix (avoid ", —", "— —", etc.)
         prefix = _contextual_prefix(before, None, bridge)
         inserted_text = f"{prefix}{bridge}"
         if inserted_text.startswith(" ") and before.endswith(" "):
@@ -565,13 +561,11 @@ def weave_into_el(p_el, bridge: str) -> Tuple[bool, str, str, str]:
     if bridge.lower() in before.lower():
         return (False, before, before, "")
 
-    # XML path: stick to safe end-append; grammar-aware spacing/punct only.
     trimmed = before.rstrip()
     end_ch = trimmed[-1] if trimmed else ""
     if end_ch in ".!?":
         insertion_core = bridge
         if TAILOR_CAP_SENTENCE:
-            # naive sentence case for XML path
             insertion_core = _sentence_case(insertion_core)
         prefix = " "
         suffix = "." if TAILOR_END_PERIOD and not insertion_core.endswith(".") else ""
@@ -593,7 +587,7 @@ def cue_score(text: str, cue: str) -> int:
     cue_toks = token_set(cue)
     return sum(1 for c in cue_toks if c in toks)
 
-# ----------------------- weaving helpers -----------------------
+# ----------------------- weaving helpers (existing) -----------------------
 def apply_weaves_xml(doc: Document, weaves: List[Dict[str,str]], default_phrase: str) -> List[Dict[str,str]]:
     changes: List[Dict[str,str]] = []
     p_els = candidate_paragraph_els(doc)
@@ -603,13 +597,13 @@ def apply_weaves_xml(doc: Document, weaves: List[Dict[str,str]], default_phrase:
     used = set()
     phrases = [w.get("phrase") for w in (weaves or []) if w.get("phrase")] or []
     cues    = [w.get("cue","") for w in (weaves or [])] or []
+    default_phrase = default_phrase or ""
     if default_phrase and default_phrase not in phrases:
         phrases.append(default_phrase); cues.append("")
 
     inserted_any = False
     for idx, phrase in enumerate(phrases[:4]):
         bridge = bridge_phrase(phrase)
-        # pick best bullet by cue score
         best = None
         best_score = -1
         for k, (_, p_el) in enumerate(bullets):
@@ -649,21 +643,17 @@ def apply_weaves_xml(doc: Document, weaves: List[Dict[str,str]], default_phrase:
     return changes
 
 def apply_weaves_inline(doc: Document, weaves: List[Dict[str,str]], default_phrase: str) -> List[Dict[str,str]]:
-    """
-    Paragraph-level weaving WITHOUT rewriting the paragraph:
-    we append a styled run so original formatting is untouched.
-    """
     changes: List[Dict[str,str]] = []
     cands = candidate_paragraphs(doc)
     phrases = [w.get("phrase") for w in (weaves or []) if w.get("phrase")] or []
     cues    = [w.get("cue","") for w in (weaves or [])] or []
+    default_phrase = default_phrase or ""
     if default_phrase and default_phrase not in phrases:
         phrases.append(default_phrase); cues.append("")
 
     used_idx: Set[int] = set()
     for idx, phrase in enumerate(phrases[:4]):
         bridge = bridge_phrase(phrase)
-        # choose best candidate by cue score
         best_i, best_p, best_score = -1, None, -1
         for i, p in enumerate(cands):
             if i in used_idx: continue
@@ -729,10 +719,7 @@ def inject_skills(doc: Document, additions: List[str]) -> Optional[Dict[str,str]
             after = t2 + appended
         else:
             after = t2 + f": {', '.join(new)}"
-        # append as styled run to preserve inline formatting of existing text
         base = dominant_run(p)
-        if p.text != t2:
-            pass
         run = p.add_run(after[len(t2):])
         if base:
             copy_format(base, run)
@@ -744,6 +731,218 @@ def inject_skills(doc: Document, additions: List[str]) -> Optional[Dict[str,str]
             "reason": "Enriched inline skills list (formatting preserved)."
         }
     return None
+
+# ======================= COMPLEX REWRITE (NEW) =======================
+def _compress_sentence(s: str) -> str:
+    """Light cleanup to reduce filler without altering meaning."""
+    s = re.sub(r"\s*\(\s*[^)]{0,40}\s*\)\s*", " ", s)  # drop tiny parentheticals
+    s = re.sub(r"\b(responsible for|in charge of)\b\s*", "", s, flags=re.I)
+    return normalize_ws(s)
+
+def _safe_join_keywords(kws: List[str]) -> str:
+    kws = [canon(k).strip() for k in kws if k and isinstance(k, str)]
+    kws = list(dict.fromkeys(kws))  # dedupe, keep order
+    if not kws: return ""
+    if len(kws) == 1: return kws[0]
+    if len(kws) == 2: return f"{kws[0]} and {kws[1]}"
+    return f"{', '.join(kws[:-1])}, and {kws[-1]}"
+
+def _rule_based_rewrite(original: str, jd_terms: List[str]) -> Tuple[str, List[str], str]:
+    """
+    Deterministic fallback when no API key:
+    - Keep action nucleus from the original
+    - Add one compact method/tool clause with 1–2 JD terms (no fabricated outcomes)
+    - Stay within word cap
+    """
+    base = _compress_sentence(original)
+    max_words = max(12, TAILOR_COMPLEX_MAX_WORDS)
+
+    # pick at most 2 JD terms that don't collide badly with existing text
+    present = token_set(base)
+    picks = []
+    for kw in jd_terms:
+        toks = [t for t in tokens(kw) if t not in {"and","of","with","for"}]
+        if not toks: continue
+        if any(t in present for t in toks):
+            picks.append(kw)
+        if len(picks) == 2: break
+    if not picks and jd_terms:
+        picks = jd_terms[:1]
+
+    # Build a single compound/complex sentence
+    kw_chunk = _safe_join_keywords(picks)
+    if kw_chunk:
+        connector = ", " if TAILOR_MID_SENTENCE_STYLE == "comma" else " — "
+        clause = f"{connector}leveraging {kw_chunk}"
+    else:
+        clause = ""
+
+    rewritten = base.rstrip(".") + clause
+    if TAILOR_END_PERIOD:
+        rewritten += "."
+    rewritten = trim_to_words(rewritten, max_words)
+
+    # expose the integrated fragment for change logs
+    integrated = clause.strip(" ,—")
+    used = [canon(k) for k in picks]
+    return rewritten, used, integrated
+
+def call_llm_complex_rewrites(job_title: str,
+                              company: str,
+                              bullets: List[str],
+                              top_jd_terms: List[str],
+                              mid_sentence_style: str,
+                              dash_threshold_words: int,
+                              end_with_period: bool,
+                              max_words: int) -> Dict[str, Any]:
+    """
+    Ask the LLM to return full rewrites per bullet (JSON-only contract).
+    Falls back to rule-based rewrites if no API key.
+    """
+    if not OPENAI_API_KEY:
+        out = {"rewrites": [], "used_keywords": []}
+        for b in bullets:
+            r, used, integrated = _rule_based_rewrite(b, top_jd_terms)
+            out["rewrites"].append({
+                "original": b, "rewritten": r, "used_keywords": used, "integrated_clause": integrated
+            })
+        out["used_keywords"] = list(dict.fromkeys([u for arr in [x["used_keywords"] for x in out["rewrites"]] for u in arr]))
+        return out
+
+    from openai import OpenAI
+    client = OpenAI(api_key=OPENAI_API_KEY)
+
+    sys_prompt = (
+        "You are refining resume bullets. Keep truthfulness. Transform each bullet into a single "
+        "compound/complex sentence that: preserves the original meaning (no new accomplishments), "
+        "naturally integrates 1–2 JD keywords provided, uses action + context/process + outcome, "
+        f"stays \u2264 {max_words} words, plain, ATS-friendly (no jargon stuffing), and keeps tense/person/seniority.\n"
+        "When punctuation style hints are provided, follow them:\n"
+        f'- mid_sentence_style: "{mid_sentence_style}"\n'
+        f"- dash_threshold_words: {dash_threshold_words}\n"
+        f"- end_with_period: {str(end_with_period).lower()}\n"
+        "If no strong outcome exists, emphasize method/tool/process without inventing metrics.\n"
+        "Return JSON ONLY with fields: rewrites[{original, rewritten, used_keywords[], integrated_clause}], used_keywords[]."
+    )
+
+    user_payload = {
+        "title": job_title or "N/A",
+        "company": company or "N/A",
+        "top_jd_terms": top_jd_terms[:12],
+        "style_hints": {
+            "mid_sentence_style": mid_sentence_style,
+            "dash_threshold_words": dash_threshold_words,
+            "end_with_period": end_with_period
+        },
+        "bullets": [{"text": b} for b in bullets]
+    }
+    user_prompt = (
+        "Job Title: {title}\nCompany: {company}\n\n"
+        "JD keywords to prefer (ordered): {top_jd_terms}\n\n"
+        "Style hints: {style_hints}\n\n"
+        "Bullets to refine (JSON): {bullets}\n\n"
+        "Return JSON ONLY:\n"
+        "{\n"
+        '  "rewrites": [\n'
+        '    {"original":"...","rewritten":"...","used_keywords":["kw1","kw2"],"integrated_clause":"<inserted fragments>"}\n'
+        "  ],\n"
+        '  "used_keywords": ["kw1","kw2"]\n'
+        "}"
+    ).format(**{k: json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else v
+                for k, v in user_payload.items()})
+
+    resp = client.chat.completions.create(
+        model=MODEL,
+        messages=[{"role": "system", "content": sys_prompt},
+                  {"role": "user", "content": user_prompt}],
+        response_format={"type": "json_object"},
+        temperature=0.25,
+    )
+    content = resp.choices[0].message.content or "{}"
+    return json.loads(content)
+
+def _replace_paragraph_text(p: Paragraph, new_text: str):
+    """
+    Replace paragraph text while preserving dominant run formatting and list styling.
+    """
+    base = dominant_run(p)
+    if not p.runs:
+        r = p.add_run(new_text)
+        if base: copy_format(base, r)
+        return
+    # put all text into the first meaningful run; blank out the rest
+    first = None
+    for r in p.runs:
+        if first is None:
+            first = r
+            r.text = new_text
+        else:
+            r.text = ""
+    if base and first:
+        copy_format(base, first)
+
+def _collect_top_bullets(doc: Document, cap_min: int, cap_max: int) -> List[Paragraph]:
+    cands = [p for p in candidate_paragraphs(doc) if paragraph_is_bullet(p)]
+    # fallback to bodies if bullets are few
+    if len(cands) < cap_min:
+        extra = [p for p in candidate_paragraphs(doc) if not paragraph_is_bullet(p)]
+        cands = cands + extra
+    return cands[:cap_max]
+
+def apply_complex_rewrites(doc: Document,
+                           jd_terms: List[str],
+                           job_title: str = "",
+                           company: str = "") -> List[Dict[str, Any]]:
+    """
+    Full-sentence rewriting pass (complex mode). Returns granular change logs.
+    """
+    if not TAILOR_COMPLEX_MODE:
+        return []
+
+    bullets = _collect_top_bullets(doc, TAILOR_COMPLEX_MIN_BULLETS, TAILOR_COMPLEX_MAX_BULLETS)
+    if not bullets:
+        return []
+
+    originals = [normalize_ws(p.text) for p in bullets]
+    originals = [o for o in originals if o]  # guard
+    if not originals:
+        return []
+
+    # prefer JD terms from planner or deterministic miner
+    top_terms = [canon(x) for x in (jd_terms or [])][:12]
+
+    result = call_llm_complex_rewrites(
+        job_title=job_title or "",
+        company=company or "",
+        bullets=originals,
+        top_jd_terms=top_terms,
+        mid_sentence_style=TAILOR_MID_SENTENCE_STYLE,
+        dash_threshold_words=TAILOR_DASH_THRESHOLD,
+        end_with_period=bool(TAILOR_END_PERIOD),
+        max_words=TAILOR_COMPLEX_MAX_WORDS,
+    )
+
+    rewrites = result.get("rewrites") or []
+    changes: List[Dict[str, Any]] = []
+    # map back in order; be defensive about length mismatches
+    for i, p in enumerate(bullets):
+        if i >= len(rewrites): break
+        item = rewrites[i] or {}
+        orig = normalize_ws(item.get("original") or p.text)
+        new  = trim_to_words(normalize_ws(item.get("rewritten") or ""), TAILOR_COMPLEX_MAX_WORDS)
+        if not new or new.lower() == orig.lower():
+            continue
+        _replace_paragraph_text(p, new)
+        changes.append({
+            "anchor_section": "Work Experience",
+            "original_paragraph_text": orig,
+            "modified_paragraph_text": new,
+            "rewritten_sentence": new,
+            "used_keywords": [canon(k) for k in (item.get("used_keywords") or [])],
+            "integrated_clause": item.get("integrated_clause") or "",
+            "reason": "Full rewrite to compound/complex sentence using JD keywords (formatting preserved)."
+        })
+    return changes
 
 # ----------------------- orchestrator -----------------------
 def apply_weaves_anywhere(doc: Document, weaves: List[Dict[str,str]], default_phrase: str) -> List[Dict[str,str]]:
@@ -797,6 +996,7 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
         slug_base = slugify(job_title or url)[:80]
         (out_changes / f"{slug_base}_plan.json").write_text(
             json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+
         # Apply to a fresh copy of the resume per job
         doc = Document(resume_path)
         changes: List[Dict[str, Any]] = []
@@ -812,11 +1012,21 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
                 "reason": skills_change["reason"]
             })
 
-        # Pass B: weaving (experience and below)
-        cands = (plan.get("skills_additions") or []) + [w["phrase"] for w in (plan.get("weaves") or []) if w.get("phrase")]
-        default_phrase = canon(cands[0]) if cands else "requirements from the job description"
-        weave_changes = apply_weaves_anywhere(doc, plan.get("weaves") or [], default_phrase)
-        changes.extend(weave_changes)
+        # Pass B: complex rewrites (preferred)
+        complex_changes = apply_complex_rewrites(
+            doc,
+            jd_terms=(plan.get("jd_terms") or []) + [w["phrase"] for w in (plan.get("weaves") or []) if w.get("phrase")],
+            job_title=job_title,
+            company=company
+        )
+        changes.extend(complex_changes)
+
+        # Pass C: light weaving fallback (only if complex made few/no edits)
+        if len(complex_changes) < TAILOR_COMPLEX_MIN_BULLETS:
+            cands = (plan.get("skills_additions") or []) + [w["phrase"] for w in (plan.get("weaves") or []) if w.get("phrase")]
+            default_phrase = canon(cands[0]) if cands else "requirements from the job description"
+            weave_changes = apply_weaves_anywhere(doc, plan.get("weaves") or [], default_phrase)
+            changes.extend(weave_changes)
 
         # Persist artifacts
         jd_txt_path = out_changes / f"{slug_base}.jd.txt"
@@ -850,7 +1060,7 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
 
 # ----------------------- CLI -----------------------
 def main():
-    ap = argparse.ArgumentParser(description="Tailor resume from JD links with LLM-assisted weaving (format-preserving, Experience+ only).")
+    ap = argparse.ArgumentParser(description="Tailor resume from JD links with complex rewrites + format-preserving weaving.")
     ap.add_argument("--links", required=True, help="Path to JSON or .txt containing JD links.")
     ap.add_argument("--resume", required=True, help="Path to source .docx resume.")
     ap.add_argument("--out", required=True, help="Output prefix (e.g., outputs).")
