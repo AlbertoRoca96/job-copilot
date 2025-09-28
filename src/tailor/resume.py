@@ -834,6 +834,7 @@ def call_llm_complex_rewrites(job_title: str,
         "Return JSON ONLY with fields: rewrites[{original, rewritten, used_keywords[], integrated_clause}], used_keywords[]."
     )
 
+    # Build the user prompt WITHOUT str.format to avoid KeyError on braces.
     user_payload = {
         "title": job_title or "N/A",
         "company": company or "N/A",
@@ -845,20 +846,23 @@ def call_llm_complex_rewrites(job_title: str,
         },
         "bullets": [{"text": b} for b in bullets]
     }
-    user_prompt = (
-        "Job Title: {title}\nCompany: {company}\n\n"
-        "JD keywords to prefer (ordered): {top_jd_terms}\n\n"
-        "Style hints: {style_hints}\n\n"
-        "Bullets to refine (JSON): {bullets}\n\n"
-        "Return JSON ONLY:\n"
+    example_schema = (
         "{\n"
-        '  "rewrites": [\n'
-        '    {"original":"...","rewritten":"...","used_keywords":["kw1","kw2"],"integrated_clause":"<inserted fragments>"}\n'
+        "  \"rewrites\": [\n"
+        "    {\"original\":\"...\",\"rewritten\":\"...\",\"used_keywords\":[\"kw1\",\"kw2\"],\"integrated_clause\":\"<inserted fragments>\"}\n"
         "  ],\n"
-        '  "used_keywords": ["kw1","kw2"]\n'
+        "  \"used_keywords\": [\"kw1\",\"kw2\"]\n"
         "}"
-    ).format(**{k: json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else v
-                for k, v in user_payload.items()})
+    )
+    user_prompt = (
+        f"Job Title: {user_payload['title']}\n"
+        f"Company: {user_payload['company']}\n\n"
+        f"JD keywords to prefer (ordered): {json.dumps(user_payload['top_jd_terms'], ensure_ascii=False)}\n\n"
+        f"Style hints: {json.dumps(user_payload['style_hints'], ensure_ascii=False)}\n\n"
+        f"Bullets to refine (JSON): {json.dumps(user_payload['bullets'], ensure_ascii=False)}\n\n"
+        "Return JSON ONLY:\n"
+        f"{example_schema}"
+    )
 
     resp = client.chat.completions.create(
         model=MODEL,
@@ -981,7 +985,7 @@ def apply_complex_rewrites(doc: Document,
 # ----------------------- orchestrator -----------------------
 def apply_weaves_anywhere(doc: Document, weaves: List[Dict[str,str]], default_phrase: str) -> List[Dict[str,str]]:
     if TAILOR_INLINE_ONLY:
-        logging.info("TAILOR_INLINE_ONLY=1 → using paragraph-level weaving (styled run append).")
+        logging.info("TAILOR_INLINE_ONLY=1 \u2192 using paragraph-level weaving (styled run append).")
         changes = apply_weaves_inline(doc, weaves, default_phrase)
         if not changes:
             logging.info("Paragraph weaving produced no changes; nothing to record.")
