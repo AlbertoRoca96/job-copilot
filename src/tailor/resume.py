@@ -379,7 +379,6 @@ def _contextual_prefix(before: str, cut: Optional[int], bridge: str) -> str:
     - Otherwise, fall back to the configured mid-sentence delimiter.
     """
     if cut is None:
-        # end-append context: look at the final non-space char
         trimmed = before.rstrip()
         prev = trimmed[-1] if trimmed else ""
         end_has_space = before.endswith(" ")
@@ -389,7 +388,6 @@ def _contextual_prefix(before: str, cut: Optional[int], bridge: str) -> str:
             return "" if end_has_space else " "
         return _choose_mid_delim(bridge)
 
-    # mid-sentence context: look just before the cut
     prev = _prev_nonspace_char(before, cut)
     tail = _tail_word(before, cut)
     if prev in _JOINER_PUNCT or tail.endswith(" and") or tail.endswith(" or"):
@@ -404,28 +402,28 @@ def bridge_phrase(raw: str) -> str:
     p = canon((raw or "").strip())
     p = p.rstrip(". ")
     low = p.lower()
-
-    # strip awkward leads
     for lead in _STRIP_LEADS:
         if low.startswith(lead):
             p = p[len(lead):]
             low = p.lower()
             break
-
-    # keep if already "to ..." or "for ..."
     for keep in _LEADS_TO_KEEP:
         if low.startswith(keep):
             return p
-
     if any(low.startswith(g+" ") for g in _GERUNDS):
         return f"by {p}"
-    # default nouny case
     return f"with {p}"
 
 # ----------------------- section detection -----------------------
 SECTION_NAMES = [
     "work experience", "experience", "professional experience",
     "employment", "relevant experience"
+]
+
+# Education section titles (hard guard)
+EDUCATION_TITLES = [
+    "education", "education and training", "education & training",
+    "academic credentials", "academics", "education and honors"
 ]
 
 def find_section_ranges(doc: Document, titles: List[str]) -> Dict[str, Tuple[int,int]]:
@@ -441,21 +439,46 @@ def find_section_ranges(doc: Document, titles: List[str]) -> Dict[str, Tuple[int
         ranges[k]=(start,end)
     return ranges
 
+def education_range(doc: Document) -> Optional[Tuple[int, int]]:
+    titles = (
+        EDUCATION_TITLES
+        + SECTION_NAMES
+        + ["skills", "technical skills", "core skills",
+           "projects", "certifications", "awards",
+           "volunteer experience", "writing experience",
+           "summary", "professional summary", "publications",
+           "research experience", "activities", "leadership"]
+    )
+    ranges = find_section_ranges(doc, titles)
+    for k in EDUCATION_TITLES:
+        if k in ranges:
+            return ranges[k]
+    return None
+
 def work_experience_start(doc: Document) -> int:
-    ranges = find_section_ranges(doc, SECTION_NAMES)
+    # Prefer a real Work Experience header if present
+    ranges = find_section_ranges(doc, SECTION_NAMES + EDUCATION_TITLES)
     for name in SECTION_NAMES:
-        k = name
-        if k in ranges: return ranges[k][0]
-    # fallback: skip top 8 paragraphs (headers/summary region)
+        if name in ranges:
+            return ranges[name][0]
+    # Otherwise begin immediately AFTER Education (hard guard)
+    er = education_range(doc)
+    if er:
+        return er[1]
+    # Fallback: skip the very top of the doc
     return min(len(doc.paragraphs), 8)
 
 # ----------------------- candidate discovery -----------------------
 def candidate_paragraphs(doc: Document) -> List[Paragraph]:
     start_idx = work_experience_start(doc)
-    bullets = []
-    bodies = []
+    edu_rng = education_range(doc)
+
+    def in_edu(i: int) -> bool:
+        return bool(edu_rng and edu_rng[0] <= i < edu_rng[1])
+
+    bullets, bodies = [], []
     for i, p in enumerate(doc.paragraphs):
-        if i < start_idx:  # keep above-work-experience pristine
+        if i < start_idx or in_edu(i):
             continue
         t = normalize_ws(p.text)
         if not t:
@@ -464,13 +487,17 @@ def candidate_paragraphs(doc: Document) -> List[Paragraph]:
             bullets.append((i, p))
         elif len(t) >= 25:
             bodies.append((i, p))
-    # prefer bullets, then longer bodies
     return [p for _, p in bullets] + [p for _, p in bodies]
 
 def candidate_paragraph_els(doc: Document):
-    p_els = xml_all_paragraphs(doc)
-    start = work_experience_start(doc)
-    return p_els[max(0, start):]
+    # Return XML <w:p> elements aligned with python-docx order, excluding Education
+    start_idx = work_experience_start(doc)
+    edu_rng = education_range(doc)
+
+    def in_edu(i: int) -> bool:
+        return bool(edu_rng and edu_rng[0] <= i < edu_rng[1])
+
+    return [p._p for i, p in enumerate(doc.paragraphs) if i >= start_idx and not in_edu(i)]
 
 # ----------------------- low-level run insertion (format-safe) -----------------------
 def _insert_run_after(p: Paragraph, after_run: Run, text: str, style_src: Optional[Run] = None) -> Run:
@@ -546,7 +573,6 @@ def insert_run_at_end(p: Paragraph, bridge: str) -> Tuple[bool, str, str, str]:
     else:
         prefix = _contextual_prefix(before, None, bridge)
         inserted_text = f"{prefix}{bridge}"
-        # FIXED: close the string literal here
         if inserted_text.startswith(" ") and before.endswith(" "):
             inserted_text = inserted_text.lstrip()
 
@@ -759,14 +785,12 @@ def _rule_based_rewrite(original: str, jd_terms: List[str], max_words: int) -> T
     base = _compress_sentence(original)
     max_words = max(12, int(max_words or TAILOR_COMPLEX_MAX_WORDS))
 
-    # pick at most 2 JD terms that appear or closely align
     present = token_set(base)
     picks = []
     for kw in jd_terms:
         toks = [t for t in tokens(kw) if t not in {"and","of","with","for"}]
         if not toks:
             continue
-        # prefer terms that intersect current bullet tokens
         if any(t in present for t in toks) or not picks:
             picks.append(kw)
         if len(picks) == 2:
@@ -776,7 +800,6 @@ def _rule_based_rewrite(original: str, jd_terms: List[str], max_words: int) -> T
 
     kw_chunk = _safe_join_keywords(picks)
     if kw_chunk:
-        # choose connector by style
         if TAILOR_MID_SENTENCE_STYLE == "comma":
             connector = ", "
         elif TAILOR_MID_SENTENCE_STYLE == "dash":
@@ -834,7 +857,6 @@ def call_llm_complex_rewrites(job_title: str,
         "Return JSON ONLY with fields: rewrites[{original, rewritten, used_keywords[], integrated_clause}], used_keywords[]."
     )
 
-    # Build the user prompt WITHOUT str.format to avoid KeyError on braces.
     user_payload = {
         "title": job_title or "N/A",
         "company": company or "N/A",
@@ -883,7 +905,6 @@ def _replace_paragraph_text(p: Paragraph, new_text: str):
         r = p.add_run(new_text)
         if base: copy_format(base, r)
         return
-    # put all text into the first meaningful run; blank out the rest
     first = None
     for r in p.runs:
         if first is None:
@@ -896,7 +917,6 @@ def _replace_paragraph_text(p: Paragraph, new_text: str):
 
 def _collect_top_bullets(doc: Document, cap_min: int, cap_max: int) -> List[Paragraph]:
     cands = [p for p in candidate_paragraphs(doc) if paragraph_is_bullet(p)]
-    # fallback to bodies if bullets are few
     if len(cands) < cap_min:
         extra = [p for p in candidate_paragraphs(doc) if not paragraph_is_bullet(p)]
         cands = cands + extra
@@ -910,26 +930,10 @@ def apply_complex_rewrites(doc: Document,
                            style_hints: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """
     Full-sentence rewriting pass (complex mode). Returns granular change logs.
-
-    Parameters
-    ----------
-    doc : Document
-        The .docx document to mutate.
-    jd_terms : List[str]
-        Preferred JD keywords/phrases (ordered by importance).
-    job_title : str
-        Title for context (optional).
-    company : str
-        Company for context (optional).
-    max_bullets : Optional[int]
-        Upper bound of bullets to rewrite (defaults to env TAILOR_COMPLEX_MAX_BULLETS).
-    style_hints : Optional[Dict[str, Any]]
-        Dict with keys {mid_sentence_style, dash_threshold_words, end_with_period, max_words} to override envs.
     """
     if not TAILOR_COMPLEX_MODE:
         return []
 
-    # resolve caps and style overrides
     cap_max = int(max_bullets or TAILOR_COMPLEX_MAX_BULLETS)
     cap_min = int(min(TAILOR_COMPLEX_MIN_BULLETS, cap_max))
 
@@ -962,7 +966,6 @@ def apply_complex_rewrites(doc: Document,
 
     rewrites = result.get("rewrites") or []
     changes: List[Dict[str, Any]] = []
-    # map back in order; be defensive about length mismatches
     for i, p in enumerate(bullets):
         if i >= len(rewrites): break
         item = rewrites[i] or {}
@@ -1030,12 +1033,10 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
         company   = item.get("company") or item.get("org") or ""
         plan = call_llm_weaves(resume_plain, jd_text, job_title, company)
 
-        # Save the plan for debugging (not used by the UI)
         slug_base = slugify(job_title or url)[:80]
         (out_changes / f"{slug_base}_plan.json").write_text(
             json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        # Apply to a fresh copy of the resume per job
         doc = Document(resume_path)
         changes: List[Dict[str, Any]] = []
 
@@ -1094,7 +1095,6 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
             "ts": int(time.time())
         })
 
-    # Write drafts index for UI (exclude *_plan.json here)
     index_path = out_root / "drafts_index.json"
     index_path.write_text(json.dumps({
         "outbox": [""],
