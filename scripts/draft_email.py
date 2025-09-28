@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Draft cover letters and tailor resumes using the new resume.py flow.
+Draft cover letters and tailor resumes using the upgraded resume flow.
 
-- Uses src.tailor.resume.{call_llm_weaves, inject_skills, apply_weaves_anywhere, fetch_jd_plaintext}
-  to create per-job tailored resumes (format-preserving weaving).
+- Uses src.tailor.resume.{call_llm_weaves, inject_skills, apply_complex_rewrites,
+  apply_weaves_anywhere, fetch_jd_plaintext, canon}
+  to create per-job tailored resumes (complex sentence rewrites + format-preserving weaving).
 - Keeps the same output shape your UI expects:
   docs/<uid>/outbox/*.md
   docs/<uid>/resumes/*.docx
@@ -18,7 +19,7 @@ by scanning docs/<uid>/* and uploads to Storage.
 """
 
 import os, sys, json, re, yaml, hashlib, pathlib
-from typing import Set, List, Dict, Optional, Tuple
+from typing import Set, List, Dict, Optional
 
 # repo root
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -33,6 +34,7 @@ from src.tailor.cover import generate_cover_letter, get_company_context, pick_co
 from src.tailor.resume import (
     call_llm_weaves,
     inject_skills,
+    apply_complex_rewrites,
     apply_weaves_anywhere,
     fetch_jd_plaintext,
     canon,
@@ -261,7 +263,7 @@ def main(top: int, user: Optional[str]):
     # summarize LLM usage
     use_llm = bool(os.getenv("OPENAI_API_KEY"))
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    print(f"LLM for resume weaving: {'enabled' if use_llm else 'disabled'} (model={model if use_llm else 'n/a'})")
+    print(f"LLM for resume tailoring: {'enabled' if use_llm else 'disabled'} (model={model if use_llm else 'n/a'})")
 
     drafted_covers = drafted_resumes = 0
     llm_summary = {"used": use_llm, "model": (model if use_llm else None), "jobs": []}
@@ -270,8 +272,19 @@ def main(top: int, user: Optional[str]):
     base_doc_for_plain = Document(base_resume_path)
     resume_plain = "\n".join([p.text for p in base_doc_for_plain.paragraphs])
 
+    # complex mode thresholds (mirrors src.tailor.resume envs so behavior is consistent)
+    TAILOR_COMPLEX_MIN_BULLETS = int(os.getenv("TAILOR_COMPLEX_MIN_BULLETS", "6"))
+    TAILOR_COMPLEX_MAX_BULLETS = int(os.getenv("TAILOR_COMPLEX_MAX_BULLETS", "10"))
+    TAILOR_COMPLEX_MAX_WORDS   = int(os.getenv("TAILOR_COMPLEX_MAX_WORDS", "28"))
+    TAILOR_MID_SENTENCE_STYLE  = os.getenv("TAILOR_MID_SENTENCE_STYLE", "comma")
+    TAILOR_DASH_THRESHOLD      = int(os.getenv("TAILOR_DASH_THRESHOLD", "7"))
+    TAILOR_END_PERIOD          = str(os.getenv("TAILOR_END_PERIOD", "1")).strip().lower() not in ("", "0", "false", "no")
+
     for j in jobs:
         company = j.get('company','') or j.get('org','')
+        if company.lower() in banset:
+            print(f"Skipping banned company: {company}")
+            continue
         title   = j.get('title','') or j.get('job_title','')
         url     = best_url(j)
 
@@ -308,7 +321,7 @@ def main(top: int, user: Optional[str]):
             f.write(cover_md)
         j['cover_path'] = f"outbox/{cover_fname}"
 
-        # ----- resume tailoring via new resume helpers -----
+        # ----- resume tailoring (complex rewrite + weave fallback) -----
         out_docx_name = f"{slug}_{jd_hash}.docx"
         out_docx = os.path.join(RESUMES_MD, out_docx_name)
 
@@ -328,6 +341,7 @@ def main(top: int, user: Optional[str]):
         # plan weaves with LLM (or deterministic fallback inside call_llm_weaves)
         plan = call_llm_weaves(resume_plain, jd_text, job_title=title, company=company)
         llm_phrases = [canon((w.get("phrase") or "").strip()) for w in (plan.get("weaves") or []) if (w.get("phrase") or "").strip()]
+
         # Apply skills (minimally, never creating new headers)
         skills_change = inject_skills(doc, plan.get("skills_additions") or [])
         granular_changes: List[Dict[str, str]] = []
@@ -340,11 +354,28 @@ def main(top: int, user: Optional[str]):
                 "reason": skills_change["reason"],
             })
 
-        # Weaving in Work Experience and below
-        cands = (plan.get("skills_additions") or []) + llm_phrases
-        default_phrase = canon(cands[0]) if cands else "requirements from the job description"
-        weave_changes = apply_weaves_anywhere(doc, plan.get("weaves") or [], default_phrase)
-        granular_changes.extend(weave_changes)
+        # COMPLEX REWRITES (preferred path)
+        complex_changes = apply_complex_rewrites(
+            doc,
+            jd_terms=(plan.get("jd_terms") or []) + llm_phrases,
+            job_title=title,
+            company=company,
+            max_bullets=TAILOR_COMPLEX_MAX_BULLETS,
+            style_hints={
+                "mid_sentence_style": TAILOR_MID_SENTENCE_STYLE,
+                "dash_threshold_words": TAILOR_DASH_THRESHOLD,
+                "end_with_period": TAILOR_END_PERIOD,
+                "max_words": TAILOR_COMPLEX_MAX_WORDS,
+            },
+        )
+        granular_changes.extend(complex_changes)
+
+        # LIGHT WEAVING (only if complex edits were few)
+        if len(complex_changes) < TAILOR_COMPLEX_MIN_BULLETS:
+            cands = (plan.get("skills_additions") or []) + llm_phrases
+            default_phrase = canon(cands[0]) if cands else "requirements from the job description"
+            weave_changes = apply_weaves_anywhere(doc, plan.get("weaves") or [], default_phrase)
+            granular_changes.extend(weave_changes)
 
         # save tailored resume
         doc.save(out_docx)
