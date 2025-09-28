@@ -39,6 +39,9 @@ TAILOR_COMPLEX_MAX_WORDS   = int(os.getenv("TAILOR_COMPLEX_MAX_WORDS", "28"))
 TAILOR_COMPLEX_MIN_BULLETS = int(os.getenv("TAILOR_COMPLEX_MIN_BULLETS", "6"))
 TAILOR_COMPLEX_MAX_BULLETS = int(os.getenv("TAILOR_COMPLEX_MAX_BULLETS", "10"))
 
+# NEW: style guard — forbid first-person on resumes
+STYLE_FORBID_FIRST_PERSON = _env_flag("STYLE_FORBID_FIRST_PERSON", True)
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 # ----------------------- utils -----------------------
@@ -196,7 +199,8 @@ def call_llm_weaves(resume_text: str, jd_text: str, job_title: str = "", company
             "You inject ATS-relevant keywords into an existing resume without fabricating achievements. "
             "Prefer weaving short prepositional phrases (e.g., 'with CRM tracking and follow-ups', "
             "'via POS and inventory checks') into bullets that already talk about the task. "
-            "Keep phrases <= 18 words. Avoid buzzword stuffing. Output JSON only."
+            "Keep phrases <= 18 words. Avoid buzzword stuffing. Output JSON only. "
+            "IMPORTANT: Do NOT introduce first-person pronouns (I, me, my, we, our) anywhere."
         )
         user_prompt = f"""Job title: {job_title or 'N/A'}
 Company: {company or 'N/A'}
@@ -402,16 +406,22 @@ def bridge_phrase(raw: str) -> str:
     p = canon((raw or "").strip())
     p = p.rstrip(". ")
     low = p.lower()
+
+    # strip awkward leads
     for lead in _STRIP_LEADS:
         if low.startswith(lead):
             p = p[len(lead):]
             low = p.lower()
             break
+
+    # keep if already "to ..." or "for ..."
     for keep in _LEADS_TO_KEEP:
         if low.startswith(keep):
             return p
+
     if any(low.startswith(g+" ") for g in _GERUNDS):
         return f"by {p}"
+    # default nouny case
     return f"with {p}"
 
 # ----------------------- section detection -----------------------
@@ -440,6 +450,7 @@ def find_section_ranges(doc: Document, titles: List[str]) -> Dict[str, Tuple[int
     return ranges
 
 def education_range(doc: Document) -> Optional[Tuple[int, int]]:
+    # Use a broad set of section headers so the end is the next known header
     titles = (
         EDUCATION_TITLES
         + SECTION_NAMES
@@ -781,6 +792,7 @@ def _rule_based_rewrite(original: str, jd_terms: List[str], max_words: int) -> T
     - Keep action nucleus from the original
     - Add one compact method/tool clause with 1–2 JD terms (no fabricated outcomes)
     - Stay within word cap
+    - Avoid first-person pronouns by construction
     """
     base = _compress_sentence(original)
     max_words = max(12, int(max_words or TAILOR_COMPLEX_MAX_WORDS))
@@ -848,12 +860,9 @@ def call_llm_complex_rewrites(job_title: str,
         "You are refining resume bullets. Keep truthfulness. Transform each bullet into a single "
         "compound/complex sentence that: preserves the original meaning (no new accomplishments), "
         "naturally integrates 1–2 JD keywords provided, uses action + context/process + outcome, "
-        f"stays \u2264 {max_words} words, plain, ATS-friendly (no jargon stuffing), and keeps tense/person/seniority.\n"
-        "When punctuation style hints are provided, follow them:\n"
-        f'- mid_sentence_style: "{mid_sentence_style}"\n'
-        f"- dash_threshold_words: {dash_threshold_words}\n"
-        f"- end_with_period: {str(end_with_period).lower()}\n"
-        "If no strong outcome exists, emphasize method/tool/process without inventing metrics.\n"
+        f"stays \u2264 {max_words} words, plain, ATS-friendly (no jargon stuffing), and keeps tense/person/seniority. "
+        "CRITICAL STYLE RULES: (1) Do NOT use first-person pronouns (I, me, my, we, our); use telegraphic resume style "
+        "(implied first person), (2) Start with a strong action verb, (3) Avoid phrases like 'During my time' or 'I engaged'.\n"
         "Return JSON ONLY with fields: rewrites[{original, rewritten, used_keywords[], integrated_clause}], used_keywords[]."
     )
 
@@ -905,6 +914,7 @@ def _replace_paragraph_text(p: Paragraph, new_text: str):
         r = p.add_run(new_text)
         if base: copy_format(base, r)
         return
+    # put all text into the first meaningful run; blank out the rest
     first = None
     for r in p.runs:
         if first is None:
@@ -917,11 +927,79 @@ def _replace_paragraph_text(p: Paragraph, new_text: str):
 
 def _collect_top_bullets(doc: Document, cap_min: int, cap_max: int) -> List[Paragraph]:
     cands = [p for p in candidate_paragraphs(doc) if paragraph_is_bullet(p)]
+    # fallback to bodies if bullets are few
     if len(cands) < cap_min:
         extra = [p for p in candidate_paragraphs(doc) if not paragraph_is_bullet(p)]
         cands = cands + extra
     return cands[:cap_max]
 
+# ======================= FIRST-PERSON SANITIZER (NEW) =======================
+# Regexes that detect & strip first-person pronouns in resume bullets
+_APOS = "[’']"
+_LEADING_FP_RE = re.compile(rf"^\s*(?:•\s*)?(?:I|We)(?:\s+|{_APOS}(?:m|ve|d|re))\s+", re.IGNORECASE)
+_POSSESSIVE_MY_RE  = re.compile(r"\bmy\b", re.IGNORECASE)
+_POSSESSIVE_OUR_RE = re.compile(r"\bour\b", re.IGNORECASE)
+_MY_TIME_AT_RE     = re.compile(r"\b[Dd]uring my time at\b")
+_MY_REPLACER       = "the"  # minimal, neutral
+
+def _depersonalize_line(text: str) -> str:
+    """
+    Convert 'I/We ...' style into telegraphic resume style.
+    - Drops leading 'I/We' (and common contractions)
+    - Replaces 'my/our' with 'the'
+    - Softens 'During my time at' -> 'During time at'
+    """
+    if not STYLE_FORBID_FIRST_PERSON:
+        return text
+    s = text or ""
+    s = _LEADING_FP_RE.sub("", s)                  # Remove leading I/We...
+    s = _MY_TIME_AT_RE.sub("During time at", s)    # Nicer than 'During the time at'
+    s = _POSSESSIVE_MY_RE.sub(_MY_REPLACER, s)     # 'my team' -> 'the team'
+    s = _POSSESSIVE_OUR_RE.sub(_MY_REPLACER, s)    # 'our process' -> 'the process'
+    s = normalize_ws(s)
+    # Capitalize initial letter if removal left lowercase
+    if s:
+        for i, ch in enumerate(s):
+            if ch.isalpha():
+                s = s[:i] + ch.upper() + s[i+1:]
+                break
+    return s
+
+def scrub_first_person(doc: Document) -> List[Dict[str, str]]:
+    """
+    Pass over candidate (post-Experience) paragraphs and remove first-person.
+    Education section remains untouched by design.
+    """
+    if not STYLE_FORBID_FIRST_PERSON:
+        return []
+    changes: List[Dict[str, str]] = []
+    start_idx = work_experience_start(doc)
+    edu_rng = education_range(doc)
+
+    def in_edu(i: int) -> bool:
+        return bool(edu_rng and edu_rng[0] <= i < edu_rng[1])
+
+    for i, p in enumerate(doc.paragraphs):
+        if i < start_idx or in_edu(i):
+            continue
+        before = normalize_ws(p.text)
+        if not before:
+            continue
+        # quick check to avoid needless work
+        if not re.search(rf"\b(I|We|{_APOS})|\bmy\b|\bour\b", before, re.IGNORECASE):
+            continue
+        after = _depersonalize_line(before)
+        if after and after != before:
+            _replace_paragraph_text(p, after)
+            changes.append({
+                "anchor_section": "Work Experience",
+                "original_paragraph_text": before,
+                "modified_paragraph_text": after,
+                "reason": "Removed first-person pronouns; enforced telegraphic resume style."
+            })
+    return changes
+
+# ======================= APPLY COMPLEX REWRITES =======================
 def apply_complex_rewrites(doc: Document,
                            jd_terms: List[str],
                            job_title: str = "",
@@ -971,7 +1049,12 @@ def apply_complex_rewrites(doc: Document,
         item = rewrites[i] or {}
         orig = normalize_ws(item.get("original") or p.text)
         new  = trim_to_words(normalize_ws(item.get("rewritten") or ""), max_words)
-        if not new or new.lower() == orig.lower():
+        if not new:
+            continue
+        # Enforce pronoun-free telegraphic style
+        if STYLE_FORBID_FIRST_PERSON:
+            new = _depersonalize_line(new)
+        if new.lower() == orig.lower():
             continue
         _replace_paragraph_text(p, new)
         changes.append({
@@ -988,7 +1071,7 @@ def apply_complex_rewrites(doc: Document,
 # ----------------------- orchestrator -----------------------
 def apply_weaves_anywhere(doc: Document, weaves: List[Dict[str,str]], default_phrase: str) -> List[Dict[str,str]]:
     if TAILOR_INLINE_ONLY:
-        logging.info("TAILOR_INLINE_ONLY=1 \u2192 using paragraph-level weaving (styled run append).")
+        logging.info("TAILOR_INLINE_ONLY=1 → using paragraph-level weaving (styled run append).")
         changes = apply_weaves_inline(doc, weaves, default_phrase)
         if not changes:
             logging.info("Paragraph weaving produced no changes; nothing to record.")
@@ -1033,10 +1116,12 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
         company   = item.get("company") or item.get("org") or ""
         plan = call_llm_weaves(resume_plain, jd_text, job_title, company)
 
+        # Save the plan for debugging (not used by the UI)
         slug_base = slugify(job_title or url)[:80]
-        (out_changes / f"{slug_base}_plan.json").write_text(
+        out_changes.joinpath(f"{slug_base}_plan.json").write_text(
             json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
 
+        # Apply to a fresh copy of the resume per job
         doc = Document(resume_path)
         changes: List[Dict[str, Any]] = []
 
@@ -1074,6 +1159,10 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
             weave_changes = apply_weaves_anywhere(doc, plan.get("weaves") or [], default_phrase)
             changes.extend(weave_changes)
 
+        # NEW Pass D: sanitize first-person from all edited sections (Education still excluded)
+        fp_changes = scrub_first_person(doc)
+        changes.extend(fp_changes)
+
         # Persist artifacts
         jd_txt_path = out_changes / f"{slug_base}.jd.txt"
         jd_txt_path.write_text(jd_text, encoding="utf-8")
@@ -1095,6 +1184,7 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
             "ts": int(time.time())
         })
 
+    # Write drafts index for UI (exclude *_plan.json here)
     index_path = out_root / "drafts_index.json"
     index_path.write_text(json.dumps({
         "outbox": [""],
