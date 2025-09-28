@@ -545,7 +545,7 @@ def insert_run_at_end(p: Paragraph, bridge: str) -> Tuple[bool, str, str, str]:
     else:
         prefix = _contextual_prefix(before, None, bridge)
         inserted_text = f"{prefix}{bridge}"
-        if inserted_text.startswith(" ") and before.endswith(" "):
+        if inserted_text.startswith(" ") and before.endswith(" ""):
             inserted_text = inserted_text.lstrip()
 
     r = p.add_run(inserted_text)
@@ -747,7 +747,7 @@ def _safe_join_keywords(kws: List[str]) -> str:
     if len(kws) == 2: return f"{kws[0]} and {kws[1]}"
     return f"{', '.join(kws[:-1])}, and {kws[-1]}"
 
-def _rule_based_rewrite(original: str, jd_terms: List[str]) -> Tuple[str, List[str], str]:
+def _rule_based_rewrite(original: str, jd_terms: List[str], max_words: int) -> Tuple[str, List[str], str]:
     """
     Deterministic fallback when no API key:
     - Keep action nucleus from the original
@@ -755,24 +755,32 @@ def _rule_based_rewrite(original: str, jd_terms: List[str]) -> Tuple[str, List[s
     - Stay within word cap
     """
     base = _compress_sentence(original)
-    max_words = max(12, TAILOR_COMPLEX_MAX_WORDS)
+    max_words = max(12, int(max_words or TAILOR_COMPLEX_MAX_WORDS))
 
-    # pick at most 2 JD terms that don't collide badly with existing text
+    # pick at most 2 JD terms that appear or closely align
     present = token_set(base)
     picks = []
     for kw in jd_terms:
         toks = [t for t in tokens(kw) if t not in {"and","of","with","for"}]
-        if not toks: continue
-        if any(t in present for t in toks):
+        if not toks:
+            continue
+        # prefer terms that intersect current bullet tokens
+        if any(t in present for t in toks) or not picks:
             picks.append(kw)
-        if len(picks) == 2: break
+        if len(picks) == 2:
+            break
     if not picks and jd_terms:
         picks = jd_terms[:1]
 
-    # Build a single compound/complex sentence
     kw_chunk = _safe_join_keywords(picks)
     if kw_chunk:
-        connector = ", " if TAILOR_MID_SENTENCE_STYLE == "comma" else " — "
+        # choose connector by style
+        if TAILOR_MID_SENTENCE_STYLE == "comma":
+            connector = ", "
+        elif TAILOR_MID_SENTENCE_STYLE == "dash":
+            connector = " — "
+        else:
+            connector = " — " if len(kw_chunk.split()) >= TAILOR_DASH_THRESHOLD else ", "
         clause = f"{connector}leveraging {kw_chunk}"
     else:
         clause = ""
@@ -782,7 +790,6 @@ def _rule_based_rewrite(original: str, jd_terms: List[str]) -> Tuple[str, List[s
         rewritten += "."
     rewritten = trim_to_words(rewritten, max_words)
 
-    # expose the integrated fragment for change logs
     integrated = clause.strip(" ,—")
     used = [canon(k) for k in picks]
     return rewritten, used, integrated
@@ -802,7 +809,7 @@ def call_llm_complex_rewrites(job_title: str,
     if not OPENAI_API_KEY:
         out = {"rewrites": [], "used_keywords": []}
         for b in bullets:
-            r, used, integrated = _rule_based_rewrite(b, top_jd_terms)
+            r, used, integrated = _rule_based_rewrite(b, top_jd_terms, max_words)
             out["rewrites"].append({
                 "original": b, "rewritten": r, "used_keywords": used, "integrated_clause": integrated
             })
@@ -892,23 +899,48 @@ def _collect_top_bullets(doc: Document, cap_min: int, cap_max: int) -> List[Para
 def apply_complex_rewrites(doc: Document,
                            jd_terms: List[str],
                            job_title: str = "",
-                           company: str = "") -> List[Dict[str, Any]]:
+                           company: str = "",
+                           max_bullets: Optional[int] = None,
+                           style_hints: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """
     Full-sentence rewriting pass (complex mode). Returns granular change logs.
+
+    Parameters
+    ----------
+    doc : Document
+        The .docx document to mutate.
+    jd_terms : List[str]
+        Preferred JD keywords/phrases (ordered by importance).
+    job_title : str
+        Title for context (optional).
+    company : str
+        Company for context (optional).
+    max_bullets : Optional[int]
+        Upper bound of bullets to rewrite (defaults to env TAILOR_COMPLEX_MAX_BULLETS).
+    style_hints : Optional[Dict[str, Any]]
+        Dict with keys {mid_sentence_style, dash_threshold_words, end_with_period, max_words} to override envs.
     """
     if not TAILOR_COMPLEX_MODE:
         return []
 
-    bullets = _collect_top_bullets(doc, TAILOR_COMPLEX_MIN_BULLETS, TAILOR_COMPLEX_MAX_BULLETS)
+    # resolve caps and style overrides
+    cap_max = int(max_bullets or TAILOR_COMPLEX_MAX_BULLETS)
+    cap_min = int(min(TAILOR_COMPLEX_MIN_BULLETS, cap_max))
+
+    mid_style = (style_hints or {}).get("mid_sentence_style", TAILOR_MID_SENTENCE_STYLE)
+    dash_thresh = int((style_hints or {}).get("dash_threshold_words", TAILOR_DASH_THRESHOLD))
+    end_with_period = bool((style_hints or {}).get("end_with_period", TAILOR_END_PERIOD))
+    max_words = int((style_hints or {}).get("max_words", TAILOR_COMPLEX_MAX_WORDS))
+
+    bullets = _collect_top_bullets(doc, cap_min, cap_max)
     if not bullets:
         return []
 
     originals = [normalize_ws(p.text) for p in bullets]
-    originals = [o for o in originals if o]  # guard
+    originals = [o for o in originals if o]
     if not originals:
         return []
 
-    # prefer JD terms from planner or deterministic miner
     top_terms = [canon(x) for x in (jd_terms or [])][:12]
 
     result = call_llm_complex_rewrites(
@@ -916,10 +948,10 @@ def apply_complex_rewrites(doc: Document,
         company=company or "",
         bullets=originals,
         top_jd_terms=top_terms,
-        mid_sentence_style=TAILOR_MID_SENTENCE_STYLE,
-        dash_threshold_words=TAILOR_DASH_THRESHOLD,
-        end_with_period=bool(TAILOR_END_PERIOD),
-        max_words=TAILOR_COMPLEX_MAX_WORDS,
+        mid_sentence_style=mid_style,
+        dash_threshold_words=dash_thresh,
+        end_with_period=end_with_period,
+        max_words=max_words,
     )
 
     rewrites = result.get("rewrites") or []
@@ -929,7 +961,7 @@ def apply_complex_rewrites(doc: Document,
         if i >= len(rewrites): break
         item = rewrites[i] or {}
         orig = normalize_ws(item.get("original") or p.text)
-        new  = trim_to_words(normalize_ws(item.get("rewritten") or ""), TAILOR_COMPLEX_MAX_WORDS)
+        new  = trim_to_words(normalize_ws(item.get("rewritten") or ""), max_words)
         if not new or new.lower() == orig.lower():
             continue
         _replace_paragraph_text(p, new)
@@ -1017,7 +1049,14 @@ def run_pipeline(links_file: str, resume_path: str, out_prefix: str, uid: str = 
             doc,
             jd_terms=(plan.get("jd_terms") or []) + [w["phrase"] for w in (plan.get("weaves") or []) if w.get("phrase")],
             job_title=job_title,
-            company=company
+            company=company,
+            max_bullets=TAILOR_COMPLEX_MAX_BULLETS,
+            style_hints={
+                "mid_sentence_style": TAILOR_MID_SENTENCE_STYLE,
+                "dash_threshold_words": TAILOR_DASH_THRESHOLD,
+                "end_with_period": TAILOR_END_PERIOD,
+                "max_words": TAILOR_COMPLEX_MAX_WORDS,
+            }
         )
         changes.extend(complex_changes)
 
