@@ -184,7 +184,7 @@ def mined_plan(resume_text: str, jd_text: str) -> Dict[str, Any]:
 # ----------------------- LLM (chat completions JSON mode) -----------------------
 def call_llm_weaves(resume_text: str, jd_text: str, job_title: str = "", company: str = "") -> Dict[str, Any]:
     """
-    Existing weaving planner; returns phrases to integrate and (now) jd_terms for complex mode.
+    Weaving planner; returns phrases to integrate and (also) jd_terms for complex mode.
     """
     if not OPENAI_API_KEY:
         logging.warning("OPENAI_API_KEY not set; using deterministic fallback plan.")
@@ -541,11 +541,13 @@ def insert_run_at_end(p: Paragraph, bridge: str) -> Tuple[bool, str, str, str]:
         insertion_core = bridge
         if TAILOR_CAP_SENTENCE:
             insertion_core = _sentence_case(insertion_core)
-        inserted_text = (" " + insertion_core + ( "." if TAILOR_END_PERIOD and not insertion_core.endswith(".") else "" ))
+        inserted_text = (" " + insertion_core +
+                         ("." if TAILOR_END_PERIOD and not insertion_core.endswith(".") else ""))
     else:
         prefix = _contextual_prefix(before, None, bridge)
         inserted_text = f"{prefix}{bridge}"
-        if inserted_text.startswith(" ") and before.endswith(" ""):
+        # FIXED: close the string literal here
+        if inserted_text.startswith(" ") and before.endswith(" "):
             inserted_text = inserted_text.lstrip()
 
     r = p.add_run(inserted_text)
