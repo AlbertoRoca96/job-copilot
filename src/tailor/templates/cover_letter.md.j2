@@ -1,9 +1,10 @@
+{# src/tailor/templates/cover_letter.md.j2 #}
 Dear Hiring Team at {{ (job.company or '') | trim }},
 
-I'm excited to apply for the **{{ job.title }}** role at **{{ job.company or '' }}**.
-My background maps closely to the posting—hands-on with {{ (jd_keywords[:6] or profile.skills[:6] or []) | map('string') | join(', ') }}.
+Excited to apply for the **{{ job.title }}** role at **{{ job.company or '' }}**.
+My background aligns closely with the posting—hands-on with {{ (jd_keywords[:6] or profile.skills[:6] or []) | map('string') | join(', ') }}.
 
-In prior roles, I delivered outcomes by aligning day-to-day execution to clear priorities.
+In prior roles, I delivered measurable outcomes by aligning day-to-day execution to clear priorities.
 I favor tight feedback loops, concise communication, and documentation that reduces rework.
 
 {% set why = (company_themes or [])[:4] %}
