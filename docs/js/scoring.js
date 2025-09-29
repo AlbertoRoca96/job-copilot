@@ -1,5 +1,5 @@
 // docs/js/scoring.js
-// Lightweight JS port of src/core/scoring.py + gap report
+// Lightweight JS port of your Python scoring + gap explainers used in rank.py
 
 const REMOTE = new Set([
   "remote","remotely","work from home","wfh","distributed",
@@ -25,7 +25,6 @@ const CANON = new Map([
   ["front-end","frontend"],["front end","frontend"],
   ["back-end","backend"],["back end","backend"]
 ]);
-
 function _canon(t){ const v=(t||"").toLowerCase(); return CANON.get(v)||v; }
 
 function tokenize(text){
@@ -56,7 +55,6 @@ function containsAny(text, needles){
   for (const n of (needles||[])){ if (t.includes((n||"").toLowerCase())) return true; }
   return false;
 }
-
 function _asList(v){ if (v==null) return []; return Array.isArray(v)?v:[v]; }
 function tokensFromTerms(terms){
   const out = new Set();
@@ -145,7 +143,7 @@ export function explainGaps(job, profile){
   };
 }
 
-/* Tiny UI glue */
+/* ---- Tiny UI glue ---- */
 function $(id){ return document.getElementById(id); }
 function render(){
   try{
