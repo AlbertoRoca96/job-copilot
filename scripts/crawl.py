@@ -1,5 +1,5 @@
 # scripts/crawl.py
-import os, sys, json, traceback, argparse, requests
+import os, sys, json, traceback, argparse, hashlib, time
 from typing import List, Dict, Set
 
 # Make src importable
@@ -14,12 +14,22 @@ from src.ingest.indeed import crawl_indeed
 # Scoring/token helpers (for profile-driven filters)
 from src.core.scoring import tokens_from_terms, tokenize
 
+import requests
+from datetime import datetime, timezone
+
 ROOT = os.path.dirname(__file__)
 DATA_DIR = os.path.join(ROOT, '..', 'data')
 OUT_JSONL = os.path.join(DATA_DIR, 'jobs.jsonl')
 
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SRK = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+
+def _sha1(s: str) -> str:
+    import hashlib
+    return hashlib.sha1((s or "").strip().lower().encode("utf-8")).hexdigest()
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 def _dedup_on_url(items: List[Dict]) -> List[Dict]:
     seen = set(); out = []
@@ -37,10 +47,24 @@ def _get_profile(user_id: str) -> dict:
     return (arr[0] if arr else {}) or {}
 
 def _get_boards() -> List[Dict]:
+    # include enabled boards with source+slug, leave room for future registries
     url = f"{SUPABASE_URL}/rest/v1/boards?enabled=eq.true&select=source,slug"
     r = requests.get(url, headers={"apikey": SRK, "Authorization": f"Bearer {SRK}"}, timeout=30)
     r.raise_for_status()
     return r.json() or []
+
+def _update_board_status(source: str, slug: str, status: str, error: str | None = None):
+    url = f"{SUPABASE_URL}/rest/v1/boards?source=eq.{source}&slug=eq.{slug}"
+    payload = {"status": status, "error": error or None, "last_crawled_at": _now_iso()}
+    requests.patch(
+        url,
+        headers={
+            "apikey": SRK, "Authorization": f"Bearer {SRK}",
+            "Content-Type": "application/json", "Prefer": "return=minimal"
+        },
+        data=json.dumps(payload),
+        timeout=20,
+    )
 
 # ---------- Profile-driven filtering ----------
 def _build_filters(profile: dict):
@@ -85,6 +109,40 @@ def _keep_factory(title_tokens: Set[str], inc: Set[str], exc: Set[str]):
         return True
     return _keep
 
+def _upsert_jobs(user_id: str, jobs: List[Dict]):
+    """
+    Bulk upsert into public.jobs with on_conflict(user_id,url_hash).
+    """
+    if not jobs:
+        return
+    # shape rows
+    rows = []
+    for j in jobs:
+        rows.append({
+            "user_id": user_id,
+            "source": j.get("source",""),
+            "source_slug": j.get("company") if j.get("source") in ("greenhouse","lever") else (j.get("source_slug") or None),
+            "url": j.get("url",""),
+            "url_hash": _sha1(j.get("url","")),
+            "title": j.get("title",""),
+            "company": j.get("company"),
+            "location": j.get("location"),
+            "description": j.get("description"),
+            "posted_at": j.get("posted_at"),
+            "meta": j.get("extras") or {},
+        })
+    # chunk to keep payload reasonable
+    url = f"{SUPABASE_URL}/rest/v1/jobs?on_conflict=user_id,url_hash"
+    headers = {
+        "apikey": SRK, "Authorization": f"Bearer {SRK}",
+        "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates"
+    }
+    CHUNK = 500
+    for i in range(0, len(rows), CHUNK):
+        chunk = rows[i:i+CHUNK]
+        r = requests.post(url, headers=headers, data=json.dumps(chunk), timeout=60)
+        r.raise_for_status()
+
 def main(user_id: str):
     os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -118,22 +176,36 @@ def main(user_id: str):
             elif src == 'indeed':
                 jobs = crawl_indeed(profile)     # slug ignored; we build from profile
             else:
-                print(f'  !! Unknown source {src} (skipping)'); continue
+                print(f'  !! Unknown source {src} (skipping)'); 
+                _update_board_status(src, slug, "skipped", f"unknown source {src}")
+                continue
 
             kept = [j for j in jobs if keep(j)]
+            kept = _dedup_on_url(kept)
             print(f'  found={len(jobs)} kept={len(kept)}')
+
+            # persist
+            try:
+                _upsert_jobs(user_id, kept)
+                _update_board_status(src, slug, "ok", None)
+            except Exception as e:
+                failures += 1
+                _update_board_status(src, slug, "error", f"persist: {e}")
+                print(f'  !! Persist failed for {src}:{slug}: {e}')
+
             all_jobs.extend(kept)
         except Exception as e:
             failures += 1
+            _update_board_status(src, slug, "error", f"crawl: {e.__class__.__name__}: {e}")
             print(f'  !! Failed {src}:{slug}: {e.__class__.__name__}: {e}')
             traceback.print_exc(limit=1)
 
-    all_jobs = _dedup_on_url(all_jobs)
+    # keep legacy artifact for downstream ranker and dev visibility
     with open(OUT_JSONL, 'w') as f:
         for j in all_jobs:
             f.write(json.dumps(j) + '\n')
 
-    print(f'Crawled {len(all_jobs)} jobs across {len(boards)} boards (failures: {failures}) -> {OUT_JSONL}')
+    print(f"Crawled {len(all_jobs)} jobs across {len(boards)} boards (failures: {failures}) -> {OUT_JSONL}")
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
