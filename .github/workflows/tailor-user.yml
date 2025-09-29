@@ -13,7 +13,6 @@ on:
 permissions:
   contents: read
 
-# Prevent two runs for the same user from clobbering each other
 concurrency:
   group: tailor-${{ inputs.user_id }}
   cancel-in-progress: true
@@ -22,6 +21,8 @@ env:
   PYTHONPATH: ${{ github.workspace }}
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+  GH_REPO: ${{ github.repository }}
+  GH_RUN_ID: ${{ github.run_id }}
 
 jobs:
   run:
@@ -45,9 +46,9 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          # deps for resume parsing + crawling (incl. LinkedIn/Indeed scrapers)
           pip install -r requirements.txt python-docx requests pyyaml beautifulsoup4
 
+      # ---- mark job_requests running
       - name: Mark job_requests as running
         shell: bash
         run: |
@@ -59,6 +60,28 @@ jobs:
             -H "Content-Type: application/json" \
             -H "Prefer: return=minimal" \
             --data '{"status":"running"}'
+
+      # ---- create runs row
+      - name: Create runs row
+        id: create_run
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_PAYLOAD=$(jq -n \
+            --arg uid "${{ github.event.inputs.user_id }}" \
+            --arg rid "${{ github.event.inputs.request_id }}" \
+            --arg wf  "tailor-user" \
+            --arg repo "${GH_REPO}" \
+            --arg run  "${GH_RUN_ID}" \
+            '{user_id:$uid, request_id: ($rid|tonumber), workflow:$wf, github_repo:$repo, github_run_id: ($run|tonumber), status:"running", started_at: (now|toiso8601)}')
+          curl -sS -X POST \
+            "${SUPABASE_URL%/}/rest/v1/runs" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            --data "$RUN_PAYLOAD" \
+            | jq -r '.[0].id // empty' > run_id.txt
+          echo "RUN_ID=$(cat run_id.txt)" >> $GITHUB_ENV
 
       - name: Fetch user's latest resume
         shell: bash
@@ -72,7 +95,7 @@ jobs:
           set -euo pipefail
           python scripts/parse_resume.py --user "${{ github.event.inputs.user_id }}"
 
-      - name: Crawl boards (from Supabase) using profile filters (GH/Lever + LinkedIn/Indeed)
+      - name: Crawl boards -> persist jobs -> data/jobs.jsonl
         shell: bash
         run: |
           set -euo pipefail
@@ -102,9 +125,7 @@ jobs:
         run: |
           set -euo pipefail
           OUT_JSON="docs/data/scores.json"
-          if [ ! -f "$OUT_JSON" ]; then
-            echo "scores.json not found at $OUT_JSON"; exit 1
-          fi
+          test -f "$OUT_JSON"
           curl -sS -X POST \
             "${SUPABASE_URL%/}/storage/v1/object/outputs/${{ github.event.inputs.user_id }}/scores.json" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
@@ -118,9 +139,7 @@ jobs:
         run: |
           set -euo pipefail
           PROF_JSON="docs/data/profile.json"
-          if [ ! -f "$PROF_JSON" ]; then
-            echo "profile.json not found at $PROF_JSON"; exit 1
-          fi
+          test -f "$PROF_JSON"
           curl -sS -X POST \
             "${SUPABASE_URL%/}/storage/v1/object/outputs/${{ github.event.inputs.user_id }}/profile.json" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
@@ -129,18 +148,31 @@ jobs:
             -H "x-upsert: true" \
             --data-binary @"$PROF_JSON"
 
-      - name: Upload run artifacts (jobs.jsonl, scores.json, profile.json)
-        uses: actions/upload-artifact@v4
-        with:
-          name: run-artifacts-${{ github.event.inputs.user_id }}
-          path: |
-            data/jobs.jsonl
-            docs/data/scores.json
-            docs/data/profile.json
-          if-no-files-found: warn
-          retention-days: 7
+      - name: Upload run artifacts (optional)
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -s docs/data/scores.json ]; then
+            KEY="outputs/${{ github.event.inputs.user_id }}/scores.json"
+            BYTES=$(wc -c < docs/data/scores.json | tr -d ' ')
+            PAYLOAD=$(jq -n \
+              --arg uid "${{ github.event.inputs.user_id }}" \
+              --arg rid "${RUN_ID}" \
+              --arg kind "scores" \
+              --arg key  "$KEY" \
+              --arg path "docs/data/scores.json" \
+              --argjson bytes $BYTES \
+              '{user_id:$uid, run_id: ($rid|tonumber), kind:$kind, storage_key:$key, path_hint:$path, bytes:$bytes}')
+            curl -sS -X POST \
+              "${SUPABASE_URL%/}/rest/v1/artifacts" \
+              -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+              -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+              -H "Content-Type: application/json" \
+              --data "$PAYLOAD" >/dev/null
+          fi
 
-      - name: Mark job_requests as done
+      - name: Mark job_requests done + runs done
         if: ${{ success() }}
         shell: bash
         run: |
@@ -152,8 +184,15 @@ jobs:
             -H "Content-Type: application/json" \
             -H "Prefer: return=minimal" \
             --data '{"status":"done"}'
+          curl -sS -X PATCH \
+            "${SUPABASE_URL%/}/rest/v1/runs?github_run_id=eq.${{ env.GH_RUN_ID }}&workflow=eq.tailor-user" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            --data '{"status":"done","finished_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
 
-      - name: Mark job_requests as error (with message)
+      - name: Mark job_requests error + runs error
         if: ${{ failure() }}
         shell: bash
         run: |
@@ -166,3 +205,10 @@ jobs:
             -H "Content-Type: application/json" \
             -H "Prefer: return=minimal" \
             --data "$MSG"
+          curl -sS -X PATCH \
+            "${SUPABASE_URL%/}/rest/v1/runs?github_run_id=eq.${{ env.GH_RUN_ID }}&workflow=eq.tailor-user" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            --data '{"status":"error","finished_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","message":"failed"}'
