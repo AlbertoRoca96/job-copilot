@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Save Job</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; width: 360px; padding: 10px; }
+    label { display:block; margin-top:8px; font-size:.9rem; }
+    input[type=text], textarea { width:100%; box-sizing:border-box; }
+    .row { display:flex; gap:6px; }
+    .row > * { flex:1; }
+    .small { font-size:.8rem; color:#555; }
+    .ok { color: #157347; }
+    .err { color: #a00; }
+  </style>
+</head>
+<body>
+  <h3>Save Job to Supabase</h3>
+  <div id="msg" class="small"></div>
+
+  <label>Title <input id="title" type="text"/></label>
+  <label>Company <input id="company" type="text"/></label>
+  <div class="row">
+    <label>Location <input id="location" type="text"/></label>
+    <label>Source <input id="source" type="text"/></label>
+  </div>
+  <label>URL <input id="url" type="text"/></label>
+  <label>Description <textarea id="description" rows="6"></textarea></label>
+  <label>Note (optional) <input id="note" type="text"/></label>
+
+  <button id="save">Save</button>
+  <hr/>
+  <h4>Settings</h4>
+  <label>Supabase Functions URL (e.g. https://YOUR-PROJECT.functions.supabase.co)
+    <input id="supabaseUrl" type="text"/>
+  </label>
+  <label>Function Path
+    <input id="functionPath" type="text" value="/save-job"/>
+  </label>
+  <label>User JWT (paste from your app)
+    <input id="userJwt" type="text"/>
+  </label>
+  <button id="save_settings">Save Settings</button>
+
+  <script src="popup.js"></script>
+</body>
+</html>
