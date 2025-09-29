@@ -4,20 +4,20 @@ on:
   workflow_dispatch:
     inputs:
       user_id:
-        description: "Supabase user id"
+        description: Supabase user id
         required: true
       request_id:
-        description: "job_requests id"
+        description: job_requests id
         required: true
       top:
-        description: "Top roles to draft from Your Shortlist"
+        description: Top roles to draft from Your Shortlist
         required: false
         default: "5"
 
 permissions:
   contents: read
 
-# Prevent parallel drafting for the same user
+# One active drafting pass per user
 concurrency:
   group: drafts-${{ inputs.user_id }}
   cancel-in-progress: true
@@ -26,45 +26,58 @@ env:
   PYTHONPATH: ${{ github.workspace }}
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+  GH_REPO: ${{ github.repository }}
+  GH_RUN_ID: ${{ github.run_id }}
   USE_LLM: "1"
   OPENAI_MODEL: gpt-4o-mini
-  # resume weaving toggles (Option A you approved)
+  # tailoring toggles
   TAILOR_INLINE_ONLY: "1"
   TAILOR_SMART_INSERT: "1"
   TAILOR_MID_SENTENCE_STYLE: "dash"   # comma | dash | auto
   TAILOR_DASH_THRESHOLD: "7"
   TAILOR_CAP_SENTENCE: "1"
   TAILOR_END_PERIOD: "1"
-  # cover letter tone (tweak as you like)
   COVER_TONE: professional
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_URL:-}" || { echo "SUPABASE_URL missing"; exit 1; }
+          test -n "${SUPABASE_SERVICE_ROLE_KEY:-}" || { echo "SUPABASE_SERVICE_ROLE_KEY missing"; exit 1; }
+
       - name: Checkout repo
         uses: actions/checkout@v4
         with: { fetch-depth: 0 }
 
-      - name: Setup Python
+      - name: Setup Python (with pip cache)
         uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'requirements.txt'
 
-      - name: Install OS tools we use
+      - name: Install OS tools
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Install deps
+      - name: Install Python deps
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
           pip install -r requirements.txt python-docx requests pyyaml beautifulsoup4 jinja2 openai
 
+      # ---- status: job_requests -> running
       - name: Mark job_requests running
         shell: bash
         run: |
           set -euo pipefail
-          curl -sS -X PATCH \
+          curl -sS -m 60 -X PATCH \
             "${SUPABASE_URL%/}/rest/v1/job_requests?id=eq.${{ github.event.inputs.request_id }}" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
@@ -72,13 +85,35 @@ jobs:
             -H "Prefer: return=minimal" \
             --data '{"status":"running"}'
 
+      # ---- telemetry: create runs row for drafting
+      - name: Create runs row
+        id: create_run
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_PAYLOAD=$(jq -n \
+            --arg uid "${{ github.event.inputs.user_id }}" \
+            --arg rid "${{ github.event.inputs.request_id }}" \
+            --arg wf  "draft-covers" \
+            --arg repo "${GH_REPO}" \
+            --arg run  "${GH_RUN_ID}" \
+            '{user_id:$uid, request_id: ($rid|tonumber), workflow:$wf, github_repo:$repo, github_run_id: ($run|tonumber), status:"running", started_at: (now|toiso8601)}')
+          curl -sS -m 60 -X POST \
+            "${SUPABASE_URL%/}/rest/v1/runs" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            --data "$RUN_PAYLOAD" \
+            | jq -r '.[0].id // empty' > run_id.txt
+          echo "RUN_ID=$(cat run_id.txt)" >> $GITHUB_ENV
+
       # -------- CLEANUP (remote + local) --------
       - name: Clean previous objects in outputs/<uid>/*
         shell: bash
         run: |
           set -euo pipefail
           uid="${{ github.event.inputs.user_id }}"
-          curl -sS -X DELETE \
+          curl -sS -m 60 -X DELETE \
             "${SUPABASE_URL%/}/storage/v1/object/outputs" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
@@ -100,23 +135,23 @@ jobs:
           mkdir -p "docs/${uid}/outbox" "docs/${uid}/resumes" "docs/${uid}/changes" docs/data
 
       # -------- PIPELINE --------
-      - name: Download shortlist scores.json from Storage (if present)
+      - name: Download shortlist (scores.json) from Storage if present
         shell: bash
         run: |
           set -euo pipefail
-          curl -sS -f \
+          curl -sS -f -m 60 \
             "${SUPABASE_URL%/}/storage/v1/object/outputs/${{ github.event.inputs.user_id }}/scores.json" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-            -o docs/data/scores.json || echo "No scores.json found; proceeding with repo file if present"
+            -o docs/data/scores.json || echo "No scores.json found; will use repo fallback"
 
       - name: Ensure shortlist exists (repo or downloaded)
         shell: bash
         run: |
           set -euo pipefail
-          test -f docs/data/scores.json || { echo "[]">docs/data/scores.json; echo "Created empty docs/data/scores.json"; }
+          test -f docs/data/scores.json || { echo "[]" > docs/data/scores.json; }
 
-      - name: Build TOP-N shortlist (Your Shortlist → top by score)
+      - name: Build TOP-N shortlist
         shell: bash
         run: |
           set -euo pipefail
@@ -131,8 +166,6 @@ jobs:
             elif has("links") then topn(.links)
             else [] end
           ' "$SRC" > "$DST"
-          echo "Selected TOP-$N from Your Shortlist:"
-          jq -r '.[] | "\(.score // 0)\t\(.title // "")\t\(.company // "")\t\(.url // .link // .jd_url // "")"' "$DST" || true
           if [ ! -s "$DST" ]; then cp "$SRC" "$DST"; fi
 
       - name: Fetch user's latest resume
@@ -158,7 +191,7 @@ jobs:
             --top "${{ github.event.inputs.top }}" \
             --user "${{ github.event.inputs.user_id }}"
 
-      - name: Build drafts_index.json (based on docs/<uid>/*)
+      - name: Build drafts_index.json from docs/<uid>/*
         shell: bash
         run: |
           set -euo pipefail
@@ -173,7 +206,6 @@ jobs:
           RESUME_LIST=()
           for f in "$base/resumes/"*.docx; do RESUME_LIST+=("$(basename "$f")"); done
 
-          # --- Only include five-field change JSONs; exclude *_plan.json ---
           CHANGES_LIST=()
           for f in "$base/changes/"*.json; do
             b="$(basename "$f")"
@@ -187,8 +219,6 @@ jobs:
             --argjson changes "$(printf '%s\n' "${CHANGES_LIST[@]:-}" | jq -R . | jq -s .)" \
             '{outbox:$outbox, resumes:$resumes, changes:$changes}' \
           > docs/data/drafts_index.json
-          echo "Built drafts_index.json:"
-          cat docs/data/drafts_index.json
 
       # -------- UPLOADS --------
       - name: Upload covers (markdown)
@@ -200,7 +230,7 @@ jobs:
           shopt -s nullglob
           for f in "docs/${uid}/outbox/"*.md; do
             key="outputs/${uid}/outbox/$(basename "$f")"
-            curl -sS -X POST \
+            curl -sS -m 60 -X POST \
               "${SUPABASE_URL%/}/storage/v1/object/$key" \
               -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
               -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
@@ -218,7 +248,7 @@ jobs:
           shopt -s nullglob
           for f in "docs/${uid}/resumes/"*.docx; do
             key="outputs/${uid}/resumes/$(basename "$f")"
-            curl -sS -X POST \
+            curl -sS -m 60 -X POST \
               "${SUPABASE_URL%/}/storage/v1/object/$key" \
               -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
               -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
@@ -238,7 +268,7 @@ jobs:
             b="$(basename "$f")"
             [[ $b == *_plan.json ]] && continue
             key="outputs/${uid}/changes/$b"
-            curl -sS -X POST \
+            curl -sS -m 60 -X POST \
               "${SUPABASE_URL%/}/storage/v1/object/$key" \
               -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
               -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
@@ -256,7 +286,7 @@ jobs:
           shopt -s nullglob
           for f in "docs/${uid}/changes/"*.jd.txt; do
             key="outputs/${uid}/changes/$(basename "$f")"
-            curl -sS -X POST \
+            curl -sS -m 60 -X POST \
               "${SUPABASE_URL%/}/storage/v1/object/$key" \
               -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
               -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
@@ -270,10 +300,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Ensure file exists even if a previous step was skipped
           test -f docs/data/drafts_index.json || echo '{"outbox":[],"resumes":[],"changes":[]}' > docs/data/drafts_index.json
           key="outputs/${{ github.event.inputs.user_id }}/drafts_index.json"
-          curl -sS -X POST \
+          curl -sS -m 60 -X POST \
             "${SUPABASE_URL%/}/storage/v1/object/$key" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
@@ -282,29 +311,43 @@ jobs:
             --data-binary @docs/data/drafts_index.json
 
       # -------- STATUS --------
-      - name: Mark job_requests done
+      - name: Mark job_requests done + runs done
         if: ${{ success() }}
         shell: bash
         run: |
           set -euo pipefail
-          curl -sS -X PATCH \
+          curl -sS -m 60 -X PATCH \
             "${SUPABASE_URL%/}/rest/v1/job_requests?id=eq.${{ github.event.inputs.request_id }}" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "Content-Type: application/json" \
             -H "Prefer: return=minimal" \
             --data '{"status":"done"}'
+          curl -sS -m 60 -X PATCH \
+            "${SUPABASE_URL%/}/rest/v1/runs?github_run_id=eq.${{ env.GH_RUN_ID }}&workflow=eq.draft-covers" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            --data '{"status":"done","finished_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
 
-      - name: Mark job_requests error
+      - name: Mark job_requests error + runs error
         if: ${{ failure() }}
         shell: bash
         run: |
           set -euo pipefail
           MSG=$(jq -n --arg m "draft-covers failed; check GH logs" '{"status":"error","message":$m}')
-          curl -sS -X PATCH \
+          curl -sS -m 60 -X PATCH \
             "${SUPABASE_URL%/}/rest/v1/job_requests?id=eq.${{ github.event.inputs.request_id }}" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "Content-Type: application/json" \
             -H "Prefer: return=minimal" \
             --data "$MSG"
+          curl -sS -m 60 -X PATCH \
+            "${SUPABASE_URL%/}/rest/v1/runs?github_run_id=eq.${{ env.GH_RUN_ID }}&workflow=eq.draft-covers" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            --data '{"status":"error","finished_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","message":"failed"}'
