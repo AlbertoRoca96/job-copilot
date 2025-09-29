@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Job Saver to Supabase",
+  "version": "1.0.0",
+  "description": "Scrape any job page and save into Supabase (jobs + applications).",
+  "permissions": ["activeTab", "storage"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "action": { "default_popup": "popup.html" },
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
