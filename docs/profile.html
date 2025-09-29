@@ -6,24 +6,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="style.css" />
 
-  <!-- Page-local styles (minimal helpers for the new preview cards) -->
   <style>
     .wrap { max-width: 1100px; margin: 20px auto; padding: 0 12px; }
     .card { border:1px solid #e5e5e5; border-radius:12px; padding:16px; background:#fcfcfc; }
     .muted { color:#666; } .hidden { display:none; }
     .pill { display:inline-block; padding:2px 8px; margin:2px; border:1px solid #e0e0e0; border-radius:999px; font-size:12px; background:#f6f6f6; }
     dt { font-weight:600; } dd { margin:0 0 10px 0; }
-    .btn { padding:6px 10px; border:1px solid #ccc; background:#fff; border-radius:8px; cursor:pointer; }
+    .btn { padding:6px 10px; border:1px solid #ccc; background:#fff; border-radius:8px; cursor:pointer; text-decoration:none; display:inline-block; }
     table { width:100%; border-collapse:collapse; }
     th, td { border-bottom:1px solid #eee; padding:6px 8px; text-align:left; }
     .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
     .ctl { margin:6px 8px 0 0; min-width:280px; }
-
-    /* Files lists (legacy UI) – removed from DOM; keep styles in case we re-enable later */
-    .files { list-style:none; padding-left:0; display:grid; grid-template-columns: repeat(auto-fill,minmax(280px,1fr)); gap:8px; }
-    .files li { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px; border:1px solid #eee; background:#fff; border-radius:8px; }
-    .files a { text-decoration:none; }
-    .files .btn { margin-left:auto; }
 
     /* Preview cards */
     .cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
@@ -33,18 +26,8 @@
     .pane { background:#fff; border:1px solid #eee; border-radius:10px; padding:10px; }
     .pane .small { font-size:12px; }
 
-    /* JD excerpt: compact + scrollable for readability */
-    .jd {
-      white-space: pre-wrap;
-      font-size: 13px;
-      line-height: 1.35;
-      max-height: 220px;        /* makes it smaller */
-      overflow: auto;           /* scrollable */
-      padding: 8px;
-      border: 1px solid #eee;
-      border-radius: 8px;
-      background: #fff;
-    }
+    /* JD excerpt: compact + scrollable */
+    .jd { white-space: pre-wrap; font-size: 13px; line-height: 1.35; max-height: 220px; overflow: auto; padding: 8px; border: 1px solid #eee; border-radius: 8px; background: #fff; }
 
     .bullets { margin:6px 0 0 18px; }
     .mono { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; background:#fff; border:1px dashed #eee; padding:10px; border-radius:8px; }
@@ -136,6 +119,19 @@
       </ol>
     </section>
 
+    <!-- NEW: Match Report card -->
+    <section class="card hidden" id="matchCard" style="margin-top:16px">
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <h2 style="margin:0 0 6px 0;">Match Report (live)</h2>
+          <p class="muted" style="margin:0">Paste any job description and see instant score & gap analysis. Opens in a new tab.</p>
+        </div>
+        <div>
+          <a class="btn" href="match.html" target="_blank" rel="noopener" aria-label="Open Match Report in a new tab">Open Match Report</a>
+        </div>
+      </div>
+    </section>
+
     <!-- Shortlist -->
     <section id="shortlist" class="card hidden" style="margin-top:16px">
       <h2>Your shortlist</h2>
@@ -154,7 +150,6 @@
       <h2>Your generated materials</h2>
       <p class="muted">Created by “Draft covers & tailored resumes”.</p>
 
-      <!-- JD-aware preview cards ONLY -->
       <h3 style="margin-top:8px">JD-aware previews</h3>
       <div id="cards" class="cards"></div>
     </section>
@@ -178,6 +173,17 @@
   </script>
   <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
   <!-- IMPORTANT: absolute path for GitHub Pages project sites -->
-  <script defer src="/job-copilot/profile.js?v=2025-09-27-1"></script>
+  <script defer src="/job-copilot/profile.js?v=2025-09-29-2"></script>
+  <script>
+    // Show the Match Report card once the user is signed in (profile.js sets the auth gate),
+    // but do a defensive reveal here as well in case of async timing.
+    window.addEventListener('load', () => {
+      const matchCard = document.getElementById('matchCard');
+      const signinOnly = document.getElementById('signinOnly');
+      if (matchCard && signinOnly && signinOnly.classList.contains('hidden')) {
+        matchCard.classList.remove('hidden');
+      }
+    });
+  </script>
 </body>
 </html>
