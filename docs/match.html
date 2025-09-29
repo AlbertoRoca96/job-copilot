@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Match Report</title>
+  <link rel="stylesheet" href="https://unpkg.com/@picocss/pico@2/css/pico.min.css">
+  <style>
+    .k { display:inline-block; padding:0.2rem 0.5rem; border:1px solid #ddd; border-radius:8px; margin:0.1rem; }
+    .miss { background:#fff5f5; border-color:#f5c2c7; }
+    .hit { background:#f5fff5; border-color:#b7f7b7; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  </style>
+</head>
+<body class="container">
+  <h2>Match Report (live)</h2>
+  <p class="mono" id="scoreline">Score: —</p>
+
+  <article>
+    <details open>
+      <summary>Inputs</summary>
+      <label>Job title <input id="job_title" /></label>
+      <label>Company <input id="job_company" /></label>
+      <label>Location <input id="job_location" /></label>
+      <label>Job description <textarea id="job_desc" rows="10"></textarea></label>
+      <label>Profile JSON <textarea id="profile_json" rows="8" placeholder='{"skills":["excel","crm"],"target_titles":["coordinator"],"must_haves":["ap style"],"location_policy":{"remote_only":false,"allowed_countries":["united states"],"allowed_states":["va","virginia"]}}'></textarea></label>
+    </details>
+  </article>
+
+  <article>
+    <h4>Gaps</h4>
+    <div id="gaps"></div>
+  </article>
+
+  <article>
+    <h4>Keyword coverage</h4>
+    <div id="coverage"></div>
+  </article>
+
+  <script type="module" src="./js/scoring.js"></script>
+</body>
+</html>
