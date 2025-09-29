@@ -1,13 +1,12 @@
 // docs/profile.js — auth + profile + shortlist + drafting + JD-aware preview cards only
-// This version removes the legacy raw file lists and makes the JD excerpt scrollable.
+// Uses supabase.functions.invoke(...) for request-run / request-draft (cleaner & fully auth'ed).
 
 (async function () {
   // Wait for DOM
   await new Promise((r) => window.addEventListener("load", r));
 
   // ---------- Supabase bootstrap ----------
-  const SUPABASE_URL =
-    window.SUPABASE_URL || "https://imozfqawxpsasjdmgdkh.supabase.co";
+  const SUPABASE_URL = window.SUPABASE_URL || "https://imozfqawxpsasjdmgdkh.supabase.co";
   const SUPABASE_ANON_KEY =
     window.SUPABASE_ANON_KEY ||
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc";
@@ -36,11 +35,8 @@
   const jobsTable = $("jobs");
   const jobsBody = jobsTable.querySelector("tbody");
   const materials = $("materials");
-
-  // new previews container
   const cardsEl = $("cards");
 
-  // header / auth
   const who = $("who");
   const logout = $("logout");
 
@@ -78,8 +74,7 @@
 
   // ---------- helpers ----------
   const getUser = () => supabase.auth.getUser().then((r) => r.data.user || null);
-  const getSession = () =>
-    supabase.auth.getSession().then((r) => r.data.session || null);
+  const getSession = () => supabase.auth.getSession().then((r) => r.data.session || null);
 
   const pills = (arr) =>
     Array.isArray(arr) && arr.length
@@ -91,9 +86,7 @@
   const truncate = (s, n) => (s && s.length > n ? s.slice(0, n) + "…" : s || "");
 
   const sign = async (bucket, key, expires = 60) => {
-    const { data, error } = await supabase.storage
-      .from(bucket)
-      .createSignedUrl(key, expires);
+    const { data, error } = await supabase.storage.from(bucket).createSignedUrl(key, expires);
     return error ? null : data?.signedUrl || null;
   };
 
@@ -119,11 +112,7 @@
   onboard.classList.remove("hidden");
 
   // ---------- load profile ----------
-  const { data: prof, error: profErr } = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("id", user.id)
-    .single();
+  const { data: prof, error: profErr } = await supabase.from("profiles").select("*").eq("id", user.id).single();
 
   if (!profErr && prof) {
     $("full_name").textContent = prof?.full_name || "—";
@@ -159,17 +148,13 @@
     if (!file) return alert("Choose a .docx file");
 
     const path = `${user.id}/current.docx`;
-    const { error: upErr } = await supabase.storage
-      .from("resumes")
-      .upload(path, file, { upsert: true });
+    const { error: upErr } = await supabase.storage.from("resumes").upload(path, file, { upsert: true });
     if (upErr) {
       upMsg.textContent = "Upload error: " + upErr.message;
       return;
     }
 
-    const { error: metaErr } = await supabase
-      .from("resumes")
-      .insert({ user_id: user.id, bucket: "resumes", path });
+    const { error: metaErr } = await supabase.from("resumes").insert({ user_id: user.id, bucket: "resumes", path });
     if (metaErr) {
       upMsg.textContent = "Upload metadata error: " + metaErr.message;
       return;
@@ -186,51 +171,36 @@
 
     // Save targets
     try {
-      const titles = (titlesInput.value || "")
-        .split(",").map((s) => s.trim()).filter(Boolean);
-      const locs = (locsInput.value || "")
-        .split(",").map((s) => s.trim()).filter(Boolean);
-      const { error } = await supabase
-        .from("profiles")
-        .update({ target_titles: titles, locations: locs })
-        .eq("id", user.id);
+      const titles = (titlesInput.value || "").split(",").map((s) => s.trim()).filter(Boolean);
+      const locs = (locsInput.value || "").split(",").map((s) => s.trim()).filter(Boolean);
+      const { error } = await supabase.from("profiles").update({ target_titles: titles, locations: locs }).eq("id", user.id);
       if (error) throw error;
     } catch (e) {
       runMsg.textContent = "Save failed: " + String(e.message || e);
       return;
     }
 
-    // Queue shortlist job
+    // Queue shortlist job (Edge Function)
     try {
-      const restBase = SUPABASE_URL;
       const recencyDays = Math.max(0, parseInt(recencyInput.value || "0", 10) || 0);
       const remoteOnly = !!remoteOnlyCb.checked;
       const requirePosted = !!requirePostCb.checked;
 
-      const resp = await fetch(`${restBase}/functions/v1/request-run`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          apikey: SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${(await getSession())?.access_token}`,
-        },
-        body: JSON.stringify({
+      const { data, error } = await supabase.functions.invoke("request-run", {
+        body: {
           note: "user run from profile",
           search_policy: {
             recency_days: recencyDays,
             require_posted_date: requirePosted,
             remote_only: remoteOnly,
           },
-        }),
-      });
-
-      let out = {};
-      try { out = await resp.json(); } catch {}
-      if (!resp.ok) {
-        runMsg.textContent = `Error: ${out.detail || out.error || resp.status}`;
+        },
+      }); // supabase-js attaches the Authorization header automatically.
+      if (error) {
+        runMsg.textContent = `Error: ${error.message || "invoke failed"}`;
         return;
       }
-      runMsg.textContent = `Queued: ${out.request_id || "ok"}`;
+      runMsg.textContent = `Queued: ${data?.request_id || "ok"}`;
       setTimeout(loadShortlist, 3000);
     } catch (e) {
       runMsg.textContent = "Error: " + String(e);
@@ -245,25 +215,14 @@
 
     const top = Math.max(1, Math.min(20, parseInt(topNInput.value || "5", 10) || 5));
     try {
-      const restBase = SUPABASE_URL;
-      const resp = await fetch(`${restBase}/functions/v1/request-draft`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          apikey: SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({ top }),
+      const { data, error } = await supabase.functions.invoke("request-draft", {
+        body: { top },
       });
-
-      let out = {};
-      try { out = await resp.json(); } catch {}
-      if (!resp.ok) {
-        draftMsg.textContent = `Error: ${out.detail || out.error || resp.status}`;
+      if (error) {
+        draftMsg.textContent = `Error: ${error.message || "invoke failed"}`;
         return;
       }
-
-      draftMsg.textContent = `Drafts queued: ${out.request_id || "ok"} (top=${out.top || top})`;
+      draftMsg.textContent = `Drafts queued: ${data?.request_id || "ok"} (top=${data?.top || top})`;
       setTimeout(loadMaterials, 3000);
     } catch (e) {
       draftMsg.textContent = "Error: " + String(e);
@@ -358,7 +317,7 @@
         </div>
         <div>
           <div class="muted" style="margin-bottom:4px">Before</div>
-          <pre>${afterHTML ? esc(before) : esc(before)}</pre>
+          <pre>${esc(before)}</pre>
         </div>
         <div style="margin-top:8px">
           <div class="muted" style="margin-bottom:4px">After</div>
@@ -376,11 +335,7 @@
       if (!res.ok) throw new Error(`Fetch ${res.status}`);
       const obj = await res.json();
 
-      const changes = Array.isArray(obj)
-        ? obj
-        : Array.isArray(obj?.changes)
-        ? obj.changes
-        : [];
+      const changes = Array.isArray(obj) ? obj : Array.isArray(obj?.changes) ? obj.changes : [];
 
       changeBody.innerHTML = changes.length
         ? changes.map(renderChangeCard).join("")
@@ -396,11 +351,9 @@
     const u = await getUser();
     if (!u) return;
 
-    // drafts_index.json from Storage
     const ixKey = `${u.id}/drafts_index.json`;
     const ixUrl = await sign("outputs", ixKey, 60);
 
-    // If we can't find the index, clear UI
     if (!ixUrl) {
       materials.classList.remove("hidden");
       cardsEl.innerHTML = `<div class="muted">No drafts yet.</div>`;
@@ -416,42 +369,33 @@
     const clean = (arr) => (Array.isArray(arr) ? arr.filter(Boolean) : []);
     const changes = clean(index.changes);
 
-    // ----- Render JD-aware preview cards (iterate change JSON files) -----
     cardsEl.innerHTML = "<div class='muted'>Loading previews…</div>";
     const cards = [];
 
     for (const fname of changes) {
       try {
-        const slug = fname.replace(/\.json$/,"");
+        const slug = fname.replace(/\.json$/, "");
 
-        // Signed URL for this change JSON
         const changeUrl = await sign("outputs", `${u.id}/changes/${fname}`, 60);
         if (!changeUrl) continue;
 
         const change = await fetchJSON(changeUrl);
 
         const company = change.company || "(company)";
-        const title   = change.title   || "(title)";
+        const title = change.title || "(title)";
 
-        // Paths inside the JSON (emitted by draft_email.py)
         const coverRel = change.paths?.cover_md || `outbox/${slug}.md`;
         const resumeRel = change.paths?.resume_docx || null;
         const jdTextRel = change.paths?.jd_text || `changes/${slug}.jd.txt`;
 
-        // Signed URLs for assets
         const coverUrl = await sign("outputs", `${u.id}/${coverRel}`, 60);
         const resumeUrl = resumeRel ? await sign("outputs", `${u.id}/${resumeRel}`, 60) : null;
         const jdUrl = await sign("outputs", `${u.id}/${jdTextRel}`, 60);
 
-        // Fetch texts for preview
-        const [coverMd, jdTxt] = await Promise.all([
-          coverUrl ? fetchText(coverUrl) : "",
-          jdUrl ? fetchText(jdUrl) : ""
-        ]);
+        const [coverMd, jdTxt] = await Promise.all([coverUrl ? fetchText(coverUrl) : "", jdUrl ? fetchText(jdUrl) : ""]);
 
         const themes = (change.cover_meta?.company_themes || []).slice(0, 6);
 
-        // Card DOM
         const card = document.createElement("div");
         card.className = "card";
 
@@ -480,13 +424,11 @@
 
         card.appendChild(head);
 
-        // side-by-side JD + themes
         const grid = document.createElement("div");
         grid.className = "grid2";
 
         const left = document.createElement("div");
         left.className = "pane";
-        // No truncation; the .jd class now scrolls at a compact height.
         left.innerHTML = `<h3>JD excerpt</h3><div class="muted small">pulled from the posting</div><div class="jd">${esc(jdTxt || "")}</div>`;
 
         const right = document.createElement("div");
@@ -508,10 +450,10 @@
           right.appendChild(none);
         }
 
-        grid.appendChild(left); grid.appendChild(right);
+        grid.appendChild(left);
+        grid.appendChild(right);
         card.appendChild(grid);
 
-        // cover letter preview (raw Markdown as monospaced preview)
         const details = document.createElement("details");
         details.className = "cover";
         const summary = document.createElement("summary");
@@ -523,7 +465,6 @@
         pre.textContent = coverMd || "(cover not found)";
         details.appendChild(pre);
 
-        // link to open cover in new tab if needed
         if (coverUrl) {
           const open = document.createElement("a");
           open.className = "btn";
