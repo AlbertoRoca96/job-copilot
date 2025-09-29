@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Power Edit (Resume)</title>
+  <link rel="stylesheet" href="https://unpkg.com/@picocss/pico@2/css/pico.min.css">
+  <style>
+    :root { --pane-bg:#fff; --chip:#eef; --miss:#ffeaea; --hit:#eaffea; }
+    body.container { max-width: 1200px; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap:1rem; }
+    #editor { border:1px solid #ddd; background:var(--pane-bg); min-height:60vh; padding:1rem; border-radius:8px; }
+    #editor[contenteditable="true"]:focus { outline: 2px solid #bde; }
+    .controls .k { display:inline-block; padding:.25rem .5rem; border:1px solid #ccd; border-radius:999px; background:var(--chip); margin:.1rem; }
+    .miss { background:var(--miss) !important; border-color:#f6c2c2 !important; }
+    .hit  { background:var(--hit)  !important; border-color:#b7f7b7 !important; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .toolbar { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; }
+    .toolbar input[type=file] { max-width: 280px; }
+    .right-rail { background:var(--pane-bg); border:1px solid #ddd; border-radius:8px; padding:1rem; }
+    .suggestion { border:1px dashed #ccd; padding:.5rem; border-radius:8px; margin:.25rem 0; cursor:pointer; }
+    .suggestion:hover { background:#f7f7ff; }
+    .small { font-size:.875rem; color:#555; }
+  </style>
+</head>
+<body class="container">
+  <h2>Power Edit (live)</h2>
+
+  <article class="toolbar">
+    <input id="docx_file" type="file" accept=".docx"/>
+    <button id="btn_export_docx" class="secondary">Export .docx</button>
+    <button id="btn_print_pdf" class="secondary">Print / Save as PDF</button>
+    <span class="mono" id="scoreline">Score: —</span>
+  </article>
+
+  <div class="grid">
+    <article>
+      <details open>
+        <summary>Job Description (paste here)</summary>
+        <label>Title <input id="job_title" placeholder="e.g., Marketing Coordinator"/></label>
+        <label>Company <input id="job_company" placeholder="e.g., ACME Corp"/></label>
+        <label>Location <input id="job_location" placeholder="e.g., Remote (US) / Arlington, VA"/></label>
+        <label>Job Description <textarea id="job_desc" rows="10" placeholder="Paste JD text here..."></textarea></label>
+      </details>
+
+      <details open class="controls">
+        <summary>Profile (auto-loads from docs/data/profile.json if present)</summary>
+        <textarea id="profile_json" rows="8" placeholder='{"skills":["excel","crm"],"target_titles":["coordinator"],"must_haves":["ap style"],"location_policy":{"remote_only":false,"allowed_countries":["united states"],"allowed_states":["va","virginia"]}}'></textarea>
+      </details>
+
+      <h4>Your Resume (editable)</h4>
+      <div id="editor" contenteditable="true" spellcheck="true"></div>
+      <p class="small">Tip: Edit freely. The score and gap chips update as you type. Use the suggestions on the right to insert quantified bullets without hallucinating.</p>
+    </article>
+
+    <article class="right-rail">
+      <h4>Gaps & Coverage</h4>
+      <div id="gaps"></div>
+      <h5>Suggest inserts (click to add at cursor)</h5>
+      <div id="suggestions"></div>
+      <hr/>
+      <h5>Keyword coverage</h5>
+      <div id="coverage"></div>
+    </article>
+  </div>
+
+  <!-- Mammoth for DOCX->HTML -->
+  <script src="https://mammothjs.github.io/mammoth.js/dist/mammoth.browser.min.js" defer></script>
+  <!-- html-docx-js for HTML->DOCX -->
+  <script src="https://cdn.jsdelivr.net/gh/evidenceprime/html-docx-js/dist/html-docx.js" defer></script>
+  <!-- App -->
+  <script type="module" src="./js/power-edit.js"></script>
+</body>
+</html>
