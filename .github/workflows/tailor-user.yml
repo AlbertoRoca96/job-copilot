@@ -29,6 +29,7 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+
     steps:
       - name: Validate required secrets
         shell: bash
@@ -46,7 +47,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'                    # speeds up installs
+          cache: 'pip'
           cache-dependency-path: 'requirements.txt'
 
       - name: Install OS tools
@@ -57,7 +58,6 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          # If these are already in requirements.txt the cache will handle it
           pip install -r requirements.txt python-docx requests pyyaml beautifulsoup4
 
       # ---- status: job_requests -> running
@@ -79,13 +79,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           RUN_PAYLOAD=$(jq -n \
             --arg uid "${{ github.event.inputs.user_id }}" \
             --arg rid "${{ github.event.inputs.request_id }}" \
             --arg wf  "tailor-user" \
             --arg repo "${GH_REPO}" \
-            --arg run  "${GH_RUN_ID}" \
-            '{user_id:$uid, request_id: ($rid|tonumber), workflow:$wf, github_repo:$repo, github_run_id: ($run|tonumber), status:"running", started_at: (now|toiso8601)}')
+            --arg started "$STARTED_AT" \
+            --argjson run ${{ env.GH_RUN_ID }} \
+            '{user_id:$uid, request_id:$rid, workflow:$wf, github_repo:$repo, github_run_id:$run, status:"running", started_at:$started}')
           curl -sS -m 60 -X POST \
             "${SUPABASE_URL%/}/rest/v1/runs" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
@@ -168,14 +170,15 @@ jobs:
           if [ -s docs/data/scores.json ]; then
             KEY="outputs/${{ github.event.inputs.user_id }}/scores.json"
             BYTES=$(wc -c < docs/data/scores.json | tr -d ' ')
+            RUN_ID_NUM="${RUN_ID:-0}"
             PAYLOAD=$(jq -n \
               --arg uid "${{ github.event.inputs.user_id }}" \
-              --arg rid "${RUN_ID:-0}" \
+              --argjson rid ${RUN_ID_NUM:-0} \
               --arg kind "scores" \
               --arg key  "$KEY" \
               --arg path "docs/data/scores.json" \
               --argjson bytes $BYTES \
-              '{user_id:$uid, run_id: ($rid|tonumber), kind:$kind, storage_key:$key, path_hint:$path, bytes:$bytes}')
+              '{user_id:$uid, run_id:$rid, kind:$kind, storage_key:$key, path_hint:$path, bytes:$bytes}')
             curl -sS -m 60 -X POST \
               "${SUPABASE_URL%/}/rest/v1/artifacts" \
               -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
