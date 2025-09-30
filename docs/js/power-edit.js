@@ -1,11 +1,12 @@
-// docs/js/power-edit.js
-// Power Edit live scoring + server Auto-tailor + profile autoload.
+// Power Edit live scoring + server Auto-tailor + profile autoload (Supabase).
+// Hides scoring/gaps/suggestions until a JD is pasted, and gates Auto-tailor
+// until both a resume is loaded and JD is present. Also waits for Mammoth.
 
-import { scoreJob, explainGaps, tokenize, tokensFromTerms } from './scoring.js?v=2025-09-30-4';
+import { scoreJob, explainGaps, tokenize, tokensFromTerms } from './scoring.js?v=2025-10-01-1';
 
 const $ = (id) => document.getElementById(id);
 
-// Supabase client (auth session is reused from your login page)
+// Supabase client
 let supabase = null;
 async function ensureSupabase() {
   if (supabase) return supabase;
@@ -20,7 +21,17 @@ async function ensureSupabase() {
   return supabase;
 }
 
-/* ---------- DOM refs ---------- */
+// Wait for Mammoth (DOCX -> HTML) in case user picks a file before it's loaded
+async function ensureMammoth(timeoutMs = 6000) {
+  const start = Date.now();
+  while (!window.mammoth) {
+    if (Date.now() - start > timeoutMs) throw new Error('DOCX converter not loaded yet');
+    await new Promise(r => setTimeout(r, 50));
+  }
+  return window.mammoth;
+}
+
+/* ---------- DOM ---------- */
 const editor        = $('editor');
 const fileInput     = $('docx_file');
 const btnExport     = $('btn_export_docx');
@@ -37,7 +48,6 @@ const jobLocation   = $('job_location');
 const jobDesc       = $('job_desc');
 const profileBox    = $('profile_json');
 
-// NEW buttons
 const btnAutoServer = $('btn_auto_server');
 const btnUndo       = $('btn_undo_auto');
 const btnClear      = $('btn_clear_auto');
@@ -82,11 +92,26 @@ function insertAtCursor(htmlFrag){
   const node = template.content.cloneNode(true);
   range.insertNode(node);
 }
+function jdReady() {
+  // treat JD as "present" once there are enough tokens or characters
+  const t = tokenize(`${jobTitle.value || ''} ${jobDesc.value || ''}`);
+  return (jobDesc.value || '').trim().length >= 20 || t.length >= 10;
+}
 
-/* ---------- Scoring & coverage ---------- */
+/* ---------- Scoring & coverage (quiet until JD present) ---------- */
 function render(){
   try{
     state.job = getJobFromUI();
+
+    if (!jdReady()) {
+      scoreline.textContent = 'Score: —';
+      gapsEl.innerHTML = '<span class="small muted">Paste a job description to see gaps.</span>';
+      suggEl.innerHTML = '<span class="small muted">Suggestions appear after you paste a JD.</span>';
+      coverageEl.innerHTML = '<span class="small muted">Shown after JD is pasted.</span>';
+      enableButtons();
+      return;
+    }
+
     const s = scoreJob(state.job, state.profile);
     scoreline.textContent = `Score: ${s.toFixed(4)}`;
 
@@ -107,14 +132,20 @@ function render(){
       <div>Job tokens (${jobToks.length}): ${jobToks.slice(0,120).map(k=>`<span class="k">${k}</span>`).join(" ")}</div>
       <div>Profile skills (${skills.length}): ${skills.map(k=>`<span class="k">${k}</span>`).join(" ")}</div>
     `;
+
+    enableButtons();
   }catch(e){
     scoreline.textContent = `Score: error`;
     gapsEl.textContent = e.message;
   }
 }
 
-/* ---------- Suggestions (local) ---------- */
+/* ---------- Suggestions (only after JD present) ---------- */
 function rebuildSuggestions(){
+  if (!jdReady()) {
+    suggEl.innerHTML = '<span class="small muted">Suggestions appear after you paste a JD.</span>';
+    return;
+  }
   const gaps = explainGaps(getJobFromUI(), state.profile);
   const sugg = [];
   for (const m of (gaps.missing_skills || []).slice(0, 10)){
@@ -138,14 +169,20 @@ document.addEventListener("click", (ev)=>{
 /* ---------- DOCX import / export / print ---------- */
 fileInput.addEventListener('change', async (e)=>{
   const f = e.target.files?.[0]; if (!f) return;
-  const buf = await f.arrayBuffer();
-  const { value: html } = await window.mammoth.convertToHtml({ arrayBuffer: buf });
-  setResumeHTML(sanitize(html));
-  state.resumeLoaded = true;
-  enableButtons();
-  render(); rebuildSuggestions();
+  try {
+    await ensureMammoth();
+    const buf = await f.arrayBuffer();
+    const { value: html } = await window.mammoth.convertToHtml({ arrayBuffer: buf });
+    setResumeHTML(sanitize(html));
+    state.resumeLoaded = true;
+    enableButtons();
+    render(); rebuildSuggestions();
+  } catch (err) {
+    alert('Could not import .docx: ' + String(err?.message || err));
+  }
 });
 btnExport.addEventListener('click', ()=>{
+  if (!window.htmlDocx?.asBlob) return alert('Export library not loaded yet, try again.');
   const html = `<!doctype html><html><head><meta charset="utf-8"></head><body>${getResumeHTML()}</body></html>`;
   const blob = window.htmlDocx.asBlob(html);
   const a = document.createElement('a');
@@ -167,9 +204,7 @@ async function callServer() {
     location: jobLocation.value || '',
     jd_text: jobDesc.value || '',
     resume_html: getResumeHTML(),
-    profile_json: (()=>{
-      try { return JSON.parse(profileBox.value || "{}"); } catch { return {}; }
-    })()
+    profile_json: (()=>{ try { return JSON.parse(profileBox.value || "{}"); } catch { return {}; } })()
   };
 
   const { data, error } = await supabase.functions.invoke('power-tailor', { body });
@@ -222,7 +257,7 @@ btnUndo.addEventListener('click', undoAuto);
 btnClear.addEventListener('click', clearAuto);
 
 function enableButtons() {
-  const ok = state.resumeLoaded && (jobDesc.value.trim().length > 20);
+  const ok = state.resumeLoaded && jdReady();
   btnAutoServer.disabled = !ok;
   btnUndo.disabled = lastAutoNodes.length === 0;
   btnClear.disabled = autoNodesAll.length === 0;
@@ -241,26 +276,20 @@ editor.addEventListener('keyup', ()=>{ render(); rebuildSuggestions(); rememberS
 editor.addEventListener('mouseup', rememberSelection);
 editor.addEventListener('blur', rememberSelection);
 
-/* ---------- Auto-fill from the user's saved profile ---------- */
+/* ---------- Load saved profile into the textarea (signed-in user) ---------- */
 async function loadUserProfileFromSupabase() {
   try {
     await ensureSupabase();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return false;
 
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', user.id)
-      .single();
-
+    const { data, error } = await supabase.from('profiles').select('*').eq('id', user.id).single();
     if (error || !data) return false;
 
-    // Map your table to the JSON used by Power Edit
     const json = {
       skills: data.skills || [],
       target_titles: data.target_titles || [],
-      must_haves: data.must_haves || [],          // if column doesn't exist, leave as []
+      must_haves: data.must_haves || [],   // ok if column absent—stays []
       location_policy: data.search_policy || {}
     };
 
