@@ -7,7 +7,7 @@ on:
         description: Supabase user id
         required: true
       request_id:
-        description: job_requests id
+        description: job_requests id (UUID)
         required: true
       top:
         description: Top roles to draft from Your Shortlist
@@ -91,20 +91,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          STARTED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
           RUN_PAYLOAD=$(jq -n \
             --arg uid "${{ github.event.inputs.user_id }}" \
             --arg rid "${{ github.event.inputs.request_id }}" \
             --arg wf  "draft-covers" \
             --arg repo "${GH_REPO}" \
             --arg run  "${GH_RUN_ID}" \
-            '{user_id:$uid, request_id: ($rid|tonumber), workflow:$wf, github_repo:$repo, github_run_id: ($run|tonumber), status:"running", started_at: (now|toiso8601)}')
+            --arg started "$STARTED_AT" \
+            '{user_id:$uid,
+              request_id:$rid,                     # UUID stays string
+              workflow:$wf,
+              github_repo:$repo,
+              github_run_id: ($run|tonumber),      # numeric
+              status:"running",
+              started_at:$started}')
           curl -sS -m 60 -X POST \
             "${SUPABASE_URL%/}/rest/v1/runs" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "Content-Type: application/json" \
             --data "$RUN_PAYLOAD" \
-            | jq -r '.[0].id // empty' > run_id.txt
+            | jq -r '.[0].id // empty' > run_id.txt || true
           echo "RUN_ID=$(cat run_id.txt)" >> $GITHUB_ENV
 
       # -------- CLEANUP (remote + local) --------
@@ -113,8 +121,9 @@ jobs:
         run: |
           set -euo pipefail
           uid="${{ github.event.inputs.user_id }}"
-          curl -sS -m 60 -X DELETE \
-            "${SUPABASE_URL%/}/storage/v1/object/outputs" \
+          # Use proper bulk remove endpoint
+          curl -sS -m 60 -X POST \
+            "${SUPABASE_URL%/}/storage/v1/object/outputs/remove" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "Content-Type: application/json" \
@@ -123,7 +132,7 @@ jobs:
               ($u + "/resumes/"),
               ($u + "/changes/"),
               ($u + "/drafts_index.json")
-            ]}')"
+            ]}')" || true
 
       - name: Clean local workspace dirs
         shell: bash
