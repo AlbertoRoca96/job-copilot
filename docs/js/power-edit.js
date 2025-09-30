@@ -1,13 +1,14 @@
-// Power Edit (live) with server-side Auto-tailor.
-// - Keeps your existing local scoring UX
-// - Adds supabase.functions.invoke('power-tailor') to drop an editable block
-// - Undo / Clear support
+// Power Edit (live) with server-side Auto-tailor just for this page.
+// - Fixes import (tokenize, etc. now exported by scoring.js)
+// - Adds supabase.functions.invoke('power-tailor')
+// - Auto-loads signed-in user's profile from Supabase (fallback to docs/data/profile.json)
+// - Undo / Clear support for server inserts
 
 import { scoreJob, explainGaps, tokenize, tokensFromTerms } from './scoring.js';
 
 const $ = (id) => document.getElementById(id);
 
-// Supabase client (auth session is reused from your login page)
+// Supabase client (auth session reused from your login page)
 let supabase = null;
 async function ensureSupabase() {
   if (supabase) return supabase;
@@ -83,12 +84,16 @@ function insertAtCursor(htmlFrag){
     range.collapse(false);
   }
   const template = document.createElement('template');
-  template.innerHTML = htmlFrag.trim();
+  // make sure the auto block is visually groupable
+  const safe = htmlFrag.trim().match(/class=".*auto-insert.*"/)
+    ? htmlFrag
+    : `<div class="auto-insert">${htmlFrag}</div>`;
+  template.innerHTML = safe;
   const node = template.content.cloneNode(true);
   range.insertNode(node);
 }
 
-/* ---------- Scoring & coverage (same vibe as before) ---------- */
+/* ---------- Scoring & coverage ---------- */
 function render(){
   try{
     state.job = getJobFromUI();
@@ -247,21 +252,59 @@ editor.addEventListener('keyup', ()=>{ render(); rebuildSuggestions(); rememberS
 editor.addEventListener('mouseup', rememberSelection);
 editor.addEventListener('blur', rememberSelection);
 
-/* ---------- Optional: auto-load profile JSON ---------- */
-async function tryLoadProfile(){
+/* ---------- Prefer the signed-in user's profile from Supabase ---------- */
+async function loadProfileFromSupabase() {
+  try {
+    await ensureSupabase();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return false;
+
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .single();
+
+    if (error || !data) return false;
+
+    // Map DB shape → Power Edit profile JSON
+    const pol = data.search_policy || {};
+    const profileJson = {
+      skills: data.skills || [],
+      target_titles: data.target_titles || [],
+      must_haves: data.must_haves || [],       // if you don't store this, it stays []
+      location_policy: {
+        remote_only: !!pol.remote_only,
+        allowed_countries: pol.allowed_countries || [],
+        allowed_states: pol.allowed_states || []
+      }
+    };
+
+    const text = JSON.stringify(profileJson, null, 2);
+    if (!profileBox.value.trim()) profileBox.value = text;
+    state.profile = profileJson;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/* ---------- Fallback: docs/data/profile.json if present ---------- */
+async function loadProfileFromFile(){
   try{
     const r = await fetch('./data/profile.json', { cache: 'no-store' });
-    if (r.ok){
-      const j = await r.json();
-      if (!profileBox.value.trim()) profileBox.value = JSON.stringify(j||{}, null, 2);
-      state.profile = j||{};
-    }
-  }catch(_){/* noop */}
+    if (!r.ok) return false;
+    const j = await r.json();
+    if (!profileBox.value.trim()) profileBox.value = JSON.stringify(j||{}, null, 2);
+    state.profile = j||{};
+    return true;
+  }catch(_){ return false; }
 }
 
 /* ---------- Init ---------- */
 window.addEventListener('DOMContentLoaded', async ()=>{
   await ensureSupabase();
-  await tryLoadProfile();
+  const okSupabase = await loadProfileFromSupabase();
+  if (!okSupabase) await loadProfileFromFile();
   render(); rebuildSuggestions(); enableButtons();
 });
