@@ -1,14 +1,11 @@
-// Power Edit (live) with server-side Auto-tailor just for this page.
-// - Fixes import (tokenize, etc. now exported by scoring.js)
-// - Adds supabase.functions.invoke('power-tailor')
-// - Auto-loads signed-in user's profile from Supabase (fallback to docs/data/profile.json)
-// - Undo / Clear support for server inserts
+// docs/js/power-edit.js
+// Power Edit live scoring + server Auto-tailor + profile autoload.
 
-import { scoreJob, explainGaps, tokenize, tokensFromTerms } from './scoring.js';
+import { scoreJob, explainGaps, tokenize, tokensFromTerms } from './scoring.js?v=2025-09-30-4';
 
 const $ = (id) => document.getElementById(id);
 
-// Supabase client (auth session reused from your login page)
+// Supabase client (auth session is reused from your login page)
 let supabase = null;
 async function ensureSupabase() {
   if (supabase) return supabase;
@@ -79,16 +76,9 @@ function sanitize(html){
 function insertAtCursor(htmlFrag){
   editor.focus();
   const range = state.selRange || document.createRange();
-  if (!state.selRange) {
-    range.selectNodeContents(editor);
-    range.collapse(false);
-  }
+  if (!state.selRange) { range.selectNodeContents(editor); range.collapse(false); }
   const template = document.createElement('template');
-  // make sure the auto block is visually groupable
-  const safe = htmlFrag.trim().match(/class=".*auto-insert.*"/)
-    ? htmlFrag
-    : `<div class="auto-insert">${htmlFrag}</div>`;
-  template.innerHTML = safe;
+  template.innerHTML = htmlFrag.trim();
   const node = template.content.cloneNode(true);
   range.insertNode(node);
 }
@@ -104,10 +94,10 @@ function render(){
     gapsEl.innerHTML = `
       <div>Location OK: <strong>${gaps.location_ok ? "Yes" : "No"}</strong></div>
       <div>Missing must-haves: ${
-        gaps.missing_must_haves.map(k=>`<span class="k miss">${k}</span>`).join(" ") || "<em>none</em>"
+        (gaps.missing_must_haves || []).map(k=>`<span class="k miss">${k}</span>`).join(" ") || "<em>none</em>"
       }</div>
       <div>Missing skills: ${
-        gaps.missing_skills.map(k=>`<span class="k miss">${k}</span>`).join(" ") || "<em>none</em>"
+        (gaps.missing_skills || []).map(k=>`<span class="k miss">${k}</span>`).join(" ") || "<em>none</em>"
       }</div>
     `;
 
@@ -127,7 +117,7 @@ function render(){
 function rebuildSuggestions(){
   const gaps = explainGaps(getJobFromUI(), state.profile);
   const sugg = [];
-  for (const m of gaps.missing_skills.slice(0, 10)){
+  for (const m of (gaps.missing_skills || []).slice(0, 10)){
     const nice = m.replace(/[-_]/g, ' ');
     sugg.push(`• Implemented ${nice} to improve <metric> by [X%].`);
     sugg.push(`• Built ${nice} workflow reducing <time/cost> by [X%].`);
@@ -183,7 +173,7 @@ async function callServer() {
   };
 
   const { data, error } = await supabase.functions.invoke('power-tailor', { body });
-  if (error) { throw new Error(error.message || 'invoke failed'); }
+  if (error) throw new Error(error.message || 'invoke failed');
   return data?.result || null;
 }
 
@@ -199,7 +189,6 @@ async function autoTailorServer() {
     rememberSelection();
     insertAtCursor(result.block_html);
 
-    // collect nodes inserted (best-effort)
     const afterCount = editor.childNodes.length;
     for (let i = beforeCount; i < afterCount; i++) {
       const node = editor.childNodes[i];
@@ -252,8 +241,8 @@ editor.addEventListener('keyup', ()=>{ render(); rebuildSuggestions(); rememberS
 editor.addEventListener('mouseup', rememberSelection);
 editor.addEventListener('blur', rememberSelection);
 
-/* ---------- Prefer the signed-in user's profile from Supabase ---------- */
-async function loadProfileFromSupabase() {
+/* ---------- Auto-fill from the user's saved profile ---------- */
+async function loadUserProfileFromSupabase() {
   try {
     await ensureSupabase();
     const { data: { user } } = await supabase.auth.getUser();
@@ -267,44 +256,38 @@ async function loadProfileFromSupabase() {
 
     if (error || !data) return false;
 
-    // Map DB shape → Power Edit profile JSON
-    const pol = data.search_policy || {};
-    const profileJson = {
+    // Map your table to the JSON used by Power Edit
+    const json = {
       skills: data.skills || [],
       target_titles: data.target_titles || [],
-      must_haves: data.must_haves || [],       // if you don't store this, it stays []
-      location_policy: {
-        remote_only: !!pol.remote_only,
-        allowed_countries: pol.allowed_countries || [],
-        allowed_states: pol.allowed_states || []
-      }
+      must_haves: data.must_haves || [],          // if column doesn't exist, leave as []
+      location_policy: data.search_policy || {}
     };
 
-    const text = JSON.stringify(profileJson, null, 2);
-    if (!profileBox.value.trim()) profileBox.value = text;
-    state.profile = profileJson;
+    profileBox.value = JSON.stringify(json, null, 2);
+    state.profile = json;
     return true;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
 
-/* ---------- Fallback: docs/data/profile.json if present ---------- */
-async function loadProfileFromFile(){
+/* ---------- Fallback: docs/data/profile.json ---------- */
+async function tryLoadProfileFile(){
   try{
     const r = await fetch('./data/profile.json', { cache: 'no-store' });
-    if (!r.ok) return false;
-    const j = await r.json();
-    if (!profileBox.value.trim()) profileBox.value = JSON.stringify(j||{}, null, 2);
-    state.profile = j||{};
-    return true;
-  }catch(_){ return false; }
+    if (r.ok){
+      const j = await r.json();
+      if (!profileBox.value.trim()) {
+        profileBox.value = JSON.stringify(j||{}, null, 2);
+        state.profile = j||{};
+      }
+    }
+  }catch(_){/* noop */}
 }
 
 /* ---------- Init ---------- */
 window.addEventListener('DOMContentLoaded', async ()=>{
   await ensureSupabase();
-  const okSupabase = await loadProfileFromSupabase();
-  if (!okSupabase) await loadProfileFromFile();
+  const loaded = await loadUserProfileFromSupabase();
+  if (!loaded) await tryLoadProfileFile();
   render(); rebuildSuggestions(); enableButtons();
 });
