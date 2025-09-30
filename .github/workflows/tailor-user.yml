@@ -7,7 +7,7 @@ on:
         description: Supabase user id
         required: true
       request_id:
-        description: job_requests id
+        description: job_requests id (UUID)
         required: true
 
 permissions:
@@ -29,7 +29,6 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
     steps:
       - name: Validate required secrets
         shell: bash
@@ -79,22 +78,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          STARTED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
           RUN_PAYLOAD=$(jq -n \
             --arg uid "${{ github.event.inputs.user_id }}" \
             --arg rid "${{ github.event.inputs.request_id }}" \
             --arg wf  "tailor-user" \
             --arg repo "${GH_REPO}" \
+            --arg run  "${GH_RUN_ID}" \
             --arg started "$STARTED_AT" \
-            --argjson run ${{ env.GH_RUN_ID }} \
-            '{user_id:$uid, request_id:$rid, workflow:$wf, github_repo:$repo, github_run_id:$run, status:"running", started_at:$started}')
+            '{user_id:$uid,
+              request_id:$rid,                     # keep as string (UUID)
+              workflow:$wf,
+              github_repo:$repo,
+              github_run_id: ($run|tonumber),      # numeric
+              status:"running",
+              started_at:$started}')
           curl -sS -m 60 -X POST \
             "${SUPABASE_URL%/}/rest/v1/runs" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "Content-Type: application/json" \
             --data "$RUN_PAYLOAD" \
-            | jq -r '.[0].id // empty' > run_id.txt
+            | jq -r '.[0].id // empty' > run_id.txt || true
           echo "RUN_ID=$(cat run_id.txt)" >> $GITHUB_ENV
 
       - name: Fetch user's latest resume
@@ -170,21 +175,22 @@ jobs:
           if [ -s docs/data/scores.json ]; then
             KEY="outputs/${{ github.event.inputs.user_id }}/scores.json"
             BYTES=$(wc -c < docs/data/scores.json | tr -d ' ')
-            RUN_ID_NUM="${RUN_ID:-0}"
             PAYLOAD=$(jq -n \
               --arg uid "${{ github.event.inputs.user_id }}" \
-              --argjson rid ${RUN_ID_NUM:-0} \
+              --arg rid "${RUN_ID:-}" \
               --arg kind "scores" \
               --arg key  "$KEY" \
               --arg path "docs/data/scores.json" \
               --argjson bytes $BYTES \
-              '{user_id:$uid, run_id:$rid, kind:$kind, storage_key:$key, path_hint:$path, bytes:$bytes}')
+              '{user_id:$uid,
+                run_id: ( ($rid // "") | if length>0 then (try (.|tonumber) catch null) else null end ),
+                kind:$kind, storage_key:$key, path_hint:$path, bytes:$bytes}')
             curl -sS -m 60 -X POST \
               "${SUPABASE_URL%/}/rest/v1/artifacts" \
               -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
               -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
               -H "Content-Type: application/json" \
-              --data "$PAYLOAD" >/dev/null
+              --data "$PAYLOAD" >/dev/null || true
           fi
 
       - name: Mark job_requests done + runs done
