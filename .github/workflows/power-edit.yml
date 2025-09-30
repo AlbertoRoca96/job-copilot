@@ -1,0 +1,63 @@
+name: Power Edit (server test)
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: "User email to impersonate (for lab testing)"
+        required: true
+      title:
+        description: "Job title"
+        required: false
+      company:
+        description: "Company"
+        required: false
+      location:
+        description: "Location"
+        required: false
+      jd_text:
+        description: "Paste JD text"
+        required: true
+      resume_html_path:
+        description: "Path to local HTML snapshot to send (optional)"
+        required: false
+        default: ""
+
+jobs:
+  call-edge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (optional)
+        uses: actions/checkout@v4
+
+      - name: Read resume HTML (optional)
+        id: readhtml
+        if: ${{ inputs.resume_html_path != '' }}
+        run: |
+          echo "html<<EOF" >> $GITHUB_OUTPUT
+          cat "${{ inputs.resume_html_path }}" >> $GITHUB_OUTPUT || true
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Call Supabase Edge Function
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          EDGE_URL: ${{ secrets.SUPABASE_URL }}/functions/v1/power-tailor
+          TEST_JWT: ${{ secrets.TEST_USER_JWT }} # JWT for a test user; create via Supabase Auth -> impersonate
+        run: |
+          BODY=$(jq -n --arg t "${{ inputs.title }}" \
+                        --arg c "${{ inputs.company }}" \
+                        --arg l "${{ inputs.location }}" \
+                        --arg jd "${{ inputs.jd_text }}" \
+                        --arg rh "${{ steps.readhtml.outputs.html }}" \
+                        '{title:$t,company:$c,location:$l,jd_text:$jd,resume_html:$rh}')
+          curl -sS -X POST "$EDGE_URL" \
+            -H "Authorization: Bearer $TEST_JWT" \
+            -H "Content-Type: application/json" \
+            -d "$BODY" | tee /tmp/power-tailor.json
+
+      - name: Save result artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: power-tailor-result
+          path: /tmp/power-tailor.json
