@@ -1,64 +1,102 @@
-// docs/js/power-edit.js
-// Power Edit glue. Live scoring via scoring.js, DOCX import/export via mammoth/html-docx-js.
+// Power Edit (live) with server-side Auto-tailor.
+// - Keeps your existing local scoring UX
+// - Adds supabase.functions.invoke('power-tailor') to drop an editable block
+// - Undo / Clear support
 
 import { scoreJob, explainGaps, tokenize, tokensFromTerms } from './scoring.js';
 
 const $ = (id) => document.getElementById(id);
-const state = { profile: {}, job: {}, selRange: null };
 
+// Supabase client (auth session is reused from your login page)
+let supabase = null;
+async function ensureSupabase() {
+  if (supabase) return supabase;
+  if (!window.supabase?.createClient) {
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = "https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js";
+      s.defer = true; s.onload = resolve; s.onerror = reject; document.head.appendChild(s);
+    });
+  }
+  supabase = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+  return supabase;
+}
+
+/* ---------- DOM refs ---------- */
+const editor        = $('editor');
+const fileInput     = $('docx_file');
+const btnExport     = $('btn_export_docx');
+const btnPrint      = $('btn_print_pdf');
+
+const scoreline     = $('scoreline');
+const gapsEl        = $('gaps');
+const coverageEl    = $('coverage');
+const suggEl        = $('suggestions');
+
+const jobTitle      = $('job_title');
+const jobCompany    = $('job_company');
+const jobLocation   = $('job_location');
+const jobDesc       = $('job_desc');
+const profileBox    = $('profile_json');
+
+// NEW buttons
+const btnAutoServer = $('btn_auto_server');
+const btnUndo       = $('btn_undo_auto');
+const btnClear      = $('btn_clear_auto');
+
+/* ---------- State ---------- */
+const state = { profile: {}, job: {}, selRange: null, resumeLoaded:false };
+let lastAutoNodes = [];
+let autoNodesAll  = [];
+
+/* ---------- Helpers ---------- */
 function getJobFromUI(){
   return {
-    title: $('job_title').value || '',
-    company: $('job_company').value || '',
-    location: $('job_location').value || '',
-    description: $('job_desc').value || ''
+    title: jobTitle.value || '',
+    company: jobCompany.value || '',
+    location: jobLocation.value || '',
+    description: jobDesc.value || ''
   };
 }
-
-function getResumeHTML(){
-  return $('editor').innerHTML || '';
-}
-
-function setResumeHTML(html){
-  $('editor').innerHTML = html || '';
-  // place caret at beginning
-  const el = $('editor');
-  const range = document.createRange();
-  range.setStart(el, 0);
-  range.collapse(true);
-  const sel = window.getSelection();
-  sel.removeAllRanges();
-  sel.addRange(range);
-}
-
-function restoreSelection(){
-  if (!state.selRange) return;
-  const sel = window.getSelection();
-  sel.removeAllRanges();
-  sel.addRange(state.selRange);
-}
-
+function getResumeHTML(){ return editor.innerHTML || ''; }
+function setResumeHTML(html){ editor.innerHTML = html || ''; }
 function rememberSelection(){
   const sel = window.getSelection();
   if (sel && sel.rangeCount) state.selRange = sel.getRangeAt(0);
 }
-
+function restoreSelection(){
+  if (!state.selRange) return;
+  const sel = window.getSelection();
+  sel.removeAllRanges(); sel.addRange(state.selRange);
+}
 function sanitize(html){
-  // super-light sanitizer (we only allow a subset)
   const div = document.createElement('div');
   div.innerHTML = html;
   div.querySelectorAll('script,style,iframe,object').forEach(n=>n.remove());
   return div.innerHTML;
 }
+function insertAtCursor(htmlFrag){
+  editor.focus();
+  const range = state.selRange || document.createRange();
+  if (!state.selRange) {
+    range.selectNodeContents(editor);
+    range.collapse(false);
+  }
+  const template = document.createElement('template');
+  template.innerHTML = htmlFrag.trim();
+  const node = template.content.cloneNode(true);
+  range.insertNode(node);
+}
 
+/* ---------- Scoring & coverage (same vibe as before) ---------- */
 function render(){
   try{
     state.job = getJobFromUI();
     const s = scoreJob(state.job, state.profile);
-    $('scoreline').textContent = `Score: ${s.toFixed(4)}`;
+    scoreline.textContent = `Score: ${s.toFixed(4)}`;
 
     const gaps = explainGaps(state.job, state.profile);
-    $('gaps').innerHTML = `
+    gapsEl.innerHTML = `
       <div>Location OK: <strong>${gaps.location_ok ? "Yes" : "No"}</strong></div>
       <div>Missing must-haves: ${
         gaps.missing_must_haves.map(k=>`<span class="k miss">${k}</span>`).join(" ") || "<em>none</em>"
@@ -68,99 +106,162 @@ function render(){
       }</div>
     `;
 
-    // Suggestions: derive from missing skills + simple quantified templates.
-    const sugg = [];
-    for (const m of gaps.missing_skills.slice(0, 10)){
-      const nice = m.replace(/[-_]/g, ' ');
-      sugg.push(`• Implemented ${nice} to improve <impact metric> by <X%/value>.`);
-      sugg.push(`• Built ${nice} workflows that reduced <time/cost> by <X%> across <team/project>.`);
-      sugg.push(`• Used ${nice} to deliver <project/result>, meeting <KPI> within <time/cost> constraints.`);
-    }
-    $('suggestions').innerHTML = sugg.map(txt=>`<div class="suggestion" data-txt="${encodeURIComponent(txt)}">${txt}</div>`).join("");
-
-    // Coverage chips
     const jobToks = [...tokenize(`${state.job.title} ${state.job.description}`)];
     const skills = [...tokensFromTerms(state.profile.skills || [])];
-    $('coverage').innerHTML = `
+    coverageEl.innerHTML = `
       <div>Job tokens (${jobToks.length}): ${jobToks.slice(0,120).map(k=>`<span class="k">${k}</span>`).join(" ")}</div>
       <div>Profile skills (${skills.length}): ${skills.map(k=>`<span class="k">${k}</span>`).join(" ")}</div>
     `;
   }catch(e){
-    $('scoreline').textContent = `Score: error`;
-    $('gaps').textContent = e.message;
+    scoreline.textContent = `Score: error`;
+    gapsEl.textContent = e.message;
   }
 }
 
-/* Event wiring */
-for (const id of ["job_title","job_company","job_location","job_desc","profile_json"]){
-  document.addEventListener("input", (ev)=>{ if (ev.target && ev.target.id===id) {
-    if (id === "profile_json"){
-      try { state.profile = JSON.parse($('profile_json').value || "{}"); } catch(_){ state.profile = {}; }
-    }
-    render();
-  }});
+/* ---------- Suggestions (local) ---------- */
+function rebuildSuggestions(){
+  const gaps = explainGaps(getJobFromUI(), state.profile);
+  const sugg = [];
+  for (const m of gaps.missing_skills.slice(0, 10)){
+    const nice = m.replace(/[-_]/g, ' ');
+    sugg.push(`• Implemented ${nice} to improve <metric> by [X%].`);
+    sugg.push(`• Built ${nice} workflow reducing <time/cost> by [X%].`);
+    sugg.push(`• Used ${nice} to deliver <result>, meeting <KPI>.`);
+  }
+  suggEl.innerHTML = sugg.map(txt=>`<div class="suggestion" data-txt="${encodeURIComponent(txt)}">${txt}</div>`).join("");
 }
-
-$('editor').addEventListener('keyup', render);
-$('editor').addEventListener('mouseup', rememberSelection);
-$('editor').addEventListener('keyup', rememberSelection);
-$('editor').addEventListener('blur', rememberSelection);
-
 document.addEventListener("click", (ev)=>{
   const n = ev.target.closest('.suggestion');
   if (n){
     const txt = decodeURIComponent(n.getAttribute('data-txt') || '');
     rememberSelection();
-    $('editor').focus();
-    restoreSelection();
-    document.execCommand('insertText', false, `\n${txt}\n`);
+    insertAtCursor(`<div>${txt}</div>`);
     render();
   }
 });
 
-/* DOCX import */
-async function loadDocx(file){
-  const arrayBuffer = await file.arrayBuffer();
-  const { value: html } = await window.mammoth.convertToHtml({ arrayBuffer });
+/* ---------- DOCX import / export / print ---------- */
+fileInput.addEventListener('change', async (e)=>{
+  const f = e.target.files?.[0]; if (!f) return;
+  const buf = await f.arrayBuffer();
+  const { value: html } = await window.mammoth.convertToHtml({ arrayBuffer: buf });
   setResumeHTML(sanitize(html));
-  render();
-}
-
-$('docx_file').addEventListener('change', async (e)=>{
-  const f = e.target.files?.[0];
-  if (f) await loadDocx(f);
+  state.resumeLoaded = true;
+  enableButtons();
+  render(); rebuildSuggestions();
 });
-
-/* DOCX export */
-$('btn_export_docx').addEventListener('click', ()=>{
-  const html = `
-    <!doctype html><html><head><meta charset="utf-8"></head>
-    <body>${getResumeHTML()}</body></html>`;
+btnExport.addEventListener('click', ()=>{
+  const html = `<!doctype html><html><head><meta charset="utf-8"></head><body>${getResumeHTML()}</body></html>`;
   const blob = window.htmlDocx.asBlob(html);
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'resume-edited.docx';
-  a.click();
-  URL.revokeObjectURL(a.href);
+  a.click(); URL.revokeObjectURL(a.href);
 });
+btnPrint.addEventListener('click', ()=> window.print());
 
-/* Print / Save as PDF */
-$('btn_print_pdf').addEventListener('click', ()=>{ window.print(); });
+/* ---------- Auto-tailor (server) ---------- */
+async function callServer() {
+  await ensureSupabase();
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) { alert("Sign in first on the Profile page."); return null; }
 
-/* Attempt to auto-load profile */
+  const body = {
+    title: jobTitle.value || '',
+    company: jobCompany.value || '',
+    location: jobLocation.value || '',
+    jd_text: jobDesc.value || '',
+    resume_html: getResumeHTML(),
+    profile_json: (()=>{
+      try { return JSON.parse(profileBox.value || "{}"); } catch { return {}; }
+    })()
+  };
+
+  const { data, error } = await supabase.functions.invoke('power-tailor', { body });
+  if (error) { throw new Error(error.message || 'invoke failed'); }
+  return data?.result || null;
+}
+
+async function autoTailorServer() {
+  btnAutoServer.disabled = true;
+  try {
+    const result = await callServer();
+    if (!result?.block_html) throw new Error('No block returned');
+
+    lastAutoNodes = [];
+    const beforeCount = editor.childNodes.length;
+
+    rememberSelection();
+    insertAtCursor(result.block_html);
+
+    // collect nodes inserted (best-effort)
+    const afterCount = editor.childNodes.length;
+    for (let i = beforeCount; i < afterCount; i++) {
+      const node = editor.childNodes[i];
+      lastAutoNodes.push(node);
+      autoNodesAll.push(node);
+    }
+    render(); rebuildSuggestions();
+  } catch (e) {
+    alert('Auto-tailor failed: ' + String(e.message || e));
+  } finally {
+    enableButtons();
+  }
+}
+btnAutoServer.addEventListener('click', autoTailorServer);
+
+function undoAuto() {
+  lastAutoNodes.forEach(n => n.remove());
+  autoNodesAll = autoNodesAll.filter(n => !lastAutoNodes.includes(n));
+  lastAutoNodes = [];
+  enableButtons();
+  render();
+}
+function clearAuto() {
+  editor.querySelectorAll('.auto-insert').forEach(n => n.remove());
+  lastAutoNodes = [];
+  autoNodesAll = [];
+  enableButtons();
+  render();
+}
+btnUndo.addEventListener('click', undoAuto);
+btnClear.addEventListener('click', clearAuto);
+
+function enableButtons() {
+  const ok = state.resumeLoaded && (jobDesc.value.trim().length > 20);
+  btnAutoServer.disabled = !ok;
+  btnUndo.disabled = lastAutoNodes.length === 0;
+  btnClear.disabled = autoNodesAll.length === 0;
+}
+
+/* ---------- Live inputs ---------- */
+for (const id of ["job_title","job_company","job_location","job_desc","profile_json"]){
+  document.addEventListener("input", (ev)=>{ if (ev.target && ev.target.id===id) {
+    if (id === "profile_json"){
+      try { state.profile = JSON.parse(profileBox.value || "{}"); } catch(_){ state.profile = {}; }
+    }
+    render(); rebuildSuggestions(); enableButtons();
+  }});
+}
+editor.addEventListener('keyup', ()=>{ render(); rebuildSuggestions(); rememberSelection(); });
+editor.addEventListener('mouseup', rememberSelection);
+editor.addEventListener('blur', rememberSelection);
+
+/* ---------- Optional: auto-load profile JSON ---------- */
 async function tryLoadProfile(){
   try{
     const r = await fetch('./data/profile.json', { cache: 'no-store' });
     if (r.ok){
       const j = await r.json();
-      $('profile_json').value = JSON.stringify(j||{}, null, 2);
+      if (!profileBox.value.trim()) profileBox.value = JSON.stringify(j||{}, null, 2);
       state.profile = j||{};
     }
-  }catch(_){ /* noop */ }
+  }catch(_){/* noop */}
 }
 
-/* Init */
+/* ---------- Init ---------- */
 window.addEventListener('DOMContentLoaded', async ()=>{
+  await ensureSupabase();
   await tryLoadProfile();
-  render();
+  render(); rebuildSuggestions(); enableButtons();
 });
