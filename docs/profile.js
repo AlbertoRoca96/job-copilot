@@ -111,6 +111,10 @@
   profBox.classList.remove("hidden");
   onboard.classList.remove("hidden");
 
+  // NEW: Hide the sign-in notice and reveal the JobScan card (Match Report)
+  if (signinOnly) signinOnly.classList.add("hidden");
+  document.getElementById("matchCard")?.classList.remove("hidden");
+
   // ---------- load profile ----------
   const { data: prof, error: profErr } = await supabase.from("profiles").select("*").eq("id", user.id).single();
 
