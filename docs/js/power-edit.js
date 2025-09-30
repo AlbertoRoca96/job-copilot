@@ -1,12 +1,12 @@
 // Power Edit live scoring + server Auto-tailor + profile autoload (Supabase).
-// Hides scoring/gaps/suggestions until a JD is pasted, and gates Auto-tailor
-// until both a resume is loaded and JD is present. Also waits for Mammoth.
+// Quiet until a JD is present. Auto-tailor enables when JD present AND
+// you either uploaded a .docx OR the editor already contains enough text.
 
 import { scoreJob, explainGaps, tokenize, tokensFromTerms } from './scoring.js?v=2025-10-01-1';
 
 const $ = (id) => document.getElementById(id);
 
-// Supabase client
+// Supabase
 let supabase = null;
 async function ensureSupabase() {
   if (supabase) return supabase;
@@ -21,11 +21,11 @@ async function ensureSupabase() {
   return supabase;
 }
 
-// Wait for Mammoth (DOCX -> HTML) in case user picks a file before it's loaded
+// Wait for Mammoth (DOCX -> HTML)
 async function ensureMammoth(timeoutMs = 6000) {
-  const start = Date.now();
+  const t0 = Date.now();
   while (!window.mammoth) {
-    if (Date.now() - start > timeoutMs) throw new Error('DOCX converter not loaded yet');
+    if (Date.now() - t0 > timeoutMs) throw new Error('DOCX converter not loaded yet');
     await new Promise(r => setTimeout(r, 50));
   }
   return window.mammoth;
@@ -93,12 +93,15 @@ function insertAtCursor(htmlFrag){
   range.insertNode(node);
 }
 function jdReady() {
-  // treat JD as "present" once there are enough tokens or characters
   const t = tokenize(`${jobTitle.value || ''} ${jobDesc.value || ''}`);
   return (jobDesc.value || '').trim().length >= 20 || t.length >= 10;
 }
+function hasResume() {
+  const textLen = (editor.textContent || '').trim().length;
+  return state.resumeLoaded || textLen >= 50; // pasted/typed resume counts too
+}
 
-/* ---------- Scoring & coverage (quiet until JD present) ---------- */
+/* ---------- Scoring & coverage ---------- */
 function render(){
   try{
     state.job = getJobFromUI();
@@ -140,7 +143,7 @@ function render(){
   }
 }
 
-/* ---------- Suggestions (only after JD present) ---------- */
+/* ---------- Suggestions ---------- */
 function rebuildSuggestions(){
   if (!jdReady()) {
     suggEl.innerHTML = '<span class="small muted">Suggestions appear after you paste a JD.</span>';
@@ -257,7 +260,7 @@ btnUndo.addEventListener('click', undoAuto);
 btnClear.addEventListener('click', clearAuto);
 
 function enableButtons() {
-  const ok = state.resumeLoaded && jdReady();
+  const ok = hasResume() && jdReady();
   btnAutoServer.disabled = !ok;
   btnUndo.disabled = lastAutoNodes.length === 0;
   btnClear.disabled = autoNodesAll.length === 0;
@@ -272,11 +275,13 @@ for (const id of ["job_title","job_company","job_location","job_desc","profile_j
     render(); rebuildSuggestions(); enableButtons();
   }});
 }
+// treat typed/pasted resume as a loaded resume too
+editor.addEventListener('input', ()=>{ if ((editor.textContent||'').trim().length >= 50) state.resumeLoaded = true; enableButtons(); });
 editor.addEventListener('keyup', ()=>{ render(); rebuildSuggestions(); rememberSelection(); });
 editor.addEventListener('mouseup', rememberSelection);
 editor.addEventListener('blur', rememberSelection);
 
-/* ---------- Load saved profile into the textarea (signed-in user) ---------- */
+/* ---------- Load profile into textarea ---------- */
 async function loadUserProfileFromSupabase() {
   try {
     await ensureSupabase();
@@ -289,7 +294,7 @@ async function loadUserProfileFromSupabase() {
     const json = {
       skills: data.skills || [],
       target_titles: data.target_titles || [],
-      must_haves: data.must_haves || [],   // ok if column absent—stays []
+      must_haves: data.must_haves || [],
       location_policy: data.search_policy || {}
     };
 
@@ -298,8 +303,6 @@ async function loadUserProfileFromSupabase() {
     return true;
   } catch { return false; }
 }
-
-/* ---------- Fallback: docs/data/profile.json ---------- */
 async function tryLoadProfileFile(){
   try{
     const r = await fetch('./data/profile.json', { cache: 'no-store' });
@@ -310,7 +313,7 @@ async function tryLoadProfileFile(){
         state.profile = j||{};
       }
     }
-  }catch(_){/* noop */}
+  }catch(_){}
 }
 
 /* ---------- Init ---------- */
