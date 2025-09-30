@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Power Edit (Resume)</title>
   <link rel="stylesheet" href="https://unpkg.com/@picocss/pico@2/css/pico.min.css">
-  <link rel="icon" href="data:,"><!-- stop 404 favicon -->
+  <link rel="icon" href="data:,"><!-- avoid favicon 404 -->
   <style>
     :root { --pane-bg:#fff; --chip:#eef; --miss:#ffeaea; --hit:#eaffea; }
     body.container { max-width: 1200px; }
@@ -30,13 +30,10 @@
 
   <article class="toolbar">
     <input id="docx_file" type="file" accept=".docx"/>
-    <button id="btn_export_docx" class="secondary" title="Export your edited HTML to .docx">Export .docx</button>
+    <button id="btn_export_docx" class="secondary">Export .docx</button>
     <button id="btn_print_pdf" class="secondary">Print / Save as PDF</button>
 
-    <!-- Server-side insert -->
-    <button id="btn_auto_server" class="contrast" title="Enabled after you load a resume and paste a job description" disabled>
-      Auto-tailor (server)
-    </button>
+    <button id="btn_auto_server" class="contrast" title="Enabled after resume + JD" disabled>Auto-tailor (server)</button>
     <button id="btn_undo_auto" class="secondary" disabled>Undo</button>
     <button id="btn_clear_auto" class="secondary" disabled>Clear inserts</button>
 
@@ -60,7 +57,7 @@
 
       <h4>Your Resume (editable)</h4>
       <div id="editor" contenteditable="true" spellcheck="true"></div>
-      <p class="small">Paste a JD and load a resume to enable scoring and Auto-tailor. Suggestions appear once a JD is present. Undo/Clear supported.</p>
+      <p class="small">Paste a JD and load or paste your resume to enable scoring and Auto-tailor. Suggestions appear once a JD is present. Undo/Clear supported.</p>
     </article>
 
     <article class="right-rail">
@@ -74,19 +71,20 @@
     </article>
   </div>
 
-  <!-- Supabase (auth + invoke) -->
+  <!-- Supabase config -->
   <script>
     window.SUPABASE_URL = "https://imozfqawxpsasjdmgdkh.supabase.co";
     window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc";
   </script>
   <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 
-  <!-- Mammoth for DOCX->HTML -->
-  <script defer src="https://mammothjs.github.io/mammoth.js/dist/mammoth.browser.min.js"></script>
-  <!-- html-docx-js for HTML->DOCX -->
+  <!-- DOCX -> HTML (good CDN) -->
+  <script defer src="https://unpkg.com/mammoth@1.5.1/mammoth.browser.min.js"></script>
+  <!-- or: https://cdn.jsdelivr.net/npm/mammoth@1.5.1/mammoth.browser.min.js -->
+  <!-- HTML -> DOCX -->
   <script defer src="https://cdn.jsdelivr.net/gh/evidenceprime/html-docx-js/dist/html-docx.js"></script>
 
   <!-- App -->
-  <script type="module" src="./js/power-edit.js?v=2025-10-01-1"></script>
+  <script type="module" src="./js/power-edit.js?v=2025-10-01-2"></script>
 </body>
 </html>
