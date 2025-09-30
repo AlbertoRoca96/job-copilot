@@ -132,6 +132,22 @@
       </div>
     </section>
 
+    <!-- NEW: Power Edit card -->
+    <section class="card hidden" id="powerEditCard" style="margin-top:16px">
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <h2 style="margin:0 0 6px 0;">Power Edit (resume)</h2>
+          <p class="muted" style="margin:0">
+            Upload your .docx and paste a job description to get live score, gaps, coverage, and suggested inserts.
+            Opens in a new tab.
+          </p>
+        </div>
+        <div>
+          <a class="btn" href="power-edit.html" target="_blank" rel="noopener" aria-label="Open Power Edit in a new tab">Open Power Edit</a>
+        </div>
+      </div>
+    </section>
+
     <!-- Shortlist -->
     <section id="shortlist" class="card hidden" style="margin-top:16px">
       <h2>Your shortlist</h2>
@@ -173,15 +189,14 @@
   </script>
   <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
   <!-- IMPORTANT: absolute path for GitHub Pages project sites -->
-  <script defer src="/job-copilot/profile.js?v=2025-09-30-1"></script>
+  <script defer src="/job-copilot/profile.js?v=2025-09-30-2"></script>
   <script>
-    // Show the Match Report card once the user is signed in (profile.js sets the auth gate),
-    // but do a defensive reveal here as well in case of async timing.
+    // Defensive reveal in case of async timing; profile.js does the real gating
     window.addEventListener('load', () => {
-      const matchCard = document.getElementById('matchCard');
-      const signinOnly = document.getElementById('signinOnly');
-      if (matchCard && signinOnly && signinOnly.classList.contains('hidden')) {
-        matchCard.classList.remove('hidden');
+      const signedIn = document.getElementById('signinOnly')?.classList.contains('hidden');
+      if (signedIn) {
+        document.getElementById('matchCard')?.classList.remove('hidden');
+        document.getElementById('powerEditCard')?.classList.remove('hidden');
       }
     });
   </script>
