@@ -5,13 +5,14 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Power Edit (Resume)</title>
   <link rel="stylesheet" href="https://unpkg.com/@picocss/pico@2/css/pico.min.css">
+  <link rel="icon" href="data:,"><!-- stop 404 favicon -->
   <style>
     :root { --pane-bg:#fff; --chip:#eef; --miss:#ffeaea; --hit:#eaffea; }
     body.container { max-width: 1200px; }
     .grid { display:grid; grid-template-columns: 1fr 1fr; gap:1rem; }
     #editor { border:1px solid #ddd; background:var(--pane-bg); min-height:60vh; padding:1rem; border-radius:8px; }
     #editor[contenteditable="true"]:focus { outline: 2px solid #bde; }
-    .controls .k { display:inline-block; padding:.25rem .5rem; border:1px solid #ccd; border-radius:999px; background:var(--chip); margin:.1rem; }
+    .k { display:inline-block; padding:.25rem .5rem; border:1px solid #ccd; border-radius:999px; background:var(--chip); margin:.1rem; }
     .miss { background:var(--miss) !important; border-color:#f6c2c2 !important; }
     .hit  { background:var(--hit)  !important; border-color:#b7f7b7 !important; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
@@ -29,11 +30,13 @@
 
   <article class="toolbar">
     <input id="docx_file" type="file" accept=".docx"/>
-    <button id="btn_export_docx" class="secondary">Export .docx</button>
+    <button id="btn_export_docx" class="secondary" title="Export your edited HTML to .docx">Export .docx</button>
     <button id="btn_print_pdf" class="secondary">Print / Save as PDF</button>
 
-    <!-- NEW: server-side -->
-    <button id="btn_auto_server" class="contrast" aria-label="Auto-tailor via Edge Function" disabled>Auto-tailor (server)</button>
+    <!-- Server-side insert -->
+    <button id="btn_auto_server" class="contrast" title="Enabled after you load a resume and paste a job description" disabled>
+      Auto-tailor (server)
+    </button>
     <button id="btn_undo_auto" class="secondary" disabled>Undo</button>
     <button id="btn_clear_auto" class="secondary" disabled>Clear inserts</button>
 
@@ -57,17 +60,17 @@
 
       <h4>Your Resume (editable)</h4>
       <div id="editor" contenteditable="true" spellcheck="true"></div>
-      <p class="small">Edit freely. Live score updates as you type. Click suggestions to insert—or use <strong>Auto-tailor (server)</strong> to drop in a curated block you can edit. Undo/Clear supported.</p>
+      <p class="small">Paste a JD and load a resume to enable scoring and Auto-tailor. Suggestions appear once a JD is present. Undo/Clear supported.</p>
     </article>
 
     <article class="right-rail">
       <h4>Gaps & Coverage</h4>
-      <div id="gaps"></div>
+      <div id="gaps" class="small muted">Paste a job description to see gaps.</div>
       <h5>Suggest inserts (click to add at cursor)</h5>
-      <div id="suggestions"></div>
+      <div id="suggestions" class="small muted">Suggestions appear after you paste a JD.</div>
       <hr/>
       <h5>Keyword coverage</h5>
-      <div id="coverage"></div>
+      <div id="coverage" class="small muted">Shown after JD is pasted.</div>
     </article>
   </div>
 
@@ -79,11 +82,11 @@
   <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 
   <!-- Mammoth for DOCX->HTML -->
-  <script src="https://mammothjs.github.io/mammoth.js/dist/mammoth.browser.min.js" defer></script>
+  <script defer src="https://mammothjs.github.io/mammoth.js/dist/mammoth.browser.min.js"></script>
   <!-- html-docx-js for HTML->DOCX -->
-  <script src="https://cdn.jsdelivr.net/gh/evidenceprime/html-docx-js/dist/html-docx.js" defer></script>
+  <script defer src="https://cdn.jsdelivr.net/gh/evidenceprime/html-docx-js/dist/html-docx.js"></script>
 
   <!-- App -->
-  <script type="module" src="./js/power-edit.js?v=2025-09-30-4"></script>
+  <script type="module" src="./js/power-edit.js?v=2025-10-01-1"></script>
 </body>
 </html>
