@@ -21,6 +21,7 @@
     .suggestion { border:1px dashed #ccd; padding:.5rem; border-radius:8px; margin:.25rem 0; cursor:pointer; }
     .suggestion:hover { background:#f7f7ff; }
     .small { font-size:.875rem; color:#555; }
+    .auto-insert { background:#f4fff4; outline:1px dashed #8fd48f; border-radius:6px; }
   </style>
 </head>
 <body class="container">
@@ -30,7 +31,13 @@
     <input id="docx_file" type="file" accept=".docx"/>
     <button id="btn_export_docx" class="secondary">Export .docx</button>
     <button id="btn_print_pdf" class="secondary">Print / Save as PDF</button>
-    <span class="mono" id="scoreline">Score: —</span>
+
+    <!-- NEW: server-side -->
+    <button id="btn_auto_server" class="contrast" aria-label="Auto-tailor via Edge Function" disabled>Auto-tailor (server)</button>
+    <button id="btn_undo_auto" class="secondary" disabled>Undo</button>
+    <button id="btn_clear_auto" class="secondary" disabled>Clear inserts</button>
+
+    <span class="mono" id="scoreline" style="margin-left:auto">Score: —</span>
   </article>
 
   <div class="grid">
@@ -50,7 +57,7 @@
 
       <h4>Your Resume (editable)</h4>
       <div id="editor" contenteditable="true" spellcheck="true"></div>
-      <p class="small">Tip: Edit freely. The score and gap chips update as you type. Use the suggestions on the right to insert quantified bullets without hallucinating.</p>
+      <p class="small">Edit freely. Live score updates as you type. Click suggestions to insert—or use <strong>Auto-tailor (server)</strong> to drop in a curated block you can edit. Undo/Clear supported.</p>
     </article>
 
     <article class="right-rail">
@@ -64,11 +71,18 @@
     </article>
   </div>
 
+  <!-- Supabase (auth + invoke) -->
+  <script>
+    window.SUPABASE_URL = "https://imozfqawxpsasjdmgdkh.supabase.co";
+    window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc";
+  </script>
+  <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+
   <!-- Mammoth for DOCX->HTML -->
   <script src="https://mammothjs.github.io/mammoth.js/dist/mammoth.browser.min.js" defer></script>
   <!-- html-docx-js for HTML->DOCX -->
   <script src="https://cdn.jsdelivr.net/gh/evidenceprime/html-docx-js/dist/html-docx.js" defer></script>
   <!-- App -->
-  <script type="module" src="./js/power-edit.js"></script>
+  <script type="module" src="./js/power-edit.js?v=2025-09-30-2"></script>
 </body>
 </html>
