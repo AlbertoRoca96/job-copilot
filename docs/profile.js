@@ -1,4 +1,4 @@
-// docs/profile.js — auth + profile + shortlist + drafting + JD-aware preview cards only
+// docs/profile.js — auth + profile + shortlist + drafting + JD-aware preview cards
 // Uses supabase.functions.invoke(...) for request-run / request-draft (cleaner & fully auth'ed).
 
 (async function () {
@@ -111,12 +111,14 @@
   profBox.classList.remove("hidden");
   onboard.classList.remove("hidden");
 
-  // NEW: Hide the sign-in notice and reveal the JobScan card (Match Report)
+  // Hide the sign-in notice and reveal JobScan cards (Match Report + Power Edit)
   if (signinOnly) signinOnly.classList.add("hidden");
   document.getElementById("matchCard")?.classList.remove("hidden");
+  document.getElementById("powerEditCard")?.classList.remove("hidden");
 
   // ---------- load profile ----------
-  const { data: prof, error: profErr } = await supabase.from("profiles").select("*").eq("id", user.id).single();
+  const { data: prof, error: profErr } = await supabase
+    .from("profiles").select("*").eq("id", user.id).single();
 
   if (!profErr && prof) {
     $("full_name").textContent = prof?.full_name || "—";
@@ -158,7 +160,8 @@
       return;
     }
 
-    const { error: metaErr } = await supabase.from("resumes").insert({ user_id: user.id, bucket: "resumes", path });
+    const { error: metaErr } = await supabase
+      .from("resumes").insert({ user_id: user.id, bucket: "resumes", path });
     if (metaErr) {
       upMsg.textContent = "Upload metadata error: " + metaErr.message;
       return;
@@ -177,7 +180,10 @@
     try {
       const titles = (titlesInput.value || "").split(",").map((s) => s.trim()).filter(Boolean);
       const locs = (locsInput.value || "").split(",").map((s) => s.trim()).filter(Boolean);
-      const { error } = await supabase.from("profiles").update({ target_titles: titles, locations: locs }).eq("id", user.id);
+      const { error } = await supabase
+        .from("profiles")
+        .update({ target_titles: titles, locations: locs })
+        .eq("id", user.id);
       if (error) throw error;
     } catch (e) {
       runMsg.textContent = "Save failed: " + String(e.message || e);
@@ -305,7 +311,7 @@
     const after = String(it.modified_paragraph_text || "");
     const added = String(it.inserted_sentence || "");
     const sec = String(it.anchor_section || "");
-    const anchor = String(it.anchor || "");
+       const anchor = String(it.anchor || "");
     const reason = String(it.reason || "");
 
     const afterHTML = esc(after).replace(
@@ -396,7 +402,10 @@
         const resumeUrl = resumeRel ? await sign("outputs", `${u.id}/${resumeRel}`, 60) : null;
         const jdUrl = await sign("outputs", `${u.id}/${jdTextRel}`, 60);
 
-        const [coverMd, jdTxt] = await Promise.all([coverUrl ? fetchText(coverUrl) : "", jdUrl ? fetchText(jdUrl) : ""]);
+        const [coverMd, jdTxt] = await Promise.all([
+          coverUrl ? fetchText(coverUrl) : "",
+          jdUrl ? fetchText(jdUrl) : "",
+        ]);
 
         const themes = (change.cover_meta?.company_themes || []).slice(0, 6);
 
