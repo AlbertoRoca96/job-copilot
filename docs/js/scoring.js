@@ -1,9 +1,18 @@
 // docs/js/scoring.js
-// Lightweight, deterministic scoring helpers used by Match Report & Power Edit.
+// Deterministic scoring helpers used by Match Report & Power Edit.
 // Exports: scoreJob, explainGaps, tokenize, tokensFromTerms.
 
+/** Canonicalize common multi-word/variant tech terms before tokenizing. */
+function precanon(str = "") {
+  return String(str).replace(/\b(hugging)\s+(face)\b/gi, "huggingface")
+                    .replace(/\b(github)\s+(actions?)\b/gi, "githubactions")
+                    .replace(/\b(react)\s+(native)\b/gi, "reactnative")
+                    .replace(/\b(service)\s+(worker)\b/gi, "serviceworker")
+                    .replace(/\b(full)\s*[-\s]?(stack)\b/gi, "fullstack");
+}
+
 export function tokenize(str = "") {
-  return String(str)
+  return precanon(str)
     .toLowerCase()
     .replace(/[\/]/g, " ")
     .match(/[a-z][a-z0-9+.-]{1,}/g) || [];
@@ -11,10 +20,13 @@ export function tokenize(str = "") {
 
 export function tokensFromTerms(arr = []) {
   const out = new Set();
-  for (const t of arr) tokenize(String(t)).forEach(x => {
-    out.add(x);
-    if (x.includes("-")) out.add(x.replaceAll("-", "")); // front-end -> frontend
-  });
+  for (const t of arr) {
+    const canon = precanon(String(t));
+    tokenize(canon).forEach(x => {
+      out.add(x);
+      if (x.includes("-")) out.add(x.replaceAll("-", "")); // front-end -> frontend
+    });
+  }
   return Array.from(out);
 }
 
