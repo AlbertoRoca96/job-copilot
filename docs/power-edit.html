@@ -23,6 +23,7 @@
     .suggestion:hover { background:#f7f7ff; }
     .small { font-size:.875rem; color:#555; }
     .auto-insert { background:#f4fff4; outline:1px dashed #8fd48f; border-radius:6px; }
+    #auto_hint { white-space:nowrap; }
   </style>
 </head>
 <body class="container">
@@ -36,6 +37,9 @@
     <button id="btn_auto_server" class="contrast" title="Enabled after resume + JD" disabled>Auto-tailor (server)</button>
     <button id="btn_undo_auto" class="secondary" disabled>Undo</button>
     <button id="btn_clear_auto" class="secondary" disabled>Clear inserts</button>
+
+    <!-- Tiny helper: shows why the purple button is disabled -->
+    <span id="auto_hint" class="small muted" style="margin-left:6px;"></span>
 
     <span class="mono" id="scoreline" style="margin-left:auto">Score: —</span>
   </article>
@@ -78,13 +82,12 @@
   </script>
   <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 
-  <!-- DOCX -> HTML (good CDN) -->
+  <!-- DOCX -> HTML (browser) -->
   <script defer src="https://unpkg.com/mammoth@1.5.1/mammoth.browser.min.js"></script>
-  <!-- or: https://cdn.jsdelivr.net/npm/mammoth@1.5.1/mammoth.browser.min.js -->
   <!-- HTML -> DOCX -->
   <script defer src="https://cdn.jsdelivr.net/gh/evidenceprime/html-docx-js/dist/html-docx.js"></script>
 
   <!-- App -->
-  <script type="module" src="./js/power-edit.js?v=2025-10-01-2"></script>
+  <script type="module" src="./js/power-edit.js?v=2025-10-01-3"></script>
 </body>
 </html>
