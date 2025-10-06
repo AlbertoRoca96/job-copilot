@@ -2,7 +2,7 @@
 // Quiet until a JD is present. Auto-tailor enables when JD present AND
 // you either uploaded a .docx OR the editor already contains enough text.
 
-import { scoreJob, explainGaps, tokenize, tokensFromTerms } from './scoring.js?v=2025-10-01-1';
+import { scoreJob, explainGaps, tokenize, tokensFromTerms } from './scoring.js?v=2025-10-01-3';
 
 const $ = (id) => document.getElementById(id);
 
@@ -51,6 +51,7 @@ const profileBox    = $('profile_json');
 const btnAutoServer = $('btn_auto_server');
 const btnUndo       = $('btn_undo_auto');
 const btnClear      = $('btn_clear_auto');
+const autoHint      = $('auto_hint');
 
 /* ---------- State ---------- */
 const state = { profile: {}, job: {}, selRange: null, resumeLoaded:false };
@@ -143,7 +144,7 @@ function render(){
   }
 }
 
-/* ---------- Suggestions ---------- */
+/* ---------- Suggestions (placeholder patch: use [brackets]) ---------- */
 function rebuildSuggestions(){
   if (!jdReady()) {
     suggEl.innerHTML = '<span class="small muted">Suggestions appear after you paste a JD.</span>';
@@ -153,9 +154,9 @@ function rebuildSuggestions(){
   const sugg = [];
   for (const m of (gaps.missing_skills || []).slice(0, 10)){
     const nice = m.replace(/[-_]/g, ' ');
-    sugg.push(`• Implemented ${nice} to improve <metric> by [X%].`);
-    sugg.push(`• Built ${nice} workflow reducing <time/cost> by [X%].`);
-    sugg.push(`• Used ${nice} to deliver <result>, meeting <KPI>.`);
+    sugg.push(`• Implemented ${nice} to improve [metric] by [X%].`);
+    sugg.push(`• Built ${nice} workflow reducing [time/cost] by [X%].`);
+    sugg.push(`• Used ${nice} to deliver [result], meeting [KPI].`);
   }
   suggEl.innerHTML = sugg.map(txt=>`<div class="suggestion" data-txt="${encodeURIComponent(txt)}">${txt}</div>`).join("");
 }
@@ -187,7 +188,7 @@ fileInput.addEventListener('change', async (e)=>{
 btnExport.addEventListener('click', ()=>{
   if (!window.htmlDocx?.asBlob) return alert('Export library not loaded yet, try again.');
   const html = `<!doctype html><html><head><meta charset="utf-8"></head><body>${getResumeHTML()}</body></html>`;
-  const blob = window.htmlDocx.asBlob(html);
+  const blob = window.htmlDocx.asBlob(html); // per library docs, returns a Blob for download
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'resume-edited.docx';
@@ -259,11 +260,24 @@ function clearAuto() {
 btnUndo.addEventListener('click', undoAuto);
 btnClear.addEventListener('click', clearAuto);
 
+/* ---------- Tiny tooltip/helper for “why disabled” ---------- */
+function setAutoHint(reason) {
+  btnAutoServer.title = reason || 'Send to server to insert a tailored block';
+  autoHint.textContent = reason || '';
+  autoHint.style.display = reason ? 'inline' : 'none';
+}
+
 function enableButtons() {
-  const ok = hasResume() && jdReady();
+  const needs = [];
+  if (!hasResume()) needs.push('load or paste your resume');
+  if (!jdReady())  needs.push('paste a JD (≥20 chars)');
+  const ok = needs.length === 0;
+
   btnAutoServer.disabled = !ok;
   btnUndo.disabled = lastAutoNodes.length === 0;
   btnClear.disabled = autoNodesAll.length === 0;
+
+  setAutoHint(ok ? '' : `To enable: ${needs.join(' and ')}`);
 }
 
 /* ---------- Live inputs ---------- */
