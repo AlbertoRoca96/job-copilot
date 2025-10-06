@@ -1,14 +1,15 @@
 // docs/js/scoring.js
 // Deterministic scoring helpers used by Match Report & Power Edit.
-// Exports: scoreJob, explainGaps, tokenize, tokensFromTerms.
+// Exports: tokenize, tokensFromTerms, explainGaps, scoreJob, jdCoverageAgainstResume.
 
 /** Canonicalize common multi-word/variant tech terms before tokenizing. */
 function precanon(str = "") {
-  return String(str).replace(/\b(hugging)\s+(face)\b/gi, "huggingface")
-                    .replace(/\b(github)\s+(actions?)\b/gi, "githubactions")
-                    .replace(/\b(react)\s+(native)\b/gi, "reactnative")
-                    .replace(/\b(service)\s+(worker)\b/gi, "serviceworker")
-                    .replace(/\b(full)\s*[-\s]?(stack)\b/gi, "fullstack");
+  return String(str)
+    .replace(/\b(hugging)\s+(face)\b/gi, "huggingface")
+    .replace(/\b(github)\s+(actions?)\b/gi, "githubactions")
+    .replace(/\b(react)\s+(native)\b/gi, "reactnative")
+    .replace(/\b(service)\s+(worker)\b/gi, "serviceworker")
+    .replace(/\b(full)\s*[-\s]?(stack)\b/gi, "fullstack");
 }
 
 export function tokenize(str = "") {
@@ -22,7 +23,7 @@ export function tokensFromTerms(arr = []) {
   const out = new Set();
   for (const t of arr) {
     const canon = precanon(String(t));
-    tokenize(canon).forEach(x => {
+    tokenize(canon).forEach((x) => {
       out.add(x);
       if (x.includes("-")) out.add(x.replaceAll("-", "")); // front-end -> frontend
     });
@@ -30,8 +31,12 @@ export function tokensFromTerms(arr = []) {
   return Array.from(out);
 }
 
-function uniq(arr) { return Array.from(new Set(arr.filter(Boolean))); }
-function pct(n, d) { return d > 0 ? n / d : 0; }
+function uniq(arr) {
+  return Array.from(new Set(arr.filter(Boolean)));
+}
+function pct(n, d) {
+  return d > 0 ? n / d : 0;
+}
 
 function locOk(job, profile = {}) {
   const pol = profile.location_policy || {};
@@ -39,12 +44,12 @@ function locOk(job, profile = {}) {
   const loc = `${job.location || ""} ${job.description || ""}`.toLowerCase();
   if (wantRemote && !/remote|work from home|distributed/.test(loc)) return false;
 
-  const countries = (pol.allowed_countries || []).map(s => String(s).toLowerCase());
-  const states    = (pol.allowed_states    || []).map(s => String(s).toLowerCase());
+  const countries = (pol.allowed_countries || []).map((s) => String(s).toLowerCase());
+  const states = (pol.allowed_states || []).map((s) => String(s).toLowerCase());
   const allowList = countries.concat(states);
 
   if (allowList.length) {
-    const ok = allowList.some(x => loc.includes(x));
+    const ok = allowList.some((x) => loc.includes(x));
     if (!ok && wantRemote) return /united states|usa|u\.s\./.test(loc);
     return ok;
   }
@@ -56,22 +61,33 @@ export function explainGaps(job = {}, profile = {}) {
   const profSkills = tokensFromTerms(profile.skills || []);
   const musts = tokensFromTerms(profile.must_haves || []);
 
-  const missing_must_haves = musts.filter(m => !jobToks.includes(m));
-  const missing_skills = profSkills.filter(s => !jobToks.includes(s)).slice(0, 50);
+  const missing_must_haves = musts.filter((m) => !jobToks.includes(m));
+  const missing_skills = profSkills.filter((s) => !jobToks.includes(s)).slice(0, 50);
 
   return {
     location_ok: locOk(job, profile),
     missing_must_haves,
     missing_skills,
     job_tokens: jobToks,
-    profile_skills: profSkills
+    profile_skills: profSkills,
   };
+}
+
+/** JD-vs-Resume coverage (used by Power Edit suggestions/coverage UI). */
+export function jdCoverageAgainstResume(job = {}, resumeHtml = "") {
+  const jobToks = uniq(tokenize(`${job.title || ""} ${job.description || ""}`));
+  const resToks = uniq(tokenize(String(resumeHtml)));
+  const resSet = new Set(resToks);
+  const hits = jobToks.filter((t) => resSet.has(t));
+  const misses = jobToks.filter((t) => !resSet.has(t));
+  const score = jobToks.length ? hits.length / jobToks.length : 0;
+  return { hits, misses, score, job_tokens: jobToks, resume_tokens: resToks };
 }
 
 export function scoreJob(job = {}, profile = {}) {
   const g = explainGaps(job, profile);
   const prof = new Set(g.profile_skills);
-  const hits = g.job_tokens.filter(t => prof.has(t)).length;
+  const hits = g.job_tokens.filter((t) => prof.has(t)).length;
   const hitPct = pct(hits, g.job_tokens.length);
   const mustMiss = g.missing_must_haves.length;
 
