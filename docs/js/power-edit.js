@@ -2,7 +2,13 @@
 // Quiet until a JD is present. Auto-tailor enables when JD present AND
 // you either uploaded a .docx OR the editor already contains enough text.
 
-import { scoreJob, explainGaps, tokenize, tokensFromTerms } from './scoring.js?v=2025-10-01-3';
+import {
+  scoreJob,
+  explainGaps,
+  tokenize,
+  tokensFromTerms,
+  jdCoverageAgainstResume
+} from './scoring.js?v=2025-10-01-3';
 
 const $ = (id) => document.getElementById(id);
 
@@ -14,7 +20,10 @@ async function ensureSupabase() {
     await new Promise((resolve, reject) => {
       const s = document.createElement('script');
       s.src = "https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js";
-      s.defer = true; s.onload = resolve; s.onerror = reject; document.head.appendChild(s);
+      s.defer = true;
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
     });
   }
   supabase = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
@@ -26,68 +35,76 @@ async function ensureMammoth(timeoutMs = 6000) {
   const t0 = Date.now();
   while (!window.mammoth) {
     if (Date.now() - t0 > timeoutMs) throw new Error('DOCX converter not loaded yet');
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 50));
   }
   return window.mammoth;
 }
 
 /* ---------- DOM ---------- */
-const editor        = $('editor');
-const fileInput     = $('docx_file');
-const btnExport     = $('btn_export_docx');
-const btnPrint      = $('btn_print_pdf');
+const editor = $('editor');
+const fileInput = $('docx_file');
+const btnExport = $('btn_export_docx');
+const btnPrint = $('btn_print_pdf');
 
-const scoreline     = $('scoreline');
-const gapsEl        = $('gaps');
-const coverageEl    = $('coverage');
-const suggEl        = $('suggestions');
+const scoreline = $('scoreline');
+const gapsEl = $('gaps');
+const coverageEl = $('coverage');
+const suggEl = $('suggestions');
 
-const jobTitle      = $('job_title');
-const jobCompany    = $('job_company');
-const jobLocation   = $('job_location');
-const jobDesc       = $('job_desc');
-const profileBox    = $('profile_json');
+const jobTitle = $('job_title');
+const jobCompany = $('job_company');
+const jobLocation = $('job_location');
+const jobDesc = $('job_desc');
+const profileBox = $('profile_json');
 
 const btnAutoServer = $('btn_auto_server');
-const btnUndo       = $('btn_undo_auto');
-const btnClear      = $('btn_clear_auto');
-const autoHint      = $('auto_hint');
+const btnUndo = $('btn_undo_auto');
+const btnClear = $('btn_clear_auto');
+const autoHint = $('auto_hint');
 
 /* ---------- State ---------- */
-const state = { profile: {}, job: {}, selRange: null, resumeLoaded:false };
+const state = { profile: {}, job: {}, selRange: null, resumeLoaded: false };
 let lastAutoNodes = [];
-let autoNodesAll  = [];
+let autoNodesAll = [];
 
 /* ---------- Helpers ---------- */
-function getJobFromUI(){
+function getJobFromUI() {
   return {
     title: jobTitle.value || '',
     company: jobCompany.value || '',
     location: jobLocation.value || '',
-    description: jobDesc.value || ''
+    description: jobDesc.value || '',
   };
 }
-function getResumeHTML(){ return editor.innerHTML || ''; }
-function setResumeHTML(html){ editor.innerHTML = html || ''; }
-function rememberSelection(){
+function getResumeHTML() {
+  return editor.innerHTML || '';
+}
+function setResumeHTML(html) {
+  editor.innerHTML = html || '';
+}
+function rememberSelection() {
   const sel = window.getSelection();
   if (sel && sel.rangeCount) state.selRange = sel.getRangeAt(0);
 }
-function restoreSelection(){
+function restoreSelection() {
   if (!state.selRange) return;
   const sel = window.getSelection();
-  sel.removeAllRanges(); sel.addRange(state.selRange);
+  sel.removeAllRanges();
+  sel.addRange(state.selRange);
 }
-function sanitize(html){
+function sanitize(html) {
   const div = document.createElement('div');
   div.innerHTML = html;
-  div.querySelectorAll('script,style,iframe,object').forEach(n=>n.remove());
+  div.querySelectorAll('script,style,iframe,object').forEach((n) => n.remove());
   return div.innerHTML;
 }
-function insertAtCursor(htmlFrag){
+function insertAtCursor(htmlFrag) {
   editor.focus();
   const range = state.selRange || document.createRange();
-  if (!state.selRange) { range.selectNodeContents(editor); range.collapse(false); }
+  if (!state.selRange) {
+    range.selectNodeContents(editor);
+    range.collapse(false);
+  }
   const template = document.createElement('template');
   template.innerHTML = htmlFrag.trim();
   const node = template.content.cloneNode(true);
@@ -102,9 +119,21 @@ function hasResume() {
   return state.resumeLoaded || textLen >= 50; // pasted/typed resume counts too
 }
 
+/* ---------- Pretty-print a few canonical tokens ---------- */
+function pretty(t) {
+  const map = {
+    huggingface: 'Hugging Face',
+    reactnative: 'React Native',
+    serviceworker: 'Service Worker',
+    githubactions: 'GitHub Actions',
+    fullstack: 'Full-Stack',
+  };
+  return map[t] || t;
+}
+
 /* ---------- Scoring & coverage ---------- */
-function render(){
-  try{
+function render() {
+  try {
     state.job = getJobFromUI();
 
     if (!jdReady()) {
@@ -116,53 +145,59 @@ function render(){
       return;
     }
 
+    // Keep profile-based global score (location/must-haves)
     const s = scoreJob(state.job, state.profile);
     scoreline.textContent = `Score: ${s.toFixed(4)}`;
 
     const gaps = explainGaps(state.job, state.profile);
+    const coverage = jdCoverageAgainstResume(state.job, getResumeHTML());
+
     gapsEl.innerHTML = `
-      <div>Location OK: <strong>${gaps.location_ok ? "Yes" : "No"}</strong></div>
-      <div>Missing must-haves: ${
-        (gaps.missing_must_haves || []).map(k=>`<span class="k miss">${k}</span>`).join(" ") || "<em>none</em>"
+      <div>Location OK: <strong>${gaps.location_ok ? 'Yes' : 'No'}</strong></div>
+      <div>Missing must-haves (profile → JD): ${
+        (gaps.missing_must_haves || []).map((k) => `<span class="k miss">${pretty(k)}</span>`).join(' ') || '<em>none</em>'
       }</div>
-      <div>Missing skills: ${
-        (gaps.missing_skills || []).map(k=>`<span class="k miss">${k}</span>`).join(" ") || "<em>none</em>"
+      <div><strong>Uncovered JD keywords (JD → your resume):</strong> ${
+        (coverage.misses || []).map((k) => `<span class="k miss">${pretty(k)}</span>`).join(' ') || '<em>none</em>'
       }</div>
     `;
 
-    const jobToks = [...tokenize(`${state.job.title} ${state.job.description}`)];
+    const jobToks = [...coverage.job_tokens];
     const skills = [...tokensFromTerms(state.profile.skills || [])];
     coverageEl.innerHTML = `
-      <div>Job tokens (${jobToks.length}): ${jobToks.slice(0,120).map(k=>`<span class="k">${k}</span>`).join(" ")}</div>
-      <div>Profile skills (${skills.length}): ${skills.map(k=>`<span class="k">${k}</span>`).join(" ")}</div>
+      <div>JD tokens (${jobToks.length}): ${jobToks.slice(0, 120).map((k) => `<span class="k">${pretty(k)}</span>`).join(' ')}</div>
+      <div>Your resume coverage: ${(coverage.score * 100).toFixed(0)}% of JD tokens present</div>
+      <div>Profile skills (${skills.length}): ${skills.map((k) => `<span class="k">${pretty(k)}</span>`).join(' ')}</div>
     `;
 
     enableButtons();
-  }catch(e){
+  } catch (e) {
     scoreline.textContent = `Score: error`;
     gapsEl.textContent = e.message;
   }
 }
 
 /* ---------- Suggestions (placeholder patch: use [brackets]) ---------- */
-function rebuildSuggestions(){
+function rebuildSuggestions() {
   if (!jdReady()) {
     suggEl.innerHTML = '<span class="small muted">Suggestions appear after you paste a JD.</span>';
     return;
   }
-  const gaps = explainGaps(getJobFromUI(), state.profile);
+  const cov = jdCoverageAgainstResume(getJobFromUI(), getResumeHTML());
   const sugg = [];
-  for (const m of (gaps.missing_skills || []).slice(0, 10)){
-    const nice = m.replace(/[-_]/g, ' ');
+  for (const m of (cov.misses || []).slice(0, 10)) {
+    const nice = pretty(m).replace(/[-_]/g, ' ');
     sugg.push(`• Implemented ${nice} to improve [metric] by [X%].`);
     sugg.push(`• Built ${nice} workflow reducing [time/cost] by [X%].`);
     sugg.push(`• Used ${nice} to deliver [result], meeting [KPI].`);
   }
-  suggEl.innerHTML = sugg.map(txt=>`<div class="suggestion" data-txt="${encodeURIComponent(txt)}">${txt}</div>`).join("");
+  suggEl.innerHTML = sugg
+    .map((txt) => `<div class="suggestion" data-txt="${encodeURIComponent(txt)}">${txt}</div>`)
+    .join('');
 }
-document.addEventListener("click", (ev)=>{
+document.addEventListener('click', (ev) => {
   const n = ev.target.closest('.suggestion');
-  if (n){
+  if (n) {
     const txt = decodeURIComponent(n.getAttribute('data-txt') || '');
     rememberSelection();
     insertAtCursor(`<div>${txt}</div>`);
@@ -171,8 +206,9 @@ document.addEventListener("click", (ev)=>{
 });
 
 /* ---------- DOCX import / export / print ---------- */
-fileInput.addEventListener('change', async (e)=>{
-  const f = e.target.files?.[0]; if (!f) return;
+fileInput.addEventListener('change', async (e) => {
+  const f = e.target.files?.[0];
+  if (!f) return;
   try {
     await ensureMammoth();
     const buf = await f.arrayBuffer();
@@ -180,27 +216,32 @@ fileInput.addEventListener('change', async (e)=>{
     setResumeHTML(sanitize(html));
     state.resumeLoaded = true;
     enableButtons();
-    render(); rebuildSuggestions();
+    render();
+    rebuildSuggestions();
   } catch (err) {
     alert('Could not import .docx: ' + String(err?.message || err));
   }
 });
-btnExport.addEventListener('click', ()=>{
+btnExport.addEventListener('click', () => {
   if (!window.htmlDocx?.asBlob) return alert('Export library not loaded yet, try again.');
   const html = `<!doctype html><html><head><meta charset="utf-8"></head><body>${getResumeHTML()}</body></html>`;
-  const blob = window.htmlDocx.asBlob(html); // per library docs, returns a Blob for download
+  const blob = window.htmlDocx.asBlob(html); // library returns a Blob for download
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'resume-edited.docx';
-  a.click(); URL.revokeObjectURL(a.href);
+  a.click();
+  URL.revokeObjectURL(a.href);
 });
-btnPrint.addEventListener('click', ()=> window.print());
+btnPrint.addEventListener('click', () => window.print());
 
 /* ---------- Auto-tailor (server) ---------- */
 async function callServer() {
   await ensureSupabase();
   const { data: { session } } = await supabase.auth.getSession();
-  if (!session) { alert("Sign in first on the Profile page."); return null; }
+  if (!session) {
+    alert('Sign in first on the Profile page.');
+    return null;
+  }
 
   const body = {
     title: jobTitle.value || '',
@@ -208,7 +249,13 @@ async function callServer() {
     location: jobLocation.value || '',
     jd_text: jobDesc.value || '',
     resume_html: getResumeHTML(),
-    profile_json: (()=>{ try { return JSON.parse(profileBox.value || "{}"); } catch { return {}; } })()
+    profile_json: (() => {
+      try {
+        return JSON.parse(profileBox.value || '{}');
+      } catch {
+        return {};
+      }
+    })(),
   };
 
   const { data, error } = await supabase.functions.invoke('power-tailor', { body });
@@ -234,7 +281,8 @@ async function autoTailorServer() {
       lastAutoNodes.push(node);
       autoNodesAll.push(node);
     }
-    render(); rebuildSuggestions();
+    render();
+    rebuildSuggestions();
   } catch (e) {
     alert('Auto-tailor failed: ' + String(e.message || e));
   } finally {
@@ -244,14 +292,14 @@ async function autoTailorServer() {
 btnAutoServer.addEventListener('click', autoTailorServer);
 
 function undoAuto() {
-  lastAutoNodes.forEach(n => n.remove());
-  autoNodesAll = autoNodesAll.filter(n => !lastAutoNodes.includes(n));
+  lastAutoNodes.forEach((n) => n.remove());
+  autoNodesAll = autoNodesAll.filter((n) => !lastAutoNodes.includes(n));
   lastAutoNodes = [];
   enableButtons();
   render();
 }
 function clearAuto() {
-  editor.querySelectorAll('.auto-insert').forEach(n => n.remove());
+  editor.querySelectorAll('.auto-insert').forEach((n) => n.remove());
   lastAutoNodes = [];
   autoNodesAll = [];
   enableButtons();
@@ -270,7 +318,7 @@ function setAutoHint(reason) {
 function enableButtons() {
   const needs = [];
   if (!hasResume()) needs.push('load or paste your resume');
-  if (!jdReady())  needs.push('paste a JD (≥20 chars)');
+  if (!jdReady()) needs.push('paste a JD (≥20 chars)');
   const ok = needs.length === 0;
 
   btnAutoServer.disabled = !ok;
@@ -281,17 +329,32 @@ function enableButtons() {
 }
 
 /* ---------- Live inputs ---------- */
-for (const id of ["job_title","job_company","job_location","job_desc","profile_json"]){
-  document.addEventListener("input", (ev)=>{ if (ev.target && ev.target.id===id) {
-    if (id === "profile_json"){
-      try { state.profile = JSON.parse(profileBox.value || "{}"); } catch(_){ state.profile = {}; }
+for (const id of ['job_title', 'job_company', 'job_location', 'job_desc', 'profile_json']) {
+  document.addEventListener('input', (ev) => {
+    if (ev.target && ev.target.id === id) {
+      if (id === 'profile_json') {
+        try {
+          state.profile = JSON.parse(profileBox.value || '{}');
+        } catch (_) {
+          state.profile = {};
+        }
+      }
+      render();
+      rebuildSuggestions();
+      enableButtons();
     }
-    render(); rebuildSuggestions(); enableButtons();
-  }});
+  });
 }
 // treat typed/pasted resume as a loaded resume too
-editor.addEventListener('input', ()=>{ if ((editor.textContent||'').trim().length >= 50) state.resumeLoaded = true; enableButtons(); });
-editor.addEventListener('keyup', ()=>{ render(); rebuildSuggestions(); rememberSelection(); });
+editor.addEventListener('input', () => {
+  if ((editor.textContent || '').trim().length >= 50) state.resumeLoaded = true;
+  enableButtons();
+});
+editor.addEventListener('keyup', () => {
+  render();
+  rebuildSuggestions();
+  rememberSelection();
+});
 editor.addEventListener('mouseup', rememberSelection);
 editor.addEventListener('blur', rememberSelection);
 
@@ -309,31 +372,35 @@ async function loadUserProfileFromSupabase() {
       skills: data.skills || [],
       target_titles: data.target_titles || [],
       must_haves: data.must_haves || [],
-      location_policy: data.search_policy || {}
+      location_policy: data.search_policy || {},
     };
 
     profileBox.value = JSON.stringify(json, null, 2);
     state.profile = json;
     return true;
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 }
-async function tryLoadProfileFile(){
-  try{
+async function tryLoadProfileFile() {
+  try {
     const r = await fetch('./data/profile.json', { cache: 'no-store' });
-    if (r.ok){
+    if (r.ok) {
       const j = await r.json();
       if (!profileBox.value.trim()) {
-        profileBox.value = JSON.stringify(j||{}, null, 2);
-        state.profile = j||{};
+        profileBox.value = JSON.stringify(j || {}, null, 2);
+        state.profile = j || {};
       }
     }
-  }catch(_){}
+  } catch (_) {}
 }
 
 /* ---------- Init ---------- */
-window.addEventListener('DOMContentLoaded', async ()=>{
+window.addEventListener('DOMContentLoaded', async () => {
   await ensureSupabase();
   const loaded = await loadUserProfileFromSupabase();
   if (!loaded) await tryLoadProfileFile();
-  render(); rebuildSuggestions(); enableButtons();
+  render();
+  rebuildSuggestions();
+  enableButtons();
 });
