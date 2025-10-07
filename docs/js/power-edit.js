@@ -1,502 +1,397 @@
 /* docs/js/power-edit.js
-   Power Edit (client). New auto‑tailor = in‑place rewrites below Education,
-   mirroring src/tailor/resume.py heuristics.
-*/
+ * Power Edit (client). Rewritten so “Auto-tailor” WEAVES compact JD phrases
+ * into the most appropriate existing bullet *after Education*, never into
+ * Education/References. Undo + Clear supported. Jobscan UI preserved.
+ */
+
 import {
-  CONFIG,
-  canon, normalizeWS, tokenize, tokenSet,
-  topJDKeywords, coverageAgainstResume, suggestionBullets, stripHtml
-} from './scoring.js?v=2025-10-07-4';
+  smartJDTargets,
+  bridgeForToken,
+  explainGaps,
+  jdCoverageAgainstResume,
+  CUE_SETS
+} from "./scoring.js?v=2025-10-07-1";
 
-// ---------- config mirrors (keep in sync with server defaults) ----------
-const MID_STYLE   = CONFIG.MID_SENTENCE_STYLE;   // 'dash' | 'comma' | 'auto'
-const DASH_THRESH = CONFIG.DASH_THRESHOLD;       // words
-const CAP_SENT    = true;
-const END_PERIOD  = true;
+// ---------- DOM ----------
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 
-// ---------- minor CSS + toggle injected at runtime ----------
-injectStyles();
-injectDiffToggle();
+const els = {
+  editor:       $("#editor"),
+  jdTitle:      $("#job_title"),
+  jdCompany:    $("#job_company"),
+  jdLocation:   $("#job_location"),
+  jdText:       $("#job_desc"),
+  profile:      $("#profile_json"),
+  scoreline:    $("#scoreline"),
+  gaps:         $("#gaps"),
+  suggestions:  $("#suggestions"),
+  coverage:     $("#coverage"),
+  btnAuto:      $("#btn_auto_server"),
+  btnUndo:      $("#btn_undo_auto"),
+  btnClear:     $("#btn_clear_auto"),
+  autoHint:     $("#auto_hint"),
+  file:         $("#docx_file"),
+  btnExport:    $("#btn_export_docx"),
+  btnPrint:     $("#btn_print_pdf"),
+};
 
-// ---------- DOM helpers ----------
-const $ = (sel, root=document) => root.querySelector(sel);
-const $$ = (sel, root=document) => [...root.querySelectorAll(sel)];
-const editor = $('#editor');
-const jdEl   = $('#job_desc');
-const profileEl = $('#profile_json');
+// ---------- State ----------
+const STATE = {
+  jd: "",
+  jdTargets: [],         // [{token, display, category}]
+  resumeHTML: "",
+  inserts: [],           // [{node, beforeHTML, afterHTML, phrase, why}]
+  lastRun: 0,
+  bridgeStyle: "dash",
+  dashThreshold: 7
+};
 
-function readProfile(){
-  try { return JSON.parse(profileEl.value || '{}') || {}; } catch{ return {}; }
+// ---------- Utils ----------
+const norm = s => (s || "").replace(/\s+/g, " ").trim();
+const text = n => norm(n?.textContent || "");
+
+function sentenceCase(s) {
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (/[A-Za-z]/.test(ch)) return s.slice(0, i) + ch.toUpperCase() + s.slice(i + 1);
+  }
+  return s;
 }
 
-function getResumeHTML(){ return editor.innerHTML || ''; }
-function setResumeHTML(html){ editor.innerHTML = html; }
-function resumeText(){ return stripHtml(getResumeHTML()); }
+function paraNodesInEditor() {
+  // Treat headings, paragraphs, list items as “blocks”
+  return $$("#editor h1, #editor h2, #editor h3, #editor h4, #editor p, #editor li, #editor div");
+}
 
-function nonEmpty(s){ return !!normalizeWS(s); }
-
-// ---------- Section detection (HTML, not .docx) ----------
+// Section detection mirrors server logic: prefer an Experience header,
+// otherwise start immediately *after* Education.
 const EDU_TITLES = [
-  'education','education and training','education & training',
-  'academic credentials','academics','education and honors'
+  "education", "education and training", "education & training",
+  "academic credentials", "academics", "education and honors"
 ];
+
 const EXP_TITLES = [
-  'work experience','experience','professional experience','employment','relevant experience'
-];
-const OTHER_SECTION_TITLES = [
-  'skills','technical skills','core skills','projects','certifications','awards',
-  'volunteer experience','writing experience','summary','professional summary',
-  'publications','research experience','activities','leadership'
+  "work experience", "experience", "professional experience",
+  "employment", "relevant experience"
 ];
 
-function isHeaderEl(el){
-  if (!el) return false;
-  const name = el.tagName.toLowerCase();
-  if (/^h[1-6]$/.test(name)) return true;
-  // plain <p> section titles: text only, short, no punctuation
-  if (name === 'p') {
-    const t = normalizeWS(el.textContent || '');
-    return t.length>=3 && t.length<=48 && /^[A-Za-z &/]+$/.test(t);
-  }
-  return false;
-}
-
-function findSectionRanges(container){
-  const nodes = $$('#editor *'); // linear order
-  const lower = nodes.map(n => normalizeWS(n.textContent||'').toLowerCase());
+function findSectionRanges(titles) {
+  const wants = titles.map(t => t.toLowerCase());
+  const blocks = paraNodesInEditor();
   const hits = [];
-  nodes.forEach((n,i)=>{
-    if (!isHeaderEl(n)) return;
-    const t = normalizeWS(n.textContent||'').toLowerCase();
-    if (EDU_TITLES.includes(t) || EXP_TITLES.includes(t) || OTHER_SECTION_TITLES.includes(t)) {
-      hits.push({i, t});
-    }
-  });
-  const ranges = {}; // {title:[start,end)}
-  for (let k=0;k<hits.length;k++){
-    const start = hits[k].i;
-    const title = hits[k].t;
-    const end = (k+1 < hits.length) ? hits[k+1].i : nodes.length;
-    ranges[title] = [start, end];
+  for (let i = 0; i < blocks.length; i++) {
+    const t = text(blocks[i]).toLowerCase();
+    if (wants.includes(t)) hits.push({ i, key: t });
   }
-  return { nodes, ranges };
-}
-
-function educationRange(){
-  const {ranges} = findSectionRanges(editor);
-  for (const t of EDU_TITLES) if (ranges[t]) return ranges[t];
-  return null;
-}
-function experienceStart(){
-  const {ranges} = findSectionRanges(editor);
-  for (const t of EXP_TITLES) if (ranges[t]) return ranges[t][0];
-  const er = educationRange();
-  if (er) return er[1];           // start just AFTER Education
-  // else skip header/current-contact region
-  return Math.min($$('#editor *').length, 80);
-}
-
-function isReferenceOrContactLine(text){
-  const s = (text||'').toLowerCase();
-  if (/references/.test(s) && /available/.test(s)) return true;
-  if (/\b(?:linkedin|github|portfolio)\b/.test(s)) return true;
-  if (/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(s)) return true;
-  if (/(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/.test(s)) return true;
-  return false;
-}
-
-function afterEducationNodeList(){
-  // find the first UL/OL after Education to use when inserting *new* lines
-  const {nodes} = findSectionRanges(editor);
-  const start = experienceStart();
-  for (let i=start; i<nodes.length; i++){
-    const el = nodes[i];
-    if (el.closest && el.closest('#editor') && (el.tagName==='UL' || el.tagName==='OL')) return el;
+  const ranges = new Map();
+  for (let h = 0; h < hits.length; h++) {
+    const start = hits[h].i;
+    const end = (h + 1 < hits.length) ? hits[h + 1].i : blocks.length;
+    ranges.set(hits[h].key, [start, end]);
   }
-  // fallback: last list in the document
-  const lists = $$('ul,ol', editor);
-  return lists.length ? lists[lists.length-1] : null;
+  return { blocks, ranges };
 }
 
-// ---------- Candidate bullets ----------
-function liLikeNodesAfterExperience(){
-  const nodes = $$('#editor *');
-  const start = experienceStart();
+function educationRange() {
+  const titles = [...EDU_TITLES, ...EXP_TITLES, "skills","technical skills","core skills","projects","certifications","awards","summary","professional summary","publications","volunteer experience","research experience","activities","leadership"];
+  const { blocks, ranges } = findSectionRanges(titles);
+  for (const k of EDU_TITLES.map(t => t.toLowerCase())) {
+    if (ranges.has(k)) return { blocks, range: ranges.get(k) };
+  }
+  return { blocks, range: null };
+}
+
+function workStartIndex() {
+  const { blocks: blocks1, ranges: r1 } = findSectionRanges([...EXP_TITLES, ...EDU_TITLES]);
+  for (const name of EXP_TITLES.map(t => t.toLowerCase())) {
+    if (r1.has(name)) return r1.get(name)[0];
+  }
+  const { blocks, range } = educationRange();
+  if (range) return range[1]; // immediately after Education
+  return Math.min(paraNodesInEditor().length, 8); // skip header block
+}
+
+function isReferenceLine(n) {
+  const t = text(n).toLowerCase();
+  return t.includes("references") && (t.includes("request") || t.includes("available"));
+}
+
+function inEducation(i) {
+  const { range } = educationRange();
+  return !!(range && i >= range[0] && i < range[1]);
+}
+
+// Candidates to weave into: list items after workStart, outside Education/References.
+function candidateBullets() {
+  const blocks = paraNodesInEditor();
+  const start = workStartIndex();
   const out = [];
-
-  for (let i=start; i<nodes.length; i++){
-    const el = nodes[i];
-    if (!(el instanceof HTMLElement)) continue;
-    // Skip anything visibly inside the Education range (guard)
-    const txt = normalizeWS(el.textContent||'');
-    if (!txt) continue;
-    if (isReferenceOrContactLine(txt)) continue;
-
-    const tag = el.tagName;
-    const bulletishPara = (tag==='P' && /^[•\-–—·]/.test((el.textContent||'').trim()));
-    const isLi = (tag==='LI');
-    if ((isLi || bulletishPara) && txt.length >= 25){
-      out.push(el);
-    }
+  for (let i = 0; i < blocks.length; i++) {
+    if (i < start) continue;
+    if (inEducation(i)) continue;
+    const n = blocks[i];
+    const isLI = n.tagName?.toLowerCase() === "li";
+    const isLongP = (n.tagName?.toLowerCase() === "p") && text(n).length >= 25;
+    if (!isLI && !isLongP) continue;
+    if (!text(n)) continue;
+    if (isReferenceLine(n)) continue;
+    out.push({ i, node: n });
   }
   return out;
 }
 
-// ---------- Bridge construction (mirror Python logic) ----------
-const LEADS_KEEP = ['to ','for '];
-const STRIP_LEADS = ['using ','with ','via ','through ','by ','while ','as ','as part of ','in order to ','in accordance with ','per '];
-const GERUNDS = ['managing','coordinating','handling','scheduling','maintaining','performing','providing','ensuring','tracking','verifying','triaging','documenting','updating','supporting','resolving'];
+function scoreBulletForCategory(bulletText, category) {
+  const t = bulletText.toLowerCase();
+  let score = 0;
+  const cues = CUE_SETS[category] || [];
+  for (const c of cues) if (t.includes(c)) score += 2;
+  // general action verbs nudge
+  if (/(develop|build|design|implement|optimiz|maintain|improv|migrat|deploy|integrat)/i.test(t)) score += 1;
+  // prefer non‑short bullets
+  if (t.length > 60) score += 1;
+  return score;
+}
 
-function sentenceCase(s){
-  for (let i=0;i<s.length;i++){
-    if (/[A-Za-z]/.test(s[i])) return s.slice(0,i) + s[i].toUpperCase() + s.slice(i+1);
+function bestBullet(category) {
+  const cands = candidateBullets();
+  let best = null, bestScore = -1;
+  for (const c of cands) {
+    const s = scoreBulletForCategory(text(c.node), category);
+    if (s > bestScore) { best = c.node; bestScore = s; }
   }
-  return s;
-}
-function chooseMidDelim(bridge){
-  if (MID_STYLE === 'comma') return ', ';
-  if (MID_STYLE === 'dash')  return ' — ';
-  const n = (bridge||'').trim().split(/\s+/).length;
-  return (n >= DASH_THRESH) ? ' — ' : ', ';
+  return best;
 }
 
-function bridgePhrase(raw){
-  let p = canon(String(raw||'').trim());
-  p = p.replace(/[.\s]+$/,'');
-  let low = p.toLowerCase();
+// Compute prefix & final inserted HTML (diff highlighted)
+function buildInsertionHTML(hostNode, clause, style = "dash", dashThreshold = 7) {
+  const before = hostNode.innerHTML;
+  const plain = text(hostNode);
+  if (!plain) return null;
 
-  for (const lead of STRIP_LEADS){
-    if (low.startsWith(lead)){ p = p.slice(lead.length); low = p.toLowerCase(); break; }
-  }
-  for (const keep of LEADS_KEEP){
-    if (low.startsWith(keep)) return p;
-  }
-  if (GERUNDS.some(g => low.startsWith(g+' '))) return `by ${p}`;
-  return `with ${p}`;
-}
+  // if clause already present, skip
+  if (plain.toLowerCase().includes(clause.toLowerCase())) return null;
 
-function safeJoinKeywords(kws){
-  const ks = [...new Set((kws||[]).map(k=>canon(k).trim()).filter(Boolean))];
-  if (!ks.length) return '';
-  if (ks.length===1) return ks[0];
-  if (ks.length===2) return `${ks[0]} and ${ks[1]}`;
-  return `${ks.slice(0,-1).join(', ')}, and ${ks[ks.length-1]}`;
-}
+  const endsWithPeriod = /[.!?]\s*$/.test(plain);
+  const words = clause.trim().split(/\s+/).length;
+  const delim = (style === "comma") ? ", " : (style === "auto" ? (words >= dashThreshold ? " — " : ", ") : " — ");
 
-function contextualPrefix(before, bridge){
-  const trimmed = before.replace(/\s+$/,'');
-  const prev = trimmed.slice(-1);
-  const endsWithJoiner = /[,;:—–-]$/.test(trimmed) || /\b(?:and|or)$/.test(trimmed.toLowerCase());
-  if (/[.?!]$/.test(trimmed)) {
-    let core = bridge;
-    if (CAP_SENT) core = sentenceCase(core);
-    return ' ' + core + (END_PERIOD && !/[.]$/.test(core) ? '.' : '');
-  }
-  if (endsWithJoiner) return ' ' + bridge;
-  return chooseMidDelim(bridge) + bridge;
-}
-
-// ---------- First-person sanitizer ----------
-function depersonalizeLine(s){
-  let out = s || '';
-  // strip leading I/We + common contractions
-  out = out.replace(/^\s*(?:•\s*)?(?:I|We)(?:\s+|[’'](?:m|ve|d|re))\s+/i,'');
-  out = out.replace(/\bDuring my time at\b/i, 'During time at');
-  out = out.replace(/\bmy\b/ig,'the');
-  out = out.replace(/\bour\b/ig,'the');
-  // recase first alpha
-  out = out.replace(/^(\s*)([a-z])/,(m,a,b)=> a + b.toUpperCase());
-  return normalizeWS(out);
-}
-
-// ---------- Rewrite engine ----------
-function pickKeywordsForLine(line, rankedTerms){
-  const present = tokenSet(line.toLowerCase());
-  const picks = [];
-  for (const kw of rankedTerms){
-    const toks = tokenSet(String(kw).toLowerCase()).size ? tokenSet(String(kw).toLowerCase()) : new Set([kw.toLowerCase()]);
-    // choose kw if any token is already hinted OR we have no picks yet
-    if ([...toks].some(t=>present.has(t)) || !picks.length){
-      if (!picks.includes(kw)) picks.push(kw);
-      if (picks.length >= 2) break;
-    }
-  }
-  if (!picks.length && rankedTerms.length) picks.push(rankedTerms[0]);
-  return picks.slice(0,2);
-}
-
-function buildClause(picks){
-  const chunk = safeJoinKeywords(picks);
-  if (!chunk) return '';
-  const lead = bridgePhrase(`leveraging ${chunk}`);
-  return lead;
-}
-
-function rewriteOneLine(text, rankedTerms){
-  const base = depersonalizeLine(text);
-  if (!base) return {after: text, inserted:''};
-
-  const picks = pickKeywordsForLine(base, rankedTerms);
-  const bridge = buildClause(picks);
-  if (!bridge) return {after: base, inserted:''};
-
-  const ins = contextualPrefix(base, bridge);
-  const after = base + ins;
-  const integrated = ins.trim().replace(/^[—,]\s*/,''); // for tooltip
-  return {after, inserted: integrated, used: picks};
-}
-
-function markInserted(el, before, after, inserted, why){
-  el.dataset.before = before;
-  el.dataset.why = JSON.stringify(why || {});
-  el.classList.add('auto-insert');
-
-  // simple inline diff: wrap the inserted tail
-  // We'll try to highlight the inserted clause only.
-  const safeInserted = escapeHtml(inserted);
-  const escapedAfter = escapeHtml(after);
-  const at = escapedAfter.lastIndexOf(safeInserted);
-  let html;
-  if (at >= 0){
-    html = escapedAfter.slice(0, at)
-        + `<span class="auto-insert">${safeInserted}</span>`
-        + escapedAfter.slice(at + safeInserted.length)
-        + ` <button class="whybtn" title="Why">?</button>`;
+  // If the bullet already ends with punctuation, start a new sentence.
+  let ins = "";
+  if (endsWithPeriod) {
+    const body = sentenceCase(clause.replace(/^[,—–\s]+/, ""));
+    ins = " " + body + (body.endsWith(".") ? "" : ".");
   } else {
-    html = escapedAfter + ` <button class="whybtn" title="Why">?</button>`;
+    ins = (plain.endsWith(" ") ? "" : delim) + clause.replace(/^[,—–\s]+/, "");
   }
-  el.innerHTML = html;
+
+  return {
+    beforeHTML: before,
+    afterHTML: before + `<span class="ins">${ins}</span>`,
+    insertedText: ins.trim()
+  };
 }
 
-function escapeHtml(s=''){
-  return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
+// Apply a single weave to the best bullet in context
+function weavePhraseIntoResume(phrase, why, category) {
+  const host = bestBullet(category);
+  if (!host) return false;
 
-// ---------- Auto‑tailor (local, in‑place rewrites) ----------
-async function autoTailorLocal(){
-  const jd = jdEl.value || '';
-  const prof = readProfile();
-  const terms = topJDKeywords({
-    jdText: jd,
-    resumeHtml: getResumeHTML(),
-    profileSkills: prof.skills || [],
-    cap: 24
+  const ins = buildInsertionHTML(host, phrase, STATE.bridgeStyle, STATE.dashThreshold);
+  if (!ins) return false;
+
+  host.classList.add("auto-insert");
+  host.dataset.before = ins.beforeHTML;
+  host.innerHTML = ins.afterHTML;
+
+  // tiny “why?” pill
+  const btn = document.createElement("button");
+  btn.textContent = "?";
+  btn.className = "secondary small";
+  btn.style.marginLeft = "6px";
+  btn.title = why || "Keyword from the job description";
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    alert(why || "Inserted to align with JD keywords.");
   });
+  host.appendChild(btn);
 
-  // coverage chips (Jobscan‑style)
-  renderCoverage(terms);
+  STATE.inserts.push({ node: host, beforeHTML: ins.beforeHTML, afterHTML: host.innerHTML, phrase, why });
+  els.btnUndo.disabled = els.btnClear.disabled = STATE.inserts.length === 0;
+  return true;
+}
 
-  const bullets = liLikeNodesAfterExperience();
-  if (!bullets.length){
-    toast('No eligible bullets found after Education / Experience.');
+function undoLast() {
+  const item = STATE.inserts.pop();
+  if (!item) return;
+  item.node.innerHTML = item.beforeHTML;
+  item.node.classList.remove("auto-insert");
+  delete item.node.dataset.before;
+  els.btnUndo.disabled = els.btnClear.disabled = STATE.inserts.length === 0;
+}
+
+function clearAllInserts() {
+  while (STATE.inserts.length) undoLast();
+}
+
+// ---------- Suggestions (Jobscan-style UI, weave on click) ----------
+function buildSuggestions() {
+  const jd = norm(els.jdText.value);
+  const allowed = []; // could be extended with profile skills
+  STATE.jdTargets = smartJDTargets(jd, allowed).slice(0, 16);
+
+  els.suggestions.innerHTML = "";
+  if (!STATE.jdTargets.length) {
+    els.suggestions.textContent = "Suggestions appear after you paste a JD.";
     return;
   }
 
-  const maxBullets = 10;
-  const minBullets = 6;
-
-  let edits = 0;
-  for (const li of bullets.slice(0, maxBullets)){
-    const before = normalizeWS(li.innerText || li.textContent || '');
-    if (!before || before.length < 25) continue;
-    // skip if this line already contains bracketed templates or looks like a reference
-    if (/\[[^\]]{0,40}\]/.test(before)) continue;
-
-    const {after, inserted, used} = rewriteOneLine(before, terms);
-    if (!after || after.toLowerCase() === before.toLowerCase()) continue;
-
-    markInserted(li, before, after, inserted, {
-      reason: 'Full rewrite to compound/complex sentence using JD keywords (client-side).',
-      used_keywords: (used||[]).map(canon)
+  for (const t of STATE.jdTargets) {
+    const item = document.createElement("div");
+    item.className = "suggestion";
+    const clause = bridgeForToken(t.display, t.category, STATE.bridgeStyle, STATE.dashThreshold).replace(/^[,—–]\s*/, "");
+    item.innerHTML = `• <strong>${t.display}</strong> <span class="small muted">(${t.category})</span><br/><span class="small">Weave: <code>${clause}</code></span>`;
+    item.addEventListener("click", () => {
+      const why = `Tailored for JD keyword: ${t.display}`;
+      const ok = weavePhraseIntoResume(clause, why, t.category);
+      if (!ok) {
+        // If no suitable bullet, append *one* new bullet below Education as a last resort.
+        appendNewBulletAfterEducation(clause, why);
+      }
+      refreshCoverage();
     });
-    edits++;
-    if (edits >= maxBullets) break;
+    els.suggestions.appendChild(item);
+  }
+}
+
+// Fallback: create a single new bullet in the proper area (only when no host bullet exists)
+function appendNewBulletAfterEducation(clause, why) {
+  const blocks = paraNodesInEditor();
+  const start = workStartIndex();
+
+  // find nearest UL/OL after start
+  let targetList = null;
+  for (let i = start; i < blocks.length; i++) {
+    const n = blocks[i];
+    if (n.closest && (n.closest("ul,ol"))) { targetList = n.closest("ul,ol"); break; }
+    if (n.tagName && (n.tagName.toLowerCase() === "ul" || n.tagName.toLowerCase() === "ol")) { targetList = n; break; }
+  }
+  if (!targetList) {
+    // create a fresh UL just after the starting block
+    const startNode = blocks[start] || els.editor.lastElementChild || els.editor;
+    const ul = document.createElement("ul");
+    startNode.parentNode.insertBefore(ul, startNode.nextSibling);
+    targetList = ul;
+  }
+  const li = document.createElement("li");
+  li.className = "auto-insert";
+  const ins = (clause.startsWith(",") || clause.startsWith(" — ")) ? clause.replace(/^[,—–]\s*/, "") : clause;
+  li.innerHTML = `<span class="ins">• ${ins}</span>`;
+  targetList.appendChild(li);
+
+  const btn = document.createElement("button");
+  btn.textContent = "?";
+  btn.className = "secondary small";
+  btn.style.marginLeft = "6px";
+  btn.title = why || "Keyword from the job description";
+  btn.addEventListener("click", e => { e.preventDefault(); alert(why || "Inserted to align with JD keywords."); });
+  li.appendChild(btn);
+
+  STATE.inserts.push({ node: li, beforeHTML: "", afterHTML: li.innerHTML, phrase: ins, why });
+  els.btnUndo.disabled = els.btnClear.disabled = false;
+}
+
+// ---------- Coverage / Score ----------
+function refreshCoverage() {
+  const jd = norm(els.jdText.value);
+  const resumePlain = text(els.editor);
+  if (!jd || !resumePlain) return;
+
+  const cov = jdCoverageAgainstResume(jd, resumePlain);
+  const score = Math.round((cov.hits.length / (cov.hits.length + cov.misses.length || 1)) * 100);
+  els.scoreline.textContent = `Score: ${isFinite(score) ? score : 0}`;
+
+  // gaps
+  els.gaps.innerHTML = "";
+  if (cov.misses.length) {
+    const frag = document.createElement("div");
+    frag.innerHTML = cov.misses.slice(0, 40).map(w => `<span class="k miss">${w}</span>`).join(" ");
+    els.gaps.appendChild(frag);
+  } else {
+    els.gaps.textContent = "Nice—no obvious gaps found yet.";
   }
 
-  // light weaving fallback: if too few edits, append a single clause to the first candidate
-  if (edits < minBullets && bullets.length){
-    const li = bullets[0];
-    const before = normalizeWS(li.innerText || li.textContent || '');
-    const picks = (terms||[]).slice(0,1);
-    const bridge = buildClause(picks);
-    if (bridge){
-      const ins = contextualPrefix(before, bridge);
-      const after = before + ins;
-      markInserted(li, before, after, ins.trim(), {
-        reason: 'Hard fallback to ensure visible tailoring (client-side).',
-        used_keywords: picks.map(canon)
-      });
-      edits++;
-    }
-  }
-
-  $('#btn_undo_auto').disabled = (edits === 0);
-  $('#btn_clear_auto').disabled = (edits === 0);
-  if (edits) toast(`Auto‑tailored ${edits} bullet${edits===1?'':'s'}.`);
+  // coverage
+  els.coverage.innerHTML = [
+    `<div class="small">Hits: ${cov.hits.slice(0, 40).map(w => `<span class="k hit">${w}</span>`).join(" ") || "—"}</div>`,
+    `<div class="small">Misses: ${cov.misses.slice(0, 40).map(w => `<span class="k miss">${w}</span>`).join(" ") || "—"}</div>`
+  ].join("");
 }
 
-// ---------- Undo / Clear ----------
-function undoAuto(){
-  const edits = $$('.auto-insert', editor);
-  if (!edits.length) return;
-  edits.forEach(el=>{
-    const before = el.dataset.before || '';
-    if (!before) return;
-    el.innerHTML = escapeHtml(before);
-    el.classList.remove('auto-insert');
-    delete el.dataset.before;
-    delete el.dataset.why;
-  });
-  $('#btn_undo_auto').disabled = true;
-  $('#btn_clear_auto').disabled = true;
+// ---------- DOCX Import/Export (unchanged APIs) ----------
+/* Mammoth converts .docx to HTML in browser:
+   mammoth.convertToHtml({ arrayBuffer }).then(...)
+*/
+async function importDocx(file) {
+  const buf = await file.arrayBuffer();
+  const result = await window.mammoth.convertToHtml({ arrayBuffer: buf });
+  els.editor.innerHTML = result.value || "";
+  STATE.resumeHTML = els.editor.innerHTML;
+  refreshCoverage();
+  buildSuggestions();
 }
-function clearAuto(){
-  const edits = $$('.auto-insert', editor);
-  edits.forEach(el=>{
-    // just drop highlights, keep text
-    const txt = el.innerText || el.textContent || '';
-    el.innerHTML = escapeHtml(txt);
-    el.classList.remove('auto-insert');
-    delete el.dataset.why;
-    delete el.dataset.before;
-  });
-  $('#btn_undo_auto').disabled = true;
-  $('#btn_clear_auto').disabled = true;
-}
-
-// ---------- Why popover ----------
-editor.addEventListener('click', (e)=>{
-  const b = e.target.closest('.whybtn');
-  if (!b) return;
-  const host = b.closest('.auto-insert');
-  if (!host) return;
-  let why = {};
-  try { why = JSON.parse(host.dataset.why||'{}'); } catch {}
-  const used = (why.used_keywords||[]).join(', ');
-  alert(`Why: ${why.reason || 'Tailored with JD keywords.'}${used ? `\n• Keywords integrated: ${used}`:''}`);
-});
-
-// ---------- Right rail: suggestions go to the first list AFTER Education ----------
-function insertSuggestionAtCursor(text){
-  const targetList = afterEducationNodeList();
-  if (!targetList){
-    // Create a new UL at the end, but still after Education if possible
-    const ul = document.createElement('ul');
-    const p = document.createElement('p');
-    p.textContent = '';
-    const anchor = $$('#editor *')[experienceStart()] || editor.lastChild || editor;
-    anchor.parentNode.insertBefore(ul, anchor.nextSibling);
-  }
-  const list = afterEducationNodeList() || editor.appendChild(document.createElement('ul'));
-  const li = document.createElement('li');
-  li.textContent = text.replace(/^•\s*/,'');
-  list.appendChild(li);
-  // mark as auto for easy clear/undo
-  li.dataset.before = '';
-  li.dataset.why = JSON.stringify({reason:'Manual suggestion inserted after Education.', used_keywords:[]});
-  li.classList.add('auto-insert');
-  $('#btn_undo_auto').disabled = false;
-  $('#btn_clear_auto').disabled = false;
-}
-
-// ---------- Coverage / Gaps (Jobscan‑style) ----------
-function renderCoverage(terms){
-  const {hits, misses} = coverageAgainstResume({ resumeHtml:getResumeHTML(), terms });
-  const cov = $('#coverage');
-  const gaps = $('#gaps');
-  const hitChips = hits.map(t=>`<span class="k hit">${escapeHtml(t)}</span>`).join(' ');
-  const missChips= misses.map(t=>`<span class="k miss">${escapeHtml(t)}</span>`).join(' ');
-  cov.innerHTML = (hits.length || misses.length)
-    ? `${hitChips} ${missChips}`
-    : 'Shown after JD is pasted.';
-  gaps.innerHTML = misses.length
-    ? `Missing or light: ${missChips}`
-    : (terms.length ? 'Good coverage of requested skills.' : 'Paste a job description to see gaps.');
-}
-
-// ---------- DOCX import/export (as before) ----------
-$('#docx_file')?.addEventListener('change', async (ev)=>{
-  const f = ev.target.files[0];
-  if (!f) return;
-  const arr = await f.arrayBuffer();
-  const { value: html } = await window.mammoth.convertToHtml({ arrayBuffer: arr });
-  setResumeHTML(html);
-});
-$('#btn_export_docx')?.addEventListener('click', ()=>{
-  const html = `<!doctype html><html><body>${getResumeHTML()}</body></html>`;
+/* html-docx-js turns HTML to a Blob(.docx): htmlDocx.asBlob(html) */
+function exportDocx() {
+  const html = `<!doctype html><html><head><meta charset="utf-8"></head><body>${els.editor.innerHTML}</body></html>`;
   const blob = window.htmlDocx.asBlob(html);
-  const a = document.createElement('a');
-  a.download = 'resume-tailored.docx';
+  const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
+  a.download = "tailored_resume.docx";
   a.click();
+}
+
+// ---------- Wire up ----------
+function updateAutoHint() {
+  const hasJD = norm(els.jdText.value).length > 0;
+  const hasResume = norm(text(els.editor)).length > 0;
+  els.btnAuto.disabled = !(hasJD && hasResume);
+  els.autoHint.textContent = els.btnAuto.disabled
+    ? "Paste a JD and load/paste your resume to enable Auto‑tailor."
+    : "";
+}
+
+els.jdText.addEventListener("input", () => { buildSuggestions(); refreshCoverage(); updateAutoHint(); });
+els.editor.addEventListener("input", () => { refreshCoverage(); updateAutoHint(); });
+
+els.btnUndo.addEventListener("click", undoLast);
+els.btnClear.addEventListener("click", clearAllInserts);
+
+// Auto‑tailor: weave top N suggestions to the best bullets (no new bullets unless no host exists)
+els.btnAuto.addEventListener("click", () => {
+  const topN = Math.min(6, STATE.jdTargets.length || 0);
+  let applied = 0;
+  for (let i = 0; i < topN; i++) {
+    const t = STATE.jdTargets[i];
+    const clause = bridgeForToken(t.display, t.category, STATE.bridgeStyle, STATE.dashThreshold).replace(/^[,—–]\s*/, "");
+    const why = `Tailored for JD keyword: ${t.display}`;
+    const ok = weavePhraseIntoResume(clause, why, t.category);
+    if (ok) applied++;
+  }
+  if (!applied && topN > 0) {
+    const t = STATE.jdTargets[0];
+    appendNewBulletAfterEducation(bridgeForToken(t.display, t.category, STATE.bridgeStyle, STATE.dashThreshold).replace(/^[,—–]\s*/, ""), `Tailored for JD keyword: ${t.display}`);
+  }
+  refreshCoverage();
 });
-$('#btn_print_pdf')?.addEventListener('click', ()=> window.print());
 
-// ---------- Buttons ----------
-$('#btn_auto_server')?.addEventListener('click', autoTailorLocal);
-$('#btn_undo_auto')?.addEventListener('click', undoAuto);
-$('#btn_clear_auto')?.addEventListener('click', clearAuto);
-
-// ---------- Suggestions rail ----------
-function refreshSuggestions(){
-  const prof = readProfile();
-  const terms = topJDKeywords({
-    jdText: jdEl.value || '',
-    resumeHtml: getResumeHTML(),
-    profileSkills: prof.skills || [],
-    cap: 12
-  });
-  renderCoverage(terms);
-  const sug = $('#suggestions');
-  const items = suggestionBullets(terms).slice(0, 24);
-  if (!items.length){ sug.innerHTML = 'Suggestions appear after you paste a JD.'; return; }
-  sug.innerHTML = items.map(line => (
-    `<div class="suggestion">${escapeHtml(line)}</div>`
-  )).join('');
-}
-$('#suggestions')?.addEventListener('click', (e)=>{
-  const el = e.target.closest('.suggestion');
-  if (!el) return;
-  insertSuggestionAtCursor(el.textContent || '');
+els.file?.addEventListener("change", (e) => {
+  const f = e.target.files[0];
+  if (f) importDocx(f);
 });
-jdEl?.addEventListener('input', refreshSuggestions);
-editor?.addEventListener('input', ()=> renderCoverage(topJDKeywords({
-  jdText: jdEl.value||'',
-  resumeHtml: getResumeHTML(),
-  profileSkills: (readProfile().skills||[]),
-  cap: 24
-})));
+els.btnExport?.addEventListener("click", exportDocx);
+els.btnPrint?.addEventListener("click", () => window.print());
 
-// Initial paint
-refreshSuggestions();
-
-// ---------- tiny UI helpers ----------
-function injectStyles(){
-  const css = `
-  .k{display:inline-block;padding:.25rem .5rem;border:1px solid #ccd;border-radius:999px;background:#eef;margin:.1rem;}
-  .hit{background:#eaffea;border-color:#b7f7b7}.miss{background:#ffeaea;border-color:#f6c2c2}
-  .auto-insert{background:#f4fff4;outline:1px dashed #8fd48f;border-radius:6px}
-  .whybtn{border:1px solid #ccd;border-radius:999px;padding:0 .5rem;margin-left:.5rem;background:#fff;cursor:pointer}
-  `;
-  const s = document.createElement('style');
-  s.textContent = css;
-  document.head.appendChild(s);
-}
-function injectDiffToggle(){
-  const bar = document.querySelector('.toolbar');
-  if (!bar) return;
-  const label = document.createElement('label');
-  label.style.marginLeft = 'auto';
-  label.className = 'small';
-  label.innerHTML = `<input id="toggle_diffs" type="checkbox" checked/> Show inline diffs`;
-  bar.appendChild(label);
-  $('#toggle_diffs').addEventListener('change', (e)=>{
-    const on = e.target.checked;
-    $$('.auto-insert span.auto-insert', editor).forEach(sp=>{
-      sp.style.background = on ? '#f4fff4' : 'transparent';
-      sp.style.outline = on ? '1px dashed #8fd48f' : 'none';
-    });
-  });
-}
-
-function toast(msg){ try{ console.log(msg); }catch{} }
+// Initial
+updateAutoHint();
+buildSuggestions();
+refreshCoverage();
