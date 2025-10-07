@@ -1,5 +1,9 @@
 /* docs/js/power-edit.js
- * Power Edit — smarter multi‑placement weaving, natural joins, and server suggestions.
+ * Power Edit (live) — multi‑placement weaving, natural mid‑sentence joins,
+ * smarter JD targets, per‑bullet budgets, and secure server suggestions via your Edge Function.
+ *
+ * This build aligns tone with profile.html: short method/context clauses, varied joiners,
+ * and anti‑chain logic (no “with, with, with …”). Education/References are always skipped.
  */
 
 import {
@@ -8,10 +12,12 @@ import {
   jdCoverageAgainstResume,
   templatesForSkill,
   assessWeakness,
-  CUE_SETS
-} from "./scoring.js?v=2025-10-13-2";
+  CUE_SETS,
+  STOP
+} from "./scoring.js?v=2025-10-13-6";
 
 /* -------------------- DOM -------------------- */
+
 const $  = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 
@@ -39,6 +45,7 @@ const els = {
 };
 
 /* -------------------- State -------------------- */
+
 const STATE = {
   profile: { skills: [], titles: [] },
   jdTargets: [],
@@ -47,13 +54,12 @@ const STATE = {
   bridgeStyle: "auto",
   dashThreshold: 7,
   serverOk: false,
-  // NEW: prevent piling onto the same bullet
-  nodeBudget: new WeakMap(),   // Node -> used count
+  perBulletBudget: new WeakMap(), // node -> count
   maxPerBullet: 1
 };
 
-/* -------------------- Supabase (memoized) -------------------- */
-let _sb = null;
+/* -------------------- Supabase (optional but preferred) -------------------- */
+
 async function ensureSupabase() {
   if (window.supabase?.createClient) return window.supabase;
   await new Promise((resolve, reject) => {
@@ -65,12 +71,10 @@ async function ensureSupabase() {
   return window.supabase;
 }
 async function supabaseClient() {
-  if (_sb) return _sb;
   const url = window.SUPABASE_URL, key = window.SUPABASE_ANON_KEY;
   if (!url || !key) return null;
   const lib = await ensureSupabase();
-  _sb = lib.createClient(url, key);
-  return _sb;
+  return lib.createClient(url, key);
 }
 async function getUser(sb) { try { const { data } = await sb.auth.getUser(); return data.user || null; } catch { return null; } }
 async function fetchProfile(sb, user) {
@@ -86,16 +90,28 @@ async function fetchProfile(sb, user) {
 }
 
 /* -------------------- Text helpers -------------------- */
+
 const norm = (s) => (s || "").replace(/\s+/g, " ").trim();
-const text = (n) => norm(n?.textContent || "");
-function sentenceCase(s) { for (let i = 0; i < s.length; i++) { const ch = s[i]; if (/[A-Za-z]/.test(ch)) return s.slice(0,i) + ch.toUpperCase() + s.slice(i+1); } return s; }
+const text = (n) => norm(n?.textContent || ""); // plain text (no markup)
 
-/* DOM block helpers */
-function paraNodesInEditor() { return $$("#editor h1, #editor h2, #editor h3, #editor h4, #editor p, #editor li, #editor div"); }
+function sentenceCase(s) {
+  for (let i = 0; i < s.length; i++) { const ch = s[i]; if (/[A-Za-z]/.test(ch)) return s.slice(0,i) + ch.toUpperCase() + s.slice(i+1); }
+  return s;
+}
 
-/* -------------------- Section detection -------------------- */
-const EDU_TITLES = ["education","education and training","education & training","academic credentials","academics","education and honors"];
-const EXP_TITLES = ["work experience","experience","professional experience","employment","relevant experience"];
+function paraNodesInEditor() {
+  return $$("#editor h1, #editor h2, #editor h3, #editor h4, #editor p, #editor li, #editor div");
+}
+
+/* -------------------- Section detection (Education guard) -------------------- */
+
+const EDU_TITLES = [
+  "education","education and training","education & training",
+  "academic credentials","academics","education and honors"
+];
+const EXP_TITLES = [
+  "work experience","experience","professional experience","employment","relevant experience"
+];
 
 function findSectionRanges(titles) {
   const wants = titles.map(t => t.toLowerCase());
@@ -113,12 +129,14 @@ function findSectionRanges(titles) {
   }
   return { blocks, ranges };
 }
+
 function educationRange() {
-  const titles = [...EDU_TITLES, ...EXP_TITLES, "skills","technical skills","core skills","projects","certifications","awards","summary","professional summary","publications","volunteer experience","research experience","activities","leadership"];
+  const titles = [...EDU_TITLES, ...EXP_TITLES, "skills","technical skills","core skills","projects","certifications","awards","summary","professional summary","publications","volunteer experience","research experience","activities","leadership","references"];
   const { blocks, ranges } = findSectionRanges(titles);
   for (const k of EDU_TITLES.map(t => t.toLowerCase())) { if (ranges.has(k)) return { blocks, range: ranges.get(k) }; }
   return { blocks, range: null };
 }
+
 function workStartIndex() {
   const { ranges } = findSectionRanges([...EXP_TITLES, ...EDU_TITLES]);
   for (const name of EXP_TITLES.map(t => t.toLowerCase())) if (ranges.has(name)) return ranges.get(name)[0];
@@ -126,9 +144,12 @@ function workStartIndex() {
   return Math.min(paraNodesInEditor().length, 8);
 }
 function inEducation(i) { const { range } = educationRange(); return !!(range && i >= range[0] && i < range[1]); }
-function isReferenceLine(n) { const t = text(n).toLowerCase(); return t.includes("references") && (t.includes("request") || t.includes("available")); }
+function isReferenceLine(n) { const t = text(n).toLowerCase(); return (t.includes("references") && (t.includes("request") || t.includes("available"))) || t === "references"; }
 
 /* -------------------- Candidate bullets -------------------- */
+
+const METHOD_LEADS = /\b(with|via|using|through|by|for|on)\b/i;
+
 function candidateBullets() {
   const blocks = paraNodesInEditor();
   const start = workStartIndex();
@@ -154,50 +175,72 @@ function scoreBulletForCategory(bulletText, category) {
   for (const c of cues) if (t.includes(c)) score += 2;
   if (/(develop|build|design|implement|optimiz|maintain|improv|migrat|deploy|integrat)/i.test(t)) score += 1;
   if (t.length > 60) score += 1; // favor richer bullets
+  // small bonus if bullet already has a method lead (more natural to append)
+  if (METHOD_LEADS.test(t)) score += 1;
   return score;
 }
 
-function pickBestBullets(category, count = 1, exclude = new Set()) {
+// per‑bullet budget helpers
+function canUseNode(node) {
+  const cap = STATE.maxPerBullet || 1;
+  const used = STATE.perBulletBudget.get(node) || 0;
+  return used < cap;
+}
+function markUse(node) {
+  const used = STATE.perBulletBudget.get(node) || 0;
+  STATE.perBulletBudget.set(node, used + 1);
+}
+function unmarkUse(node) {
+  const used = STATE.perBulletBudget.get(node) || 0;
+  if (used > 0) STATE.perBulletBudget.set(node, used - 1);
+}
+
+function pickBestBullets(category, count = 1) {
   const cands = candidateBullets();
   const scored = cands
     .map(c => ({ node: c.node, score: scoreBulletForCategory(text(c.node), category) }))
-    .filter(x => x.score > 0 && !exclude.has(x.node));
+    .filter(x => x.score > 0 && canUseNode(x.node));
   scored.sort((a,b) => b.score - a.score);
-  return scored.slice(0, Math.max(1, count)).map(s => s.node);
+  const nodes = [];
+  for (const s of scored) {
+    if (nodes.length >= Math.max(1, count)) break;
+    if (canUseNode(s.node)) nodes.push(s.node);
+  }
+  return nodes;
 }
 
-/* -------------------- Insert heuristics -------------------- */
+/* -------------------- Insertion (mid‑sentence first, then new sentence) -------------------- */
 
 function chooseDelim(words, style, dashThreshold) {
   return (style === "comma") ? ", " : (style === "dash") ? " — " : (words >= dashThreshold ? " — " : ", ");
 }
 function sanitizeClause(c) {
-  // never start with "and/also/including/while"; ensure no leading punctuation; keep lowercased preposition style
-  return String(c || "")
-    .replace(/^\s*(?:and|also|additionally|including|while)\s+/i, "")
-    .replace(/^\s*[,;:—–-]\s*/i, "")
-    .replace(/\.\s*$/,"")
-    .replace(/\b(with|via|on|for|by|using)\s+\1\b/gi, "$1")
-    .trim();
+  // never start with "and"; ensure no leading punctuation; keep lowercased preposition style
+  return String(c || "").replace(/^\s*(?:and\s+|[,—–]\s*)/i, "").trim();
 }
 function cutpoints(plain) {
   // candidate cutpoints after sensible joiners
   const pts = [];
-  const re = /\b(using|with|via|through|for|which|that|including)\b|[,;:—–]/gi;
+  const re = /\b(using|with|via|through|for|which|that|including|by|on)\b|[,;:—–]/gi;
   let m;
   while ((m = re.exec(plain)) !== null) { pts.push(m.index + (m[0].length)); }
   return pts;
 }
-function hasNearbyJoiner(plain, idx, windowChars = 24) {
-  const left = plain.slice(Math.max(0, idx - windowChars), idx).toLowerCase();
-  return /\b(with|via|using|by|on|for)\b/.test(left);
+
+// If the trailing context already ends with a method lead, avoid chaining another “with …”
+function tailHasMethodJoiner(before) {
+  const look = before.slice(Math.max(0, before.length - 60));
+  return /\b(with|via|using|through|by|on|for)\b[^.!?]{0,40}$/i.test(look);
 }
+
 function insertAt(hostNode, idx, insertText) {
   const beforeHTML = hostNode.innerHTML;
   const plain = text(hostNode);
   if (!plain) return null;
+
   const left  = plain.slice(0, idx);
   const right = plain.slice(idx);
+  // Escape HTML for safety
   const esc = (s) => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
   hostNode.innerHTML = esc(left) + `<span class="ins">${insertText}</span>` + esc(right);
   return { beforeHTML, afterHTML: hostNode.innerHTML, insertedText: insertText };
@@ -213,18 +256,15 @@ function buildInsertion(hostNode, clause, style = "auto", dashThreshold = 7) {
   const delim = chooseDelim(words, style, dashThreshold);
   const body  = sanitizeClause(clause);
 
-  // Prefer mid‑sentence at the last sensible breakpoint — but avoid "…, with … with …"
+  // Prefer mid‑sentence: last sensible breakpoint
   const cps = cutpoints(plain);
-  if (cps.length) {
+  if (cps.length && !tailHasMethodJoiner(plain)) {
     const cut = cps[cps.length - 1];
-    const wouldRepeat = hasNearbyJoiner(plain, cut);
-    if (!wouldRepeat) {
-      const ins = (plain[cut - 1] && /\s/.test(plain[cut - 1])) ? body : (delim + body);
-      return insertAt(hostNode, cut, ins);
-    }
+    const ins = (plain[cut - 1] && /\s/.test(plain[cut - 1])) ? body : (delim + body);
+    return insertAt(hostNode, cut, ins);
   }
 
-  // Otherwise append as a clean new clause/sentence
+  // Otherwise new sentence (or chaining would look bad)
   const endsWithPeriod = /[.!?]\s*$/.test(plain);
   if (endsWithPeriod) {
     const s = " " + sentenceCase(body) + (body.endsWith(".") ? "" : ".");
@@ -240,39 +280,31 @@ function buildInsertion(hostNode, clause, style = "auto", dashThreshold = 7) {
 }
 
 function weaveOnce(hostNode, clause, why) {
+  if (!canUseNode(hostNode)) return false;
   const ins = buildInsertion(hostNode, clause, STATE.bridgeStyle, STATE.dashThreshold);
   if (!ins) return false;
+
   hostNode.classList.add("auto-insert");
   hostNode.dataset.before = ins.beforeHTML;
+
+  // little “?” explainer per insertion
   const btn = document.createElement("button");
   btn.textContent = "?"; btn.className = "secondary small"; btn.style.marginLeft = "6px";
   btn.title = why || "Keyword from the job description";
   btn.addEventListener("click", (e) => { e.preventDefault(); alert(why || "Inserted to align with JD keywords."); });
   hostNode.appendChild(btn);
 
-  // budget tracking
-  const used = STATE.nodeBudget.get(hostNode) || 0;
-  STATE.nodeBudget.set(hostNode, used + 1);
-
   STATE.inserts.push({ node: hostNode, beforeHTML: ins.beforeHTML, afterHTML: hostNode.innerHTML, phrase: clause, why });
+  markUse(hostNode);
+  els.btnUndo.disabled = els.btnClear.disabled = STATE.inserts.length === 0;
   return true;
 }
 
-function nodeHasBudget(node) {
-  const used = STATE.nodeBudget.get(node) || 0;
-  return used < STATE.maxPerBullet;
-}
-
 function weavePhraseIntoMultiple(phrase, why, category, maxPlacements = 2) {
-  const placedIn = new Set();
   let placed = 0;
-
-  // prefer distinct bullets first
-  for (const node of pickBestBullets(category, Math.max(2, maxPlacements * 2))) {
-    if (placedIn.has(node)) continue;
-    if (!nodeHasBudget(node)) continue;
+  for (const node of pickBestBullets(category, maxPlacements)) {
     const ok = weaveOnce(node, phrase, why);
-    if (ok) { placedIn.add(node); placed++; }
+    if (ok) placed++;
     if (placed >= maxPlacements) break;
   }
   return placed;
@@ -305,9 +337,10 @@ function appendNewBulletAfterEducation(clause, why) {
   btn.addEventListener("click", e => { e.preventDefault(); alert(why || "Inserted to align with JD keywords."); });
   li.appendChild(btn);
 
-  STATE.nodeBudget.set(li, 1); // count the bullet itself
   targetList.appendChild(li);
   STATE.inserts.push({ node: li, beforeHTML: "", afterHTML: li.innerHTML, phrase: clean, why });
+  markUse(li);
+  els.btnUndo.disabled = els.btnClear.disabled = STATE.inserts.length === 0;
 }
 
 function undoLast() {
@@ -316,21 +349,19 @@ function undoLast() {
   item.node.innerHTML = item.beforeHTML;
   item.node.classList.remove("auto-insert");
   delete item.node.dataset.before;
-  // roll back budget
-  const used = STATE.nodeBudget.get(item.node) || 0;
-  if (used > 0) STATE.nodeBudget.set(item.node, used - 1);
+  unmarkUse(item.node);
   els.btnUndo.disabled = els.btnClear.disabled = STATE.inserts.length === 0;
 }
-function clearAllInserts() {
-  while (STATE.inserts.length) undoLast();
-  STATE.nodeBudget = new WeakMap();
-}
+function clearAllInserts() { while (STATE.inserts.length) undoLast(); }
 
-/* -------------------- Weak/overlong line rewrites (console preview only) -------------------- */
+/* -------------------- Weak/overlong line rewrites (preview only) -------------------- */
+
 function safeRewrite(textLine, jdTokens = []) {
   const t = norm(textLine).replace(/^\u2022\s*/, "");
   if (!t) return t;
+  // Strip weak openers; never add "And"
   let s = t.replace(/\b(responsible for|duties included)\b/i, "");
+  // Integrate 1–2 JD tokens as a method clause (no fabricated metrics)
   const picks = jdTokens.slice(0, 2).filter(Boolean);
   const chunk = picks.length === 2 ? `${picks[0]} and ${picks[1]}` : (picks[0] || "");
   if (chunk) {
@@ -362,6 +393,7 @@ function proposeRewritesForDocument() {
 }
 
 /* -------------------- Suggestions (local + server) -------------------- */
+
 function renderSuggestionItem({labelHTML, clause, category, why}) {
   const item = document.createElement("div");
   item.className = "suggestion";
@@ -375,10 +407,21 @@ function renderSuggestionItem({labelHTML, clause, category, why}) {
   els.suggestions.appendChild(item);
 }
 
+// Build a ban list for the miner: company, location, and EEO/benefits tokens already in STOP.
+function jdBanlist() {
+  const out = [];
+  const pushTokens = (s) => (s || "").toLowerCase().replace(/[^a-z0-9+./ -]+/g," ").split(/\s+/).forEach(w => { if (w && !STOP.has(w)) out.push(w); });
+  pushTokens(els.jdCompany?.value || "");
+  pushTokens(els.jdLocation?.value || "");
+  // Small extras that frequently appear as garbage targets but we don't want as skills
+  out.push("reasonable","accommodations","accommodation","qualified","individuals","employment","applicants","employer","benefits","salary","compensation");
+  return out;
+}
+
 function buildLocalSuggestions() {
   els.suggestions.innerHTML = "";
   const allowed = (STATE.profile.skills || []).concat(STATE.profile.titles || []);
-  STATE.jdTargets = smartJDTargets(norm(els.jdText.value), allowed).slice(0, 18);
+  STATE.jdTargets = smartJDTargets(norm(els.jdText.value), allowed, jdBanlist()).slice(0, 18);
 
   if (!STATE.jdTargets.length) {
     els.suggestions.textContent = "Suggestions appear after you paste a JD.";
@@ -390,6 +433,7 @@ function buildLocalSuggestions() {
     const why = `Tailored for JD keyword: ${t.display}`;
     const label = `• <strong>${t.display}</strong> <span class="small muted">(${t.category})</span><br/><span class="small">Weave: <code>${clause}</code> <span class="pill">local</span></span>`;
     renderSuggestionItem({labelHTML: label, clause, category: t.category, why});
+    // metric‑ready templates
     for (const tpl of templatesForSkill(t.display)) {
       const labelTpl = `• ${tpl.replace(/\[.*?\]/g, '<span class="muted">[fill]</span>')} <span class="small pill">template</span>`;
       renderSuggestionItem({labelHTML: labelTpl, clause: tpl, category: t.category, why: `Metric‑ready template for ${t.display}`});
@@ -420,7 +464,7 @@ async function buildServerSuggestions() {
     STATE.serverPhrases = clauses.filter(it => it?.clause).slice(0, 12);
 
     for (const it of STATE.serverPhrases) {
-      const clause = sanitizeClause(String(it.clause).trim());
+      const clause = String(it.clause).trim();
       const label = `• <strong>${clause}</strong><br/><span class="small">Weave: <code>${clause}</code> <span class="pill">server</span></span>`;
       renderSuggestionItem({labelHTML: label, clause, category: "other", why: "Server‑suggested clause (Edge Function)"});
     }
@@ -428,12 +472,13 @@ async function buildServerSuggestions() {
 }
 
 /* -------------------- Coverage / Score -------------------- */
+
 function refreshCoverage() {
   const jd = norm(els.jdText.value);
   const resumePlain = text(els.editor);
   if (!jd || !resumePlain) return;
 
-  const cov = jdCoverageAgainstResume(jd, resumePlain);
+  const cov = jdCoverageAgainstResume(jd, resumePlain, jdBanlist());
   const score = Math.round((cov.hits.length / (cov.hits.length + cov.misses.length || 1)) * 100);
   els.scoreline.textContent = `Score: ${isFinite(score) ? score : 0}`;
 
@@ -453,15 +498,18 @@ function refreshCoverage() {
 }
 
 /* -------------------- Import / Export -------------------- */
+
 async function importDocx(file) {
   const buf = await file.arrayBuffer();
+  // Mammoth browser API: convertToHtml({ arrayBuffer }) returns { value: "<html ...>" }
   const result = await window.mammoth.convertToHtml({ arrayBuffer: buf });
   els.editor.innerHTML = result.value || "";
   refreshCoverage();
-  await hydrateProfileAndSuggestions();
+  await hydrateProfileAndSuggestions(); // rank with profile skills
 }
 function exportDocx() {
   const html = `<!doctype html><html><head><meta charset="utf-8"></head><body>${els.editor.innerHTML}</body></html>`;
+  // htmlDocx.asBlob(html) -> Blob for download (library usage widely documented).
   const blob = window.htmlDocx.asBlob(html);
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
@@ -470,6 +518,7 @@ function exportDocx() {
 }
 
 /* -------------------- UI wiring -------------------- */
+
 function updateAutoHint() {
   const hasJD = norm(els.jdText.value).length > 0;
   const hasResume = norm(text(els.editor)).length > 0;
@@ -484,18 +533,15 @@ els.btnUndo.addEventListener("click", () => { undoLast(); });
 els.btnClear.addEventListener("click", () => { clearAllInserts(); });
 
 els.btnAuto.addEventListener("click", async () => {
-  STATE.nodeBudget = new WeakMap(); // reset budget for this pass
-  STATE.maxPerBullet = Math.max(1, Math.min(3, parseInt(els.maxPerBullet?.value || "1", 10) || 1));
-
+  // Prefer server phrases; then local bridges
   const candidateClauses = []
     .concat((STATE.serverPhrases || []).map(p => p.clause))
     .concat((STATE.jdTargets || []).map(t => bridgeForToken(t.display, t.category, STATE.bridgeStyle, STATE.dashThreshold).replace(/^[,—–]\s*/, "")))
-    .map(sanitizeClause)
     .filter(Boolean);
 
   const placements = Math.max(1, Math.min(5, parseInt(els.placements?.value || "2", 10) || 2));
   let applied = 0;
-  for (const clause of candidateClauses.slice(0, 8)) {
+  for (const clause of candidateClauses.slice(0, 10)) {
     applied += weavePhraseIntoMultiple(clause, "Auto‑tailor insert", "other", placements);
   }
   if (applied === 0 && candidateBullets().length === 0 && candidateClauses.length) {
@@ -503,6 +549,7 @@ els.btnAuto.addEventListener("click", async () => {
   }
   refreshCoverage();
 
+  // Show rewrite ideas in console (non‑destructive)
   const rewrites = proposeRewritesForDocument().slice(0, 3);
   if (rewrites.length) console.info("Rewrite suggestions:", rewrites.map(r => `– ${r.afterText}`).join("\n"));
 });
@@ -512,6 +559,7 @@ els.btnExport?.addEventListener("click", exportDocx);
 els.btnPrint?.addEventListener("click", () => window.print());
 
 /* -------------------- Bootstrap -------------------- */
+
 async function hydrateProfileAndSuggestions() {
   try {
     const sb = await supabaseClient();
@@ -526,16 +574,26 @@ async function hydrateProfileAndSuggestions() {
 }
 
 async function buildAllSuggestions() {
+  // read UI controls
+  STATE.bridgeStyle = (els.joiner?.value || "auto");
+  const dt = parseInt(els.joiner?.dataset?.dashThreshold || "7", 10);
+  if (dt) STATE.dashThreshold = dt;
+  STATE.maxPerBullet = Math.max(1, Math.min(3, parseInt(els.maxPerBullet?.value || "1", 10) || 1));
+  STATE.perBulletBudget = new WeakMap(); // reset budget on each rebuild
+
   els.suggestions.innerHTML = "";
   buildLocalSuggestions();
   await buildServerSuggestions();
 }
 
 (function init() {
+  // user‑configurable joiner/placements
   STATE.bridgeStyle = (els.joiner?.value || "auto");
-  els.joiner?.addEventListener("change", () => { STATE.bridgeStyle = els.joiner.value; });
   const dt = parseInt(els.joiner?.dataset?.dashThreshold || "7", 10); if (dt) STATE.dashThreshold = dt;
-  STATE.maxPerBullet = Math.max(1, Math.min(3, parseInt(els.maxPerBullet?.value || "1", 10) || 1));
+
+  els.joiner?.addEventListener("change", () => { STATE.bridgeStyle = els.joiner.value; buildAllSuggestions(); });
+  els.placements?.addEventListener("change", () => {/* nothing to cache */});
+  els.maxPerBullet?.addEventListener("change", () => { STATE.maxPerBullet = Math.max(1, Math.min(3, parseInt(els.maxPerBullet.value || "1", 10) || 1)); });
 
   updateAutoHint();
   hydrateProfileAndSuggestions();
