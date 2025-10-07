@@ -1,29 +1,24 @@
 /* docs/js/power-edit.js
- * Power Edit (live). Now reuses parsed profile (Supabase) and, if available,
- * calls a tiny Edge Function "power-edit-suggest" that wraps your LLM helpers.
- * Falls back to fully client-side suggestions when server is unavailable.
+ * Power Edit (live) — multi‑placement weaving, natural mid‑sentence joins,
+ * smarter JD targets, and secure server suggestions via your Edge Function.
  *
- * Behavior:
- * - Suggestions click = weave phrase into the best existing bullet AFTER Education.
- * - Supports mid-sentence or new-sentence appends (format-preserving).
- * - Adds metric-ready “Implemented/Built/Used … [X%]” templates per skill.
- * - Detects long/weak bullets and offers safe rewrites (no fabrication).
- * - Never edits Education / “References available …”.
+ * References:
+ * - contenteditable lets the resume be edited inline in the browser (MDN). 
+ * - We import .docx with Mammoth's browser API and export .docx with html-docx-js. 
  */
 
 import {
   smartJDTargets,
   bridgeForToken,
-  explainGaps,
   jdCoverageAgainstResume,
   templatesForSkill,
   assessWeakness,
   CUE_SETS
-} from "./scoring.js?v=2025-10-12-1";
+} from "./scoring.js?v=2025-10-13-1";
 
 /* -------------------- DOM -------------------- */
 
-const $ = (s, r = document) => r.querySelector(s);
+const $  = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 
 const els = {
@@ -43,24 +38,24 @@ const els = {
   file:         $("#docx_file"),
   btnExport:    $("#btn_export_docx"),
   btnPrint:     $("#btn_print_pdf"),
-  modeBadge:    $("#mode_badge")
+  modeBadge:    $("#mode_badge"),
+  placements:   $("#place_count"),
+  joiner:       $("#joiner_style")
 };
 
 /* -------------------- State -------------------- */
 
 const STATE = {
-  jd: "",
   profile: { skills: [], titles: [] },
   jdTargets: [],
-  serverPhrases: [],   // {clause, jd_cues[], bullet_cues[]} from Edge Function
-  resumeHTML: "",
-  inserts: [],         // [{node, beforeHTML, afterHTML, phrase, why}]
-  bridgeStyle: (window.POWER_EDIT_BRIDGE_STYLE || "dash"),
-  dashThreshold: parseInt(window.POWER_EDIT_DASH_THRESHOLD || "7", 10) || 7,
+  serverPhrases: [],           // {clause, jd_cues[], bullet_cues[]}
+  inserts: [],                 // [{node, beforeHTML, afterHTML, phrase, why}]
+  bridgeStyle: "auto",
+  dashThreshold: 7,
   serverOk: false
 };
 
-/* -------------------- Supabase wiring (optional) -------------------- */
+/* -------------------- Supabase (optional but preferred) -------------------- */
 
 async function ensureSupabase() {
   if (window.supabase?.createClient) return window.supabase;
@@ -72,22 +67,13 @@ async function ensureSupabase() {
   });
   return window.supabase;
 }
-
 async function supabaseClient() {
-  const url = window.SUPABASE_URL;
-  const key = window.SUPABASE_ANON_KEY;
+  const url = window.SUPABASE_URL, key = window.SUPABASE_ANON_KEY;
   if (!url || !key) return null;
   const lib = await ensureSupabase();
   return lib.createClient(url, key);
 }
-
-async function getUser(sb) {
-  try {
-    const { data } = await sb.auth.getUser();
-    return data.user || null;
-  } catch { return null; }
-}
-
+async function getUser(sb) { try { const { data } = await sb.auth.getUser(); return data.user || null; } catch { return null; } }
 async function fetchProfile(sb, user) {
   try {
     const { data, error } = await sb.from("profiles").select("*").eq("id", user.id).single();
@@ -100,16 +86,13 @@ async function fetchProfile(sb, user) {
   } catch { return {}; }
 }
 
-/* -------------------- JD / resume helpers -------------------- */
+/* -------------------- Text helpers -------------------- */
 
-const norm = s => (s || "").replace(/\s+/g, " ").trim();
-const text = n => norm(n?.textContent || "");
+const norm = (s) => (s || "").replace(/\s+/g, " ").trim();
+const text = (n) => norm(n?.textContent || ""); // get plain text only (MDN: Node.textContent). 
 
 function sentenceCase(s) {
-  for (let i = 0; i < s.length; i++) {
-    const ch = s[i];
-    if (/[A-Za-z]/.test(ch)) return s.slice(0, i) + ch.toUpperCase() + s.slice(i + 1);
-  }
+  for (let i = 0; i < s.length; i++) { const ch = s[i]; if (/[A-Za-z]/.test(ch)) return s.slice(0,i) + ch.toUpperCase() + s.slice(i+1); }
   return s;
 }
 
@@ -117,15 +100,14 @@ function paraNodesInEditor() {
   return $$("#editor h1, #editor h2, #editor h3, #editor h4, #editor p, #editor li, #editor div");
 }
 
-/* -------------------- Section detection -------------------- */
+/* -------------------- Section detection (Education guard) -------------------- */
 
 const EDU_TITLES = [
-  "education", "education and training", "education & training",
-  "academic credentials", "academics", "education and honors"
+  "education","education and training","education & training",
+  "academic credentials","academics","education and honors"
 ];
 const EXP_TITLES = [
-  "work experience", "experience", "professional experience",
-  "employment", "relevant experience"
+  "work experience","experience","professional experience","employment","relevant experience"
 ];
 
 function findSectionRanges(titles) {
@@ -139,7 +121,7 @@ function findSectionRanges(titles) {
   const ranges = new Map();
   for (let h = 0; h < hits.length; h++) {
     const start = hits[h].i;
-    const end = (h + 1 < hits.length) ? hits[h + 1].i : blocks.length;
+    const end = (h + 1 < hits.length) ? hits[h+1].i : blocks.length;
     ranges.set(hits[h].key, [start, end]);
   }
   return { blocks, ranges };
@@ -148,32 +130,20 @@ function findSectionRanges(titles) {
 function educationRange() {
   const titles = [...EDU_TITLES, ...EXP_TITLES, "skills","technical skills","core skills","projects","certifications","awards","summary","professional summary","publications","volunteer experience","research experience","activities","leadership"];
   const { blocks, ranges } = findSectionRanges(titles);
-  for (const k of EDU_TITLES.map(t => t.toLowerCase())) {
-    if (ranges.has(k)) return { blocks, range: ranges.get(k) };
-  }
+  for (const k of EDU_TITLES.map(t => t.toLowerCase())) { if (ranges.has(k)) return { blocks, range: ranges.get(k) }; }
   return { blocks, range: null };
 }
 
 function workStartIndex() {
   const { ranges } = findSectionRanges([...EXP_TITLES, ...EDU_TITLES]);
-  for (const name of EXP_TITLES.map(t => t.toLowerCase())) {
-    if (ranges.has(name)) return ranges.get(name)[0];
-  }
-  const { blocks, range } = educationRange();
-  if (range) return range[1];
+  for (const name of EXP_TITLES.map(t => t.toLowerCase())) if (ranges.has(name)) return ranges.get(name)[0];
+  const { blocks, range } = educationRange(); if (range) return range[1];
   return Math.min(paraNodesInEditor().length, 8);
 }
+function inEducation(i) { const { range } = educationRange(); return !!(range && i >= range[0] && i < range[1]); }
+function isReferenceLine(n) { const t = text(n).toLowerCase(); return t.includes("references") && (t.includes("request") || t.includes("available")); }
 
-function isReferenceLine(n) {
-  const t = text(n).toLowerCase();
-  return t.includes("references") && (t.includes("request") || t.includes("available"));
-}
-function inEducation(i) {
-  const { range } = educationRange();
-  return !!(range && i >= range[0] && i < range[1]);
-}
-
-/* -------------------- Candidates & scoring -------------------- */
+/* -------------------- Candidate bullets -------------------- */
 
 function candidateBullets() {
   const blocks = paraNodesInEditor();
@@ -184,8 +154,8 @@ function candidateBullets() {
     if (inEducation(i)) continue;
     const n = blocks[i];
     const isLI = n.tagName?.toLowerCase() === "li";
-    const isLongP = (n.tagName?.toLowerCase() === "p") && text(n).length >= 25;
-    if (!isLI && !isLongP) continue;
+    const longP = (n.tagName?.toLowerCase() === "p") && text(n).length >= 25;
+    if (!isLI && !longP) continue;
     if (!text(n)) continue;
     if (isReferenceLine(n)) continue;
     out.push({ i, node: n });
@@ -199,67 +169,110 @@ function scoreBulletForCategory(bulletText, category) {
   const cues = CUE_SETS[category] || [];
   for (const c of cues) if (t.includes(c)) score += 2;
   if (/(develop|build|design|implement|optimiz|maintain|improv|migrat|deploy|integrat)/i.test(t)) score += 1;
-  if (t.length > 60) score += 1; // prefer richer bullets
+  if (t.length > 60) score += 1; // favor richer bullets
   return score;
 }
-function bestBullet(category) {
+
+function pickBestBullets(category, count = 1, exclude = new Set()) {
   const cands = candidateBullets();
-  let best = null, bestScore = -1;
-  for (const c of cands) {
-    const s = scoreBulletForCategory(text(c.node), category);
-    if (s > bestScore) { best = c.node; bestScore = s; }
-  }
-  return best;
+  const scored = cands
+    .map(c => ({ node: c.node, score: scoreBulletForCategory(text(c.node), category) }))
+    .filter(x => x.score > 0 && !exclude.has(x.node));
+  scored.sort((a,b) => b.score - a.score);
+  return scored.slice(0, Math.max(1, count)).map(s => s.node);
 }
 
-/* -------------------- Insertion & rewrites -------------------- */
+/* -------------------- Insertion (mid‑sentence first, then new sentence) -------------------- */
 
-function buildInsertionHTML(hostNode, clause, style = "dash", dashThreshold = 7) {
-  const before = hostNode.innerHTML;
+function chooseDelim(words, style, dashThreshold) {
+  return (style === "comma") ? ", " : (style === "dash") ? " — " : (words >= dashThreshold ? " — " : ", ");
+}
+function sanitizeClause(c) {
+  // never start with "and"; ensure no leading punctuation; keep lowercased preposition style
+  return String(c || "").replace(/^\s*(?:and\s+|[,—–]\s*)/i, "").trim();
+}
+function cutpoints(plain) {
+  // candidate cutpoints after sensible joiners
+  const pts = [];
+  const re = /\b(using|with|via|through|for|which|that|including)\b|[,;:—–]/gi;
+  let m;
+  while ((m = re.exec(plain)) !== null) { pts.push(m.index + (m[0].length)); }
+  return pts;
+}
+function insertAt(hostNode, idx, insertText) {
+  // Apply into innerHTML at a character offset *of the text content*.
+  // Simplest approach: split textContent and rebuild minimal markup.
+  const beforeHTML = hostNode.innerHTML;
   const plain = text(hostNode);
   if (!plain) return null;
-  if (plain.toLowerCase().includes(clause.toLowerCase())) return null;
 
-  const endsWithPeriod = /[.!?]\s*$/.test(plain);
-  const words = clause.trim().split(/\s+/).length;
-  const delim = (style === "comma") ? ", " : (style === "auto" ? (words >= dashThreshold ? " — " : ", ") : " — ");
-
-  let ins = "";
-  if (endsWithPeriod) {
-    const body = sentenceCase(clause.replace(/^[,—–\s]+/, ""));
-    ins = " " + body + (body.endsWith(".") ? "" : ".");
-  } else {
-    ins = (plain.endsWith(" ") ? "" : delim) + clause.replace(/^[,—–\s]+/, "");
-  }
-
-  return {
-    beforeHTML: before,
-    afterHTML: before + `<span class="ins">${ins}</span>`,
-    insertedText: ins.trim()
-  };
+  const left  = plain.slice(0, idx);
+  const right = plain.slice(idx);
+  // Escape HTML for safety
+  const esc = (s) => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  hostNode.innerHTML = esc(left) + `<span class="ins">${insertText}</span>` + esc(right);
+  return { beforeHTML, afterHTML: hostNode.innerHTML, insertedText: insertText };
 }
 
-function weavePhraseIntoResume(phrase, why, category) {
-  const host = bestBullet(category);
-  if (!host) return false;
-  const ins = buildInsertionHTML(host, phrase, STATE.bridgeStyle, STATE.dashThreshold);
+function buildInsertion(hostNode, clause, style = "auto", dashThreshold = 7) {
+  const plain = text(hostNode);
+  if (!plain) return null;
+  const lc = plain.toLowerCase(), lcClause = clause.toLowerCase();
+  if (lc.includes(lcClause)) return null;
+
+  const words = clause.trim().split(/\s+/).length;
+  const delim = chooseDelim(words, style, dashThreshold);
+  const body  = sanitizeClause(clause);
+
+  // Prefer mid‑sentence: last sensible breakpoint
+  const cps = cutpoints(plain);
+  if (cps.length) {
+    const cut = cps[cps.length - 1];
+    const ins = (plain[cut - 1] && /\s/.test(plain[cut - 1])) ? body : (delim + body);
+    return insertAt(hostNode, cut, ins);
+  }
+
+  // Otherwise new sentence (no “And ”)
+  const endsWithPeriod = /[.!?]\s*$/.test(plain);
+  if (endsWithPeriod) {
+    const s = " " + sentenceCase(body) + (body.endsWith(".") ? "" : ".");
+    const before = hostNode.innerHTML;
+    hostNode.innerHTML = before + `<span class="ins">${s}</span>`;
+    return { beforeHTML: before, afterHTML: hostNode.innerHTML, insertedText: s.trim() };
+  } else {
+    const s = (plain.endsWith(" ") ? "" : delim) + body;
+    const before = hostNode.innerHTML;
+    hostNode.innerHTML = before + `<span class="ins">${s}</span>`;
+    return { beforeHTML: before, afterHTML: hostNode.innerHTML, insertedText: s.trim() };
+  }
+}
+
+function weaveOnce(hostNode, clause, why) {
+  const ins = buildInsertion(hostNode, clause, STATE.bridgeStyle, STATE.dashThreshold);
   if (!ins) return false;
-
-  host.classList.add("auto-insert");
-  host.dataset.before = ins.beforeHTML;
-  host.innerHTML = ins.afterHTML;
-
+  hostNode.classList.add("auto-insert");
+  hostNode.dataset.before = ins.beforeHTML;
+  // little “?” explainer per insertion
   const btn = document.createElement("button");
-  btn.textContent = "?";
-  btn.className = "secondary small";
-  btn.style.marginLeft = "6px";
+  btn.textContent = "?"; btn.className = "secondary small"; btn.style.marginLeft = "6px";
   btn.title = why || "Keyword from the job description";
   btn.addEventListener("click", (e) => { e.preventDefault(); alert(why || "Inserted to align with JD keywords."); });
-  host.appendChild(btn);
+  hostNode.appendChild(btn);
 
-  STATE.inserts.push({ node: host, beforeHTML: ins.beforeHTML, afterHTML: host.innerHTML, phrase, why });
-  els.btnUndo.disabled = els.btnClear.disabled = STATE.inserts.length === 0;
+  STATE.inserts.push({ node: hostNode, beforeHTML: ins.beforeHTML, afterHTML: hostNode.innerHTML, phrase: clause, why });
   return true;
+}
+
+function weavePhraseIntoMultiple(phrase, why, category, maxPlacements = 2) {
+  const placedIn = new Set();
+  let placed = 0;
+  for (const node of pickBestBullets(category, maxPlacements)) {
+    if (placedIn.has(node)) continue;
+    const ok = weaveOnce(node, phrase, why);
+    if (ok) { placedIn.add(node); placed++; }
+    if (placed >= maxPlacements) break;
+  }
+  return placed;
 }
 
 function appendNewBulletAfterEducation(clause, why) {
@@ -270,7 +283,7 @@ function appendNewBulletAfterEducation(clause, why) {
   for (let i = start; i < blocks.length; i++) {
     const n = blocks[i];
     if (n.closest && (n.closest("ul,ol"))) { targetList = n.closest("ul,ol"); break; }
-    if (n.tagName && (n.tagName.toLowerCase() === "ul" || n.tagName.toLowerCase() === "ol")) { targetList = n; break; }
+    if (n.tagName && (/^u|o/i).test(n.tagName)) { targetList = n; break; }
   }
   if (!targetList) {
     const startNode = blocks[start] || els.editor.lastElementChild || els.editor;
@@ -280,20 +293,17 @@ function appendNewBulletAfterEducation(clause, why) {
   }
   const li = document.createElement("li");
   li.className = "auto-insert";
-  const ins = (clause.startsWith(",") || clause.startsWith(" — ")) ? clause.replace(/^[,—–]\s*/, "") : clause;
-  li.innerHTML = `<span class="ins">• ${ins}</span>`;
-  targetList.appendChild(li);
+  const clean = sanitizeClause(clause);
+  li.innerHTML = `<span class="ins">• ${clean}</span>`;
 
   const btn = document.createElement("button");
-  btn.textContent = "?";
-  btn.className = "secondary small";
-  btn.style.marginLeft = "6px";
+  btn.textContent = "?"; btn.className = "secondary small"; btn.style.marginLeft = "6px";
   btn.title = why || "Keyword from the job description";
   btn.addEventListener("click", e => { e.preventDefault(); alert(why || "Inserted to align with JD keywords."); });
   li.appendChild(btn);
 
-  STATE.inserts.push({ node: li, beforeHTML: "", afterHTML: li.innerHTML, phrase: ins, why });
-  els.btnUndo.disabled = els.btnClear.disabled = false;
+  targetList.appendChild(li);
+  STATE.inserts.push({ node: li, beforeHTML: "", afterHTML: li.innerHTML, phrase: clean, why });
 }
 
 function undoLast() {
@@ -306,28 +316,26 @@ function undoLast() {
 }
 function clearAllInserts() { while (STATE.inserts.length) undoLast(); }
 
-/* -------------------- Weak/overlong line rewrites -------------------- */
+/* -------------------- Weak/overlong line rewrites (preview only) -------------------- */
 
 function safeRewrite(textLine, jdTokens = []) {
   const t = norm(textLine).replace(/^\u2022\s*/, "");
   if (!t) return t;
-  // Strip weak openers
+  // Strip weak openers; never add "And"
   let s = t.replace(/\b(responsible for|duties included)\b/i, "");
   // Integrate 1–2 JD tokens as a method clause (no fabricated metrics)
   const picks = jdTokens.slice(0, 2).filter(Boolean);
   const chunk = picks.length === 2 ? `${picks[0]} and ${picks[1]}` : (picks[0] || "");
   if (chunk) {
-    const join = (STATE.bridgeStyle === "comma") ? ", " : (STATE.bridgeStyle === "auto" ? (chunk.split(/\s+/).length >= STATE.dashThreshold ? " — " : ", ") : " — ");
+    const join = chooseDelim(chunk.split(/\s+/).length, STATE.bridgeStyle, STATE.dashThreshold);
     s = s.replace(/[.!?]\s*$/, "");
     s = `${s}${join}leveraging ${chunk}.`;
   }
-  // Tighten up spacing/case
   return s.replace(/\s+/g, " ").trim();
 }
 
 function proposeRewritesForDocument() {
   const cands = candidateBullets();
-  const jd = norm(els.jdText.value);
   const targets = (STATE.jdTargets || []).map(t => t.display);
   const rewrites = [];
   for (const c of cands) {
@@ -352,9 +360,10 @@ function renderSuggestionItem({labelHTML, clause, category, why}) {
   const item = document.createElement("div");
   item.className = "suggestion";
   item.innerHTML = labelHTML;
-  item.addEventListener("click", () => {
-    const ok = weavePhraseIntoResume(clause, why, category);
-    if (!ok) appendNewBulletAfterEducation(clause, why);
+  item.addEventListener("click", (e) => {
+    const placements = Math.max(1, Math.min(5, parseInt(els.placements?.value || "1", 10) || 1));
+    const placed = weavePhraseIntoMultiple(clause, why, category, e.shiftKey ? Math.max(2, placements) : placements);
+    if (placed === 0) appendNewBulletAfterEducation(clause, why);
     refreshCoverage();
   });
   els.suggestions.appendChild(item);
@@ -362,8 +371,8 @@ function renderSuggestionItem({labelHTML, clause, category, why}) {
 
 function buildLocalSuggestions() {
   els.suggestions.innerHTML = "";
-  const allowed = STATE.profile.skills || [];
-  STATE.jdTargets = smartJDTargets(norm(els.jdText.value), allowed).slice(0, 16);
+  const allowed = (STATE.profile.skills || []).concat(STATE.profile.titles || []);
+  STATE.jdTargets = smartJDTargets(norm(els.jdText.value), allowed).slice(0, 18);
 
   if (!STATE.jdTargets.length) {
     els.suggestions.textContent = "Suggestions appear after you paste a JD.";
@@ -375,10 +384,10 @@ function buildLocalSuggestions() {
     const why = `Tailored for JD keyword: ${t.display}`;
     const label = `• <strong>${t.display}</strong> <span class="small muted">(${t.category})</span><br/><span class="small">Weave: <code>${clause}</code> <span class="pill">local</span></span>`;
     renderSuggestionItem({labelHTML: label, clause, category: t.category, why});
-    // add your metric-ready templates
+    // metric‑ready templates
     for (const tpl of templatesForSkill(t.display)) {
       const labelTpl = `• ${tpl.replace(/\[.*?\]/g, '<span class="muted">[fill]</span>')} <span class="small pill">template</span>`;
-      renderSuggestionItem({labelHTML: labelTpl, clause: tpl, category: t.category, why: `Metric-ready template for ${t.display}`});
+      renderSuggestionItem({labelHTML: labelTpl, clause: tpl, category: t.category, why: `Metric‑ready template for ${t.display}`});
     }
   }
 }
@@ -392,12 +401,12 @@ async function buildServerSuggestions() {
     if (!session?.data?.session) return;
 
     const payload = {
-      job_title: norm(els.jdTitle?.value || ""),
-      job_company: norm(els.jdCompany?.value || ""),
+      job_title:    norm(els.jdTitle?.value || ""),
+      job_company:  norm(els.jdCompany?.value || ""),
       job_description: norm(els.jdText.value),
       resume_plain: text(els.editor),
       allowed_vocab: (STATE.profile.skills || []).concat(STATE.profile.titles || []),
-      wanted: 8
+      wanted: 10
     };
     const { data, error } = await sb.functions.invoke("power-edit-suggest", { body: payload });
     if (error || !data) return;
@@ -407,13 +416,10 @@ async function buildServerSuggestions() {
 
     for (const it of STATE.serverPhrases) {
       const clause = String(it.clause).trim();
-      const category = (it.bullet_cues && it.bullet_cues.length) ? CUE_SETS.backend ? "backend" : "other" : "other";
       const label = `• <strong>${clause}</strong><br/><span class="small">Weave: <code>${clause}</code> <span class="pill">server</span></span>`;
-      renderSuggestionItem({labelHTML: label, clause, category, why: "Server‑suggested clause (Edge Function)"});
+      renderSuggestionItem({labelHTML: label, clause, category: "other", why: "Server‑suggested clause (Edge Function)"});
     }
-  } catch {
-    // silent fallback
-  }
+  } catch { /* silent fallback */ }
 }
 
 /* -------------------- Coverage / Score -------------------- */
@@ -442,18 +448,19 @@ function refreshCoverage() {
   ].join("");
 }
 
-/* -------------------- Import/Export -------------------- */
+/* -------------------- Import / Export -------------------- */
 
 async function importDocx(file) {
   const buf = await file.arrayBuffer();
+  // Mammoth browser API: convertToHtml({ arrayBuffer }) returns { value: "<html ...>" } 
   const result = await window.mammoth.convertToHtml({ arrayBuffer: buf });
   els.editor.innerHTML = result.value || "";
-  STATE.resumeHTML = els.editor.innerHTML;
   refreshCoverage();
-  await hydrateProfileAndSuggestions(); // re-rank with profile skills
+  await hydrateProfileAndSuggestions(); // rank with profile skills
 }
 function exportDocx() {
   const html = `<!doctype html><html><head><meta charset="utf-8"></head><body>${els.editor.innerHTML}</body></html>`;
+  // htmlDocx.asBlob(html) -> Blob for download (library usage widely documented). 
   const blob = window.htmlDocx.asBlob(html);
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
@@ -461,52 +468,48 @@ function exportDocx() {
   a.click();
 }
 
-/* -------------------- UI Wiring -------------------- */
+/* -------------------- UI wiring -------------------- */
 
 function updateAutoHint() {
   const hasJD = norm(els.jdText.value).length > 0;
   const hasResume = norm(text(els.editor)).length > 0;
   els.btnAuto.disabled = !(hasJD && hasResume);
-  els.autoHint.textContent = els.btnAuto.disabled
-    ? "Paste a JD and load/paste your resume to enable Auto‑tailor."
-    : "";
+  els.autoHint.textContent = els.btnAuto.disabled ? "Paste a JD and load/paste your resume to enable Auto‑tailor." : "";
 }
 
 els.jdText.addEventListener("input", async () => { await buildAllSuggestions(); refreshCoverage(); updateAutoHint(); });
 els.editor.addEventListener("input", () => { refreshCoverage(); updateAutoHint(); });
 
-els.btnUndo.addEventListener("click", undoLast);
-els.btnClear.addEventListener("click", clearAllInserts);
+els.btnUndo.addEventListener("click", () => { undoLast(); });
+els.btnClear.addEventListener("click", () => { clearAllInserts(); });
 
 els.btnAuto.addEventListener("click", async () => {
-  // Try server phrases first, then local targets
+  // Prefer server phrases; then local bridges
   const candidateClauses = []
     .concat((STATE.serverPhrases || []).map(p => p.clause))
     .concat((STATE.jdTargets || []).map(t => bridgeForToken(t.display, t.category, STATE.bridgeStyle, STATE.dashThreshold).replace(/^[,—–]\s*/, "")))
     .filter(Boolean);
 
+  const placements = Math.max(1, Math.min(5, parseInt(els.placements?.value || "2", 10) || 2));
   let applied = 0;
-  for (const clause of candidateClauses.slice(0, 6)) {
-    if (weavePhraseIntoResume(clause, "Auto‑tailor insert", "other")) applied++;
+  for (const clause of candidateClauses.slice(0, 8)) {
+    applied += weavePhraseIntoMultiple(clause, "Auto‑tailor insert", "other", placements);
   }
-  if (!applied && candidateBullets().length === 0 && candidateClauses.length) {
+  if (applied === 0 && candidateBullets().length === 0 && candidateClauses.length) {
     appendNewBulletAfterEducation(candidateClauses[0], "Auto‑tailor insert");
   }
   refreshCoverage();
 
-  // Offer rewrites for weak/long lines (non-destructive preview via alert)
+  // Show rewrite ideas in console (non‑destructive)
   const rewrites = proposeRewritesForDocument().slice(0, 3);
-  if (rewrites.length) {
-    const msg = rewrites.map(r => `– ${r.afterText}`).join("\n");
-    console.info("Rewrite suggestions:", msg);
-  }
+  if (rewrites.length) console.info("Rewrite suggestions:", rewrites.map(r => `– ${r.afterText}`).join("\n"));
 });
 
 els.file?.addEventListener("change", (e) => { const f = e.target.files[0]; if (f) importDocx(f); });
 els.btnExport?.addEventListener("click", exportDocx);
 els.btnPrint?.addEventListener("click", () => window.print());
 
-/* -------------------- Profile + suggestions bootstrap -------------------- */
+/* -------------------- Bootstrap -------------------- */
 
 async function hydrateProfileAndSuggestions() {
   try {
@@ -517,22 +520,23 @@ async function hydrateProfileAndSuggestions() {
     STATE.profile = await fetchProfile(sb, user);
     STATE.serverOk = true;
     if (els.modeBadge) els.modeBadge.textContent = "Signed in (server boost)";
-  } catch {
-    STATE.serverOk = false;
-  }
+  } catch { STATE.serverOk = false; }
   await buildAllSuggestions();
 }
 
 async function buildAllSuggestions() {
   els.suggestions.innerHTML = "";
   buildLocalSuggestions();
-  await buildServerSuggestions(); // may append more items
+  await buildServerSuggestions();
 }
 
-/* -------------------- Initial -------------------- */
+(function init() {
+  // user‑configurable joiner/placements
+  STATE.bridgeStyle = (els.joiner?.value || "auto");
+  els.joiner?.addEventListener("change", () => { STATE.bridgeStyle = els.joiner.value; });
+  const dt = parseInt(els.joiner?.dataset?.dashThreshold || "7", 10); if (dt) STATE.dashThreshold = dt;
 
-(async function init() {
   updateAutoHint();
-  await hydrateProfileAndSuggestions();
+  hydrateProfileAndSuggestions();
   refreshCoverage();
 })();
