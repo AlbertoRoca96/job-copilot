@@ -1,293 +1,149 @@
-// docs/js/scoring.js
-// Deterministic helpers + "smart suggestion" extraction.
-// Exports:
-// - tokenize, tokensFromTerms, explainGaps, scoreJob
-// - jdCoverageAgainstResume(job, resumeHtml)
-// - smartJDTargets(job, resumeHtml, profile, topN)
-// - usefulToken(token)  <-- small helper for UI fallbacks
+/* docs/js/scoring.js
+   Lightweight JD keyword miner + coverage helpers used by power-edit.js.
+   Mirrors the shape/intent of the Python planner (call_llm_weaves/mined_plan),
+   but runs entirely in the browser.
+*/
 
-//////////////////////////
-// Canon + pretty maps  //
-//////////////////////////
-
-/** Canonicalize common multi-word/variant tech terms before tokenizing. */
-function precanon(str = "") {
-  return String(str)
-    // multi-word tech → single token
-    .replace(/\bruby\s+on\s+rails\b/gi, "rails")
-    .replace(/\bnode\.?js\b/gi, "nodejs")
-    .replace(/\breact\s+native\b/gi, "reactnative")
-    .replace(/\bservice\s+worker(s)?\b/gi, "serviceworker")
-    .replace(/\bgit(hub)?\s+actions?\b/gi, "githubactions")
-    .replace(/\bhugging\s+face\b/gi, "huggingface")
-    .replace(/\b(c\+\+)\b/gi, "c++")
-    .replace(/\b(c#|c-sharp)\b/gi, "csharp")
-    .replace(/\b(pl\/?pgsql)\b/gi, "plpgsql")
-    .replace(/\b(postgre(sql)?|postgres)\b/gi, "postgresql")
-    .replace(/\bci[\/\-]?cd\b/gi, "cicd")
-    .replace(/\bfull\s*[-\s]?stack\b/gi, "fullstack");
-}
-
-const PRETTY = {
-  rails: "Ruby on Rails",
-  nodejs: "Node.js",
-  reactnative: "React Native",
-  serviceworker: "Service Worker",
-  githubactions: "GitHub Actions",
-  huggingface: "Hugging Face",
-  "c++": "C++",
-  csharp: "C#",
-  plpgsql: "PL/pgSQL",
-  postgresql: "PostgreSQL",
-  cicd: "CI/CD",
-  fullstack: "Full-Stack",
+export const CONFIG = {
+  MID_SENTENCE_STYLE: 'dash',  // 'comma' | 'dash' | 'auto'
+  DASH_THRESHOLD: 7,
+  MAX_WEAVE_WORDS: 18,
+  MAX_TERMS: 24
 };
 
-const GENERIC_BAN = new Set([
-  "engineer","engineering","developer","development","software","systems","team",
-  "customer","users","clients","program","project","solution","product","our","we",
-  "daily","motivation","road","zero","waste","benefits","policy","applicants","visa"
+export const STOP = new Set([
+  'the','and','for','with','to','of','in','on','as','by','or','an','a','at','from','using',
+  'we','you','our','your','will','role','responsibilities','requirements','preferred','must',
+  'including','include','etc','ability','skills','excellent','communication','experience',
+  'year','years','plus','bonus','team','teams','work','working'
 ]);
 
-// Lightweight English stoplist (kept small on purpose)
-const STOP = new Set("a an and are as at be by for from in is it of on or that the this to with while where who will would".split(" "));
+// canonical display casing for common terms used in both JD + resume
+const CANON = {
+  'ap style':'AP style','cms':'CMS','pos':'POS','crm':'CRM',
+  'microsoft office':'Microsoft Office','excel':'Excel','word':'Word','powerpoint':'PowerPoint','outlook':'Outlook',
+  'adobe':'Adobe','photoshop':'Photoshop','illustrator':'Illustrator','indesign':'InDesign',
+  'sql':'SQL','supabase':'Supabase','github actions':'GitHub Actions',
+  'javascript':'JavaScript','typescript':'TypeScript','react':'React','react native':'React Native',
+};
 
-//////////////////////////
-// Token utilities      //
-//////////////////////////
-
-export function tokenize(str = "") {
-  return precanon(str)
-    .toLowerCase()
-    .replace(/[\/]/g, " ")
-    .match(/[a-z][a-z0-9+.#-]{1,}/g) || [];
+export function canon(s='') {
+  let out = s;
+  // longest keys first
+  Object.keys(CANON).sort((a,b)=>b.length-a.length).forEach(k=>{
+    const rx = new RegExp(`\\b${escapeRegExp(k)}\\b`,'ig');
+    out = out.replace(rx, CANON[k]);
+  });
+  return out;
 }
 
-export function tokensFromTerms(arr = []) {
-  const out = new Set();
-  for (const t of arr) {
-    const canon = precanon(String(t));
-    tokenize(canon).forEach(x => {
-      out.add(x);
-      if (x.includes("-")) out.add(x.replaceAll("-", "")); // front-end → frontend
-    });
-  }
-  return Array.from(out);
+export function normalizeWS(s=''){ return (s||'').replace(/\s+/g,' ').trim(); }
+export function uniq(a){ return [...new Set(a)]; }
+export function escapeRegExp(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
+
+export function tokenize(s=''){
+  // allow tokens like c++, node.js, pl/pgsql
+  return (s.toLowerCase().match(/[a-z][a-z0-9+./-]{1,}/g) || []);
+}
+export function tokenSet(s=''){ return new Set(tokenize(s)); }
+
+// Pull only the meaningful parts of the JD for mining.
+export function importantJDText(jdRaw=''){
+  // Keep everything; light collapse only.
+  return normalizeWS(jdRaw);
 }
 
-const uniq = (arr) => Array.from(new Set(arr.filter(Boolean)));
-const pct  = (n, d) => (d > 0 ? n / d : 0);
-
-// Re-export small usefulness check for UI fallbacks
-export function usefulToken(t) {
-  const x = String(t || "").toLowerCase();
-  return x && !STOP.has(x) && !GENERIC_BAN.has(x);
-}
-
-//////////////////////////
-// Location & scoring   //
-//////////////////////////
-
-function locOk(job, profile = {}) {
-  const pol = profile.location_policy || {};
-  const wantRemote = !!pol.remote_only;
-  const loc = `${job.location || ""} ${job.description || ""}`.toLowerCase();
-  if (wantRemote && !/remote|work from home|distributed/.test(loc)) return false;
-
-  const countries = (pol.allowed_countries || []).map(s => String(s).toLowerCase());
-  const states    = (pol.allowed_states    || []).map(s => String(s).toLowerCase());
-  const allowList = countries.concat(states);
-
-  if (allowList.length) {
-    const ok = allowList.some(x => loc.includes(x));
-    if (!ok && wantRemote) return /united states|usa|u\.s\./.test(loc);
-    return ok;
-  }
-  return true;
-}
-
-export function explainGaps(job = {}, profile = {}) {
-  const jobToks = uniq(tokenize(`${job.title || ""} ${job.description || ""}`));
-  const profSkills = tokensFromTerms(profile.skills || []);
-  const musts = tokensFromTerms(profile.must_haves || []);
-
-  const missing_must_haves = musts.filter(m => !jobToks.includes(m));
-  const missing_skills = profSkills.filter(s => !jobToks.includes(s)).slice(0, 50);
-
-  return {
-    location_ok: locOk(job, profile),
-    missing_must_haves,
-    missing_skills,
-    job_tokens: jobToks,
-    profile_skills: profSkills
+// Very small synonyms mapper to collapse noisy variants.
+function norm(s){
+  const SYN = {
+    'js':'javascript','reactjs':'react','ts':'typescript','ml':'machine learning',
+    'cv':'computer vision','postgres':'postgresql','gh actions':'github actions',
+    'gh-actions':'github actions','ci/cd':'ci','rest':'rest','etl':'data pipeline'
   };
+  const t = (s||'').toLowerCase().trim();
+  return SYN[t] || t;
 }
 
-export function scoreJob(job = {}, profile = {}) {
-  const g = explainGaps(job, profile);
-  const prof = new Set(g.profile_skills);
-  const hits = g.job_tokens.filter(t => prof.has(t)).length;
-  const hitPct = pct(hits, g.job_tokens.length);
-  const mustMiss = g.missing_must_haves.length;
+// Score phrases & unigrams from allowed vocab + the JD itself.
+// Prefer (a) phrases from profile/allowed vocabulary seen in JD,
+// then (b) frequent meaningful unigrams from the JD.
+// Finally, remove anything already well represented in the resume.
+export function topJDKeywords({ jdText='', resumeHtml='', profileSkills=[] , cap=CONFIG.MAX_TERMS }={}){
+  const jd = importantJDText(jdText);
+  const resumeTxt = normalizeWS(stripHtml(resumeHtml).toLowerCase());
+  const resumeTokens = tokenSet(resumeTxt);
 
-  const base = 0.35;
-  const locBump = g.location_ok ? 0.15 : -0.05;
-  const mustPenalty = Math.min(0.3, mustMiss * 0.08);
+  // candidate phrases: come from profile skills / tags (if present)
+  const allowed = (profileSkills||[]).map(s=>norm(String(s))).filter(Boolean);
+  const phrases = allowed.filter(x=>x.includes(' '));
+  const unigrams = allowed.filter(x=>!x.includes(' '));
 
-  return Math.max(0, Math.min(1, base + locBump + 0.6 * hitPct - mustPenalty));
-}
+  const scores = new Map();
 
-//////////////////////////
-// JD vs Resume coverage//
-//////////////////////////
+  // helper: count whole-phrase occurrences
+  const countPhrase = (text, phrase) => {
+    const rx = new RegExp(`\\b${escapeRegExp(phrase)}\\b`, 'ig');
+    const m = text.match(rx);
+    return m ? m.length : 0;
+  };
 
-export function jdCoverageAgainstResume(job = {}, resumeHtml = "") {
-  const jobToks = uniq(tokenize(`${job.title || ""} ${job.description || ""}`));
-  const resToks = uniq(tokenize(String(resumeHtml)));
-  const resSet  = new Set(resToks);
-  const hits    = jobToks.filter(t => resSet.has(t));
-  const misses  = jobToks.filter(t => !resSet.has(t));
-  const score   = jobToks.length ? hits.length / jobToks.length : 0;
-  return { hits, misses, score, job_tokens: jobToks, resume_tokens: resToks };
-}
+  // phrase scoring (heavier weight)
+  phrases.forEach(ph=>{
+    if (ph.split(/\s+/).some(w=>STOP.has(w))) return;
+    const c = countPhrase(jd.toLowerCase(), ph);
+    if (c) scores.set(ph, (scores.get(ph)||0) + 3*c);
+  });
 
-//////////////////////////
-// SMART TARGETS        //
-//////////////////////////
+  // JD-derived meaningful unigrams (light weight)
+  tokenSet(jd).forEach(w=>{
+    const ww = norm(w);
+    if (STOP.has(ww)) return;
+    if (ww.length < 3) return;
+    scores.set(ww, (scores.get(ww)||0) + 1);
+  });
 
-// Keep only meaningful JD sections (drop About/EEO/Benefits/legalese).
-function importantJDText(jd = "") {
-  const parts = String(jd).split(/\n{2,}|(?:^|\n)\s*(?:###?|----+)\s*/);
-  const keepIf = /(require(d|ments)|qualifications?|what\s+you(?:'|’)ll\s+do|responsibilit|skills|must\s+have|nice\s+to\s+have|you\s+will|experience\s+with)/i;
-  const dropIf = /(about\s+us|who\s+we\s+are|mission|benefits|compensation|pay\s+range|legal|eeo|equal\s+opportunity|affirmative\s+action|privacy|accommodation|visa|sponsorship|hours?\s+et|work\s+authori[sz]ation)/i;
-  const kept = parts.filter(p => keepIf.test(p) && !dropIf.test(p));
-  return kept.length ? kept.join("\n\n") : String(jd);
-}
-
-// Tech/skills dictionary (extendable).
-const TECH_DICT = [
-  "python","java","javascript","typescript","c++","csharp","go","rust","ruby","php",
-  "rails","django","flask","spring","spring boot","react","reactnative","next.js","nodejs","express",
-  "playwright","cypress","jest","pytest","selenium",
-  "postgresql","mysql","sqlite","mongodb","redis","plpgsql","pytorch","tensorflow","opencv","huggingface",
-  "docker","kubernetes","aws","azure","gcp","lambda","s3","cloudfront","githubactions","cicd","terraform",
-  "pwa","serviceworker","graphql","rest","grpc","websocket"
-];
-
-const SOFT_BUT_REAL = [
-  "code review","unit testing","architecture","design patterns","requirements analysis",
-  "agile","scrum","stakeholder management","documentation"
-];
-
-// Extract a nearby snippet from the JD for "why" popovers
-function pickSnippet(haystack, raw, canon, display) {
-  const hay = String(haystack);
-  const lower = hay.toLowerCase();
-  const candidates = [String(raw||""), String(display||""), String(canon||"")].map(s => s.toLowerCase()).filter(Boolean);
-  for (const needle of candidates) {
-    const i = lower.indexOf(needle);
-    if (i >= 0) {
-      const start = Math.max(0, i - 50);
-      const end = Math.min(hay.length, i + needle.length + 50);
-      return hay.slice(start, end).replace(/\s+/g, " ").trim();
+  // down-rank things already present in resume text
+  [...scores.keys()].forEach(k=>{
+    const toks = tokenSet(k);
+    if ([...toks].every(t => resumeTokens.has(t))) {
+      scores.set(k, (scores.get(k)||0) * 0.5);
     }
-  }
-  return "";
+  });
+
+  const ranked = [...scores.entries()]
+    .sort((a,b)=> b[1]-a[1] || String(a[0]).localeCompare(String(b[0])))
+    .map(([k])=>canon(k));
+
+  return uniq(ranked).slice(0, cap);
 }
 
-// Extract candidate phrases from important JD text.
-function extractCandidates(job = {}) {
-  const title = String(job.title || "");
-  const core  = importantJDText(String(job.description || ""));
+// quick HTML -> text
+export function stripHtml(html=''){
+  const el = document.createElement('div');
+  el.innerHTML = html;
+  return el.textContent || el.innerText || '';
+}
 
-  const textLC = precanon(core).toLowerCase();
-  const hits = new Map(); // canon -> {display,count,signals:Set,sample?:string}
+// Basic coverage matrix used for the Jobscan-style chips.
+export function coverageAgainstResume({ resumeHtml='', terms=[] }={}){
+  const text = stripHtml(resumeHtml).toLowerCase();
+  const hits = [];
+  const misses = [];
+  (terms||[]).forEach(t=>{
+    const rx = new RegExp(`\\b${escapeRegExp(t.toLowerCase())}\\b`,'i');
+    (rx.test(text) ? hits : misses).push(canon(t));
+  });
+  return { hits: uniq(hits), misses: uniq(misses) };
+}
 
-  function addHit(raw, reason) {
-    const canon = precanon(raw).toLowerCase().trim();
-    if (!canon || STOP.has(canon) || GENERIC_BAN.has(canon)) return;
-    const display = PRETTY[canon] || (raw.trim().length <= 3 ? raw.toUpperCase() : titleCase(raw.trim()));
-    const obj = hits.get(canon) || { display, count:0, signals:new Set(), sample:"" };
-    obj.count++;
-    obj.signals.add(reason);
-    obj.display = PRETTY[canon] || obj.display;
-    if (!obj.sample) obj.sample = pickSnippet(core, raw, canon, obj.display);
-    hits.set(canon, obj);
-  }
-
-  // dictionary hits
-  for (const term of [...TECH_DICT, ...SOFT_BUT_REAL]) {
-    const rx = new RegExp(`\\b${escapeRx(term)}\\b`, "ig");
-    textLC.replace(rx, (m) => { addHit(m, "dict"); return m; });
-  }
-
-  // requirement stems
-  const stems = [
-    /experience\s+with\s+([a-z0-9+.#\- ]{2,40})/ig,
-    /proficien(?:t|cy)\s+in\s+([a-z0-9+.#\- ]{2,40})/ig,
-    /knowledge\s+of\s+([a-z0-9+.#\- ]{2,40})/ig,
-    /familiar(?:ity)?\s+with\s+([a-z0-9+.#\- ]{2,40})/ig,
-    /using\s+([a-z0-9+.#\- ]{2,40})/ig,
+// Right‑rail suggestion templates (still available for manual insert)
+export function suggestionBullets(terms=[]){
+  const T = (kw) => [
+   `• Improved ${kw} by streamlining workflow.`,
+   `• Reduced defects with ${kw}.`,
+   `• Automated steps using ${kw}.`,
   ];
-  for (const rx of stems) {
-    let m;
-    while ((m = rx.exec(core))) {
-      const phrase = cleanPhrase(m[1]);
-      if (phrase) addHit(phrase, "stem");
-    }
-  }
-
-  // title boost
-  for (const term of [...TECH_DICT, "fullstack","backend","frontend"]) {
-    if (new RegExp(`\\b${escapeRx(term)}\\b`, "i").test(precanon(title))) {
-      addHit(term, "title");
-    }
-  }
-
-  return hits; // Map(canon -> {display,count,signals,sample})
-}
-
-function cleanPhrase(s) {
-  const toks = tokenize(s).filter(t => !STOP.has(t) && !GENERIC_BAN.has(t));
-  if (toks.length === 0 || toks.length > 3) return "";
-  return toks.join(" ");
-}
-
-function escapeRx(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
-function titleCase(s){ return s.replace(/\b[a-z]/g, c => c.toUpperCase()); }
-
-// Rank and filter vs resume/profile
-export function smartJDTargets(job = {}, resumeHtml = "", profile = {}, topN = 15) {
-  const cand = extractCandidates(job);
-  const resumeSet = new Set(uniq(tokenize(String(resumeHtml))));
-  const profileSet = new Set(tokensFromTerms(profile.skills || []));
-
-  const ranked = [];
-  for (const [canon, info] of cand.entries()) {
-    if (resumeSet.has(canon)) continue; // skip already-covered
-    let score = Math.min(3, info.count * 0.6);
-    if (info.signals.has("title")) score += 1.5;
-    if (info.signals.has("dict"))  score += 1.0;
-    if (info.signals.has("stem"))  score += 1.0;
-    if (profileSet.has(canon))     score += 1.2;
-    if (GENERIC_BAN.has(canon))    score -= 2.0;
-
-    if (score >= 1.0) {
-      ranked.push({
-        token: canon,
-        display: info.display,
-        score,
-        why: {
-          frequency: info.count,
-          signals: Array.from(info.signals),
-          in_profile: profileSet.has(canon),
-          in_title: info.signals.has("title"),
-          sample: info.sample || ""
-        }
-      });
-    }
-  }
-
-  ranked.sort((a, b) => b.score - a.score);
-  return ranked.slice(0, topN);
+  const out = [];
+  (terms||[]).slice(0, 12).forEach(kw => out.push(...T(canon(kw))));
+  return uniq(out);
 }
