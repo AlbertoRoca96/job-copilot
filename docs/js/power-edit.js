@@ -1,648 +1,502 @@
-// docs/js/power-edit.js
-// Power Edit: live scoring + SMART suggestions + server Auto-tailor.
-// JD→Resume coverage + phrase-aware extraction.
-// Inline diffs (toggle) + one‑click "Why added?" popover for each inserted node.
-
+/* docs/js/power-edit.js
+   Power Edit (client). New auto‑tailor = in‑place rewrites below Education,
+   mirroring src/tailor/resume.py heuristics.
+*/
 import {
-  scoreJob,
-  explainGaps,
-  tokenize,
-  tokensFromTerms,
-  jdCoverageAgainstResume,
-  smartJDTargets,
-  usefulToken
-} from './scoring.js?v=2025-10-07-1';
+  CONFIG,
+  canon, normalizeWS, tokenize, tokenSet,
+  topJDKeywords, coverageAgainstResume, suggestionBullets, stripHtml
+} from './scoring.js?v=2025-10-07-4';
 
-const $ = (id) => document.getElementById(id);
+// ---------- config mirrors (keep in sync with server defaults) ----------
+const MID_STYLE   = CONFIG.MID_SENTENCE_STYLE;   // 'dash' | 'comma' | 'auto'
+const DASH_THRESH = CONFIG.DASH_THRESHOLD;       // words
+const CAP_SENT    = true;
+const END_PERIOD  = true;
 
-// Supabase bootstrap
-let supabase = null;
-async function ensureSupabase() {
-  if (supabase) return supabase;
-  if (!window.supabase?.createClient) {
-    await new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = "https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js";
-      s.defer = true; s.onload = resolve; s.onerror = reject; document.head.appendChild(s);
+// ---------- minor CSS + toggle injected at runtime ----------
+injectStyles();
+injectDiffToggle();
+
+// ---------- DOM helpers ----------
+const $ = (sel, root=document) => root.querySelector(sel);
+const $$ = (sel, root=document) => [...root.querySelectorAll(sel)];
+const editor = $('#editor');
+const jdEl   = $('#job_desc');
+const profileEl = $('#profile_json');
+
+function readProfile(){
+  try { return JSON.parse(profileEl.value || '{}') || {}; } catch{ return {}; }
+}
+
+function getResumeHTML(){ return editor.innerHTML || ''; }
+function setResumeHTML(html){ editor.innerHTML = html; }
+function resumeText(){ return stripHtml(getResumeHTML()); }
+
+function nonEmpty(s){ return !!normalizeWS(s); }
+
+// ---------- Section detection (HTML, not .docx) ----------
+const EDU_TITLES = [
+  'education','education and training','education & training',
+  'academic credentials','academics','education and honors'
+];
+const EXP_TITLES = [
+  'work experience','experience','professional experience','employment','relevant experience'
+];
+const OTHER_SECTION_TITLES = [
+  'skills','technical skills','core skills','projects','certifications','awards',
+  'volunteer experience','writing experience','summary','professional summary',
+  'publications','research experience','activities','leadership'
+];
+
+function isHeaderEl(el){
+  if (!el) return false;
+  const name = el.tagName.toLowerCase();
+  if (/^h[1-6]$/.test(name)) return true;
+  // plain <p> section titles: text only, short, no punctuation
+  if (name === 'p') {
+    const t = normalizeWS(el.textContent || '');
+    return t.length>=3 && t.length<=48 && /^[A-Za-z &/]+$/.test(t);
+  }
+  return false;
+}
+
+function findSectionRanges(container){
+  const nodes = $$('#editor *'); // linear order
+  const lower = nodes.map(n => normalizeWS(n.textContent||'').toLowerCase());
+  const hits = [];
+  nodes.forEach((n,i)=>{
+    if (!isHeaderEl(n)) return;
+    const t = normalizeWS(n.textContent||'').toLowerCase();
+    if (EDU_TITLES.includes(t) || EXP_TITLES.includes(t) || OTHER_SECTION_TITLES.includes(t)) {
+      hits.push({i, t});
+    }
+  });
+  const ranges = {}; // {title:[start,end)}
+  for (let k=0;k<hits.length;k++){
+    const start = hits[k].i;
+    const title = hits[k].t;
+    const end = (k+1 < hits.length) ? hits[k+1].i : nodes.length;
+    ranges[title] = [start, end];
+  }
+  return { nodes, ranges };
+}
+
+function educationRange(){
+  const {ranges} = findSectionRanges(editor);
+  for (const t of EDU_TITLES) if (ranges[t]) return ranges[t];
+  return null;
+}
+function experienceStart(){
+  const {ranges} = findSectionRanges(editor);
+  for (const t of EXP_TITLES) if (ranges[t]) return ranges[t][0];
+  const er = educationRange();
+  if (er) return er[1];           // start just AFTER Education
+  // else skip header/current-contact region
+  return Math.min($$('#editor *').length, 80);
+}
+
+function isReferenceOrContactLine(text){
+  const s = (text||'').toLowerCase();
+  if (/references/.test(s) && /available/.test(s)) return true;
+  if (/\b(?:linkedin|github|portfolio)\b/.test(s)) return true;
+  if (/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(s)) return true;
+  if (/(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/.test(s)) return true;
+  return false;
+}
+
+function afterEducationNodeList(){
+  // find the first UL/OL after Education to use when inserting *new* lines
+  const {nodes} = findSectionRanges(editor);
+  const start = experienceStart();
+  for (let i=start; i<nodes.length; i++){
+    const el = nodes[i];
+    if (el.closest && el.closest('#editor') && (el.tagName==='UL' || el.tagName==='OL')) return el;
+  }
+  // fallback: last list in the document
+  const lists = $$('ul,ol', editor);
+  return lists.length ? lists[lists.length-1] : null;
+}
+
+// ---------- Candidate bullets ----------
+function liLikeNodesAfterExperience(){
+  const nodes = $$('#editor *');
+  const start = experienceStart();
+  const out = [];
+
+  for (let i=start; i<nodes.length; i++){
+    const el = nodes[i];
+    if (!(el instanceof HTMLElement)) continue;
+    // Skip anything visibly inside the Education range (guard)
+    const txt = normalizeWS(el.textContent||'');
+    if (!txt) continue;
+    if (isReferenceOrContactLine(txt)) continue;
+
+    const tag = el.tagName;
+    const bulletishPara = (tag==='P' && /^[•\-–—·]/.test((el.textContent||'').trim()));
+    const isLi = (tag==='LI');
+    if ((isLi || bulletishPara) && txt.length >= 25){
+      out.push(el);
+    }
+  }
+  return out;
+}
+
+// ---------- Bridge construction (mirror Python logic) ----------
+const LEADS_KEEP = ['to ','for '];
+const STRIP_LEADS = ['using ','with ','via ','through ','by ','while ','as ','as part of ','in order to ','in accordance with ','per '];
+const GERUNDS = ['managing','coordinating','handling','scheduling','maintaining','performing','providing','ensuring','tracking','verifying','triaging','documenting','updating','supporting','resolving'];
+
+function sentenceCase(s){
+  for (let i=0;i<s.length;i++){
+    if (/[A-Za-z]/.test(s[i])) return s.slice(0,i) + s[i].toUpperCase() + s.slice(i+1);
+  }
+  return s;
+}
+function chooseMidDelim(bridge){
+  if (MID_STYLE === 'comma') return ', ';
+  if (MID_STYLE === 'dash')  return ' — ';
+  const n = (bridge||'').trim().split(/\s+/).length;
+  return (n >= DASH_THRESH) ? ' — ' : ', ';
+}
+
+function bridgePhrase(raw){
+  let p = canon(String(raw||'').trim());
+  p = p.replace(/[.\s]+$/,'');
+  let low = p.toLowerCase();
+
+  for (const lead of STRIP_LEADS){
+    if (low.startsWith(lead)){ p = p.slice(lead.length); low = p.toLowerCase(); break; }
+  }
+  for (const keep of LEADS_KEEP){
+    if (low.startsWith(keep)) return p;
+  }
+  if (GERUNDS.some(g => low.startsWith(g+' '))) return `by ${p}`;
+  return `with ${p}`;
+}
+
+function safeJoinKeywords(kws){
+  const ks = [...new Set((kws||[]).map(k=>canon(k).trim()).filter(Boolean))];
+  if (!ks.length) return '';
+  if (ks.length===1) return ks[0];
+  if (ks.length===2) return `${ks[0]} and ${ks[1]}`;
+  return `${ks.slice(0,-1).join(', ')}, and ${ks[ks.length-1]}`;
+}
+
+function contextualPrefix(before, bridge){
+  const trimmed = before.replace(/\s+$/,'');
+  const prev = trimmed.slice(-1);
+  const endsWithJoiner = /[,;:—–-]$/.test(trimmed) || /\b(?:and|or)$/.test(trimmed.toLowerCase());
+  if (/[.?!]$/.test(trimmed)) {
+    let core = bridge;
+    if (CAP_SENT) core = sentenceCase(core);
+    return ' ' + core + (END_PERIOD && !/[.]$/.test(core) ? '.' : '');
+  }
+  if (endsWithJoiner) return ' ' + bridge;
+  return chooseMidDelim(bridge) + bridge;
+}
+
+// ---------- First-person sanitizer ----------
+function depersonalizeLine(s){
+  let out = s || '';
+  // strip leading I/We + common contractions
+  out = out.replace(/^\s*(?:•\s*)?(?:I|We)(?:\s+|[’'](?:m|ve|d|re))\s+/i,'');
+  out = out.replace(/\bDuring my time at\b/i, 'During time at');
+  out = out.replace(/\bmy\b/ig,'the');
+  out = out.replace(/\bour\b/ig,'the');
+  // recase first alpha
+  out = out.replace(/^(\s*)([a-z])/,(m,a,b)=> a + b.toUpperCase());
+  return normalizeWS(out);
+}
+
+// ---------- Rewrite engine ----------
+function pickKeywordsForLine(line, rankedTerms){
+  const present = tokenSet(line.toLowerCase());
+  const picks = [];
+  for (const kw of rankedTerms){
+    const toks = tokenSet(String(kw).toLowerCase()).size ? tokenSet(String(kw).toLowerCase()) : new Set([kw.toLowerCase()]);
+    // choose kw if any token is already hinted OR we have no picks yet
+    if ([...toks].some(t=>present.has(t)) || !picks.length){
+      if (!picks.includes(kw)) picks.push(kw);
+      if (picks.length >= 2) break;
+    }
+  }
+  if (!picks.length && rankedTerms.length) picks.push(rankedTerms[0]);
+  return picks.slice(0,2);
+}
+
+function buildClause(picks){
+  const chunk = safeJoinKeywords(picks);
+  if (!chunk) return '';
+  const lead = bridgePhrase(`leveraging ${chunk}`);
+  return lead;
+}
+
+function rewriteOneLine(text, rankedTerms){
+  const base = depersonalizeLine(text);
+  if (!base) return {after: text, inserted:''};
+
+  const picks = pickKeywordsForLine(base, rankedTerms);
+  const bridge = buildClause(picks);
+  if (!bridge) return {after: base, inserted:''};
+
+  const ins = contextualPrefix(base, bridge);
+  const after = base + ins;
+  const integrated = ins.trim().replace(/^[—,]\s*/,''); // for tooltip
+  return {after, inserted: integrated, used: picks};
+}
+
+function markInserted(el, before, after, inserted, why){
+  el.dataset.before = before;
+  el.dataset.why = JSON.stringify(why || {});
+  el.classList.add('auto-insert');
+
+  // simple inline diff: wrap the inserted tail
+  // We'll try to highlight the inserted clause only.
+  const safeInserted = escapeHtml(inserted);
+  const escapedAfter = escapeHtml(after);
+  const at = escapedAfter.lastIndexOf(safeInserted);
+  let html;
+  if (at >= 0){
+    html = escapedAfter.slice(0, at)
+        + `<span class="auto-insert">${safeInserted}</span>`
+        + escapedAfter.slice(at + safeInserted.length)
+        + ` <button class="whybtn" title="Why">?</button>`;
+  } else {
+    html = escapedAfter + ` <button class="whybtn" title="Why">?</button>`;
+  }
+  el.innerHTML = html;
+}
+
+function escapeHtml(s=''){
+  return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ---------- Auto‑tailor (local, in‑place rewrites) ----------
+async function autoTailorLocal(){
+  const jd = jdEl.value || '';
+  const prof = readProfile();
+  const terms = topJDKeywords({
+    jdText: jd,
+    resumeHtml: getResumeHTML(),
+    profileSkills: prof.skills || [],
+    cap: 24
+  });
+
+  // coverage chips (Jobscan‑style)
+  renderCoverage(terms);
+
+  const bullets = liLikeNodesAfterExperience();
+  if (!bullets.length){
+    toast('No eligible bullets found after Education / Experience.');
+    return;
+  }
+
+  const maxBullets = 10;
+  const minBullets = 6;
+
+  let edits = 0;
+  for (const li of bullets.slice(0, maxBullets)){
+    const before = normalizeWS(li.innerText || li.textContent || '');
+    if (!before || before.length < 25) continue;
+    // skip if this line already contains bracketed templates or looks like a reference
+    if (/\[[^\]]{0,40}\]/.test(before)) continue;
+
+    const {after, inserted, used} = rewriteOneLine(before, terms);
+    if (!after || after.toLowerCase() === before.toLowerCase()) continue;
+
+    markInserted(li, before, after, inserted, {
+      reason: 'Full rewrite to compound/complex sentence using JD keywords (client-side).',
+      used_keywords: (used||[]).map(canon)
     });
+    edits++;
+    if (edits >= maxBullets) break;
   }
-  supabase = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
-  return supabase;
+
+  // light weaving fallback: if too few edits, append a single clause to the first candidate
+  if (edits < minBullets && bullets.length){
+    const li = bullets[0];
+    const before = normalizeWS(li.innerText || li.textContent || '');
+    const picks = (terms||[]).slice(0,1);
+    const bridge = buildClause(picks);
+    if (bridge){
+      const ins = contextualPrefix(before, bridge);
+      const after = before + ins;
+      markInserted(li, before, after, ins.trim(), {
+        reason: 'Hard fallback to ensure visible tailoring (client-side).',
+        used_keywords: picks.map(canon)
+      });
+      edits++;
+    }
+  }
+
+  $('#btn_undo_auto').disabled = (edits === 0);
+  $('#btn_clear_auto').disabled = (edits === 0);
+  if (edits) toast(`Auto‑tailored ${edits} bullet${edits===1?'':'s'}.`);
 }
 
-// Wait for Mammoth (DOCX -> HTML)
-async function ensureMammoth(timeoutMs = 6000) {
-  const t0 = Date.now();
-  while (!window.mammoth) {
-    if (Date.now() - t0 > timeoutMs) throw new Error('DOCX converter not loaded yet');
-    await new Promise(r => setTimeout(r, 50));
-  }
-  return window.mammoth;
+// ---------- Undo / Clear ----------
+function undoAuto(){
+  const edits = $$('.auto-insert', editor);
+  if (!edits.length) return;
+  edits.forEach(el=>{
+    const before = el.dataset.before || '';
+    if (!before) return;
+    el.innerHTML = escapeHtml(before);
+    el.classList.remove('auto-insert');
+    delete el.dataset.before;
+    delete el.dataset.why;
+  });
+  $('#btn_undo_auto').disabled = true;
+  $('#btn_clear_auto').disabled = true;
+}
+function clearAuto(){
+  const edits = $$('.auto-insert', editor);
+  edits.forEach(el=>{
+    // just drop highlights, keep text
+    const txt = el.innerText || el.textContent || '';
+    el.innerHTML = escapeHtml(txt);
+    el.classList.remove('auto-insert');
+    delete el.dataset.why;
+    delete el.dataset.before;
+  });
+  $('#btn_undo_auto').disabled = true;
+  $('#btn_clear_auto').disabled = true;
 }
 
-/* ---------- Inject minimal styles for diffs & popover ---------- */
-(function injectStyles(){
+// ---------- Why popover ----------
+editor.addEventListener('click', (e)=>{
+  const b = e.target.closest('.whybtn');
+  if (!b) return;
+  const host = b.closest('.auto-insert');
+  if (!host) return;
+  let why = {};
+  try { why = JSON.parse(host.dataset.why||'{}'); } catch {}
+  const used = (why.used_keywords||[]).join(', ');
+  alert(`Why: ${why.reason || 'Tailored with JD keywords.'}${used ? `\n• Keywords integrated: ${used}`:''}`);
+});
+
+// ---------- Right rail: suggestions go to the first list AFTER Education ----------
+function insertSuggestionAtCursor(text){
+  const targetList = afterEducationNodeList();
+  if (!targetList){
+    // Create a new UL at the end, but still after Education if possible
+    const ul = document.createElement('ul');
+    const p = document.createElement('p');
+    p.textContent = '';
+    const anchor = $$('#editor *')[experienceStart()] || editor.lastChild || editor;
+    anchor.parentNode.insertBefore(ul, anchor.nextSibling);
+  }
+  const list = afterEducationNodeList() || editor.appendChild(document.createElement('ul'));
+  const li = document.createElement('li');
+  li.textContent = text.replace(/^•\s*/,'');
+  list.appendChild(li);
+  // mark as auto for easy clear/undo
+  li.dataset.before = '';
+  li.dataset.why = JSON.stringify({reason:'Manual suggestion inserted after Education.', used_keywords:[]});
+  li.classList.add('auto-insert');
+  $('#btn_undo_auto').disabled = false;
+  $('#btn_clear_auto').disabled = false;
+}
+
+// ---------- Coverage / Gaps (Jobscan‑style) ----------
+function renderCoverage(terms){
+  const {hits, misses} = coverageAgainstResume({ resumeHtml:getResumeHTML(), terms });
+  const cov = $('#coverage');
+  const gaps = $('#gaps');
+  const hitChips = hits.map(t=>`<span class="k hit">${escapeHtml(t)}</span>`).join(' ');
+  const missChips= misses.map(t=>`<span class="k miss">${escapeHtml(t)}</span>`).join(' ');
+  cov.innerHTML = (hits.length || misses.length)
+    ? `${hitChips} ${missChips}`
+    : 'Shown after JD is pasted.';
+  gaps.innerHTML = misses.length
+    ? `Missing or light: ${missChips}`
+    : (terms.length ? 'Good coverage of requested skills.' : 'Paste a job description to see gaps.');
+}
+
+// ---------- DOCX import/export (as before) ----------
+$('#docx_file')?.addEventListener('change', async (ev)=>{
+  const f = ev.target.files[0];
+  if (!f) return;
+  const arr = await f.arrayBuffer();
+  const { value: html } = await window.mammoth.convertToHtml({ arrayBuffer: arr });
+  setResumeHTML(html);
+});
+$('#btn_export_docx')?.addEventListener('click', ()=>{
+  const html = `<!doctype html><html><body>${getResumeHTML()}</body></html>`;
+  const blob = window.htmlDocx.asBlob(html);
+  const a = document.createElement('a');
+  a.download = 'resume-tailored.docx';
+  a.href = URL.createObjectURL(blob);
+  a.click();
+});
+$('#btn_print_pdf')?.addEventListener('click', ()=> window.print());
+
+// ---------- Buttons ----------
+$('#btn_auto_server')?.addEventListener('click', autoTailorLocal);
+$('#btn_undo_auto')?.addEventListener('click', undoAuto);
+$('#btn_clear_auto')?.addEventListener('click', clearAuto);
+
+// ---------- Suggestions rail ----------
+function refreshSuggestions(){
+  const prof = readProfile();
+  const terms = topJDKeywords({
+    jdText: jdEl.value || '',
+    resumeHtml: getResumeHTML(),
+    profileSkills: prof.skills || [],
+    cap: 12
+  });
+  renderCoverage(terms);
+  const sug = $('#suggestions');
+  const items = suggestionBullets(terms).slice(0, 24);
+  if (!items.length){ sug.innerHTML = 'Suggestions appear after you paste a JD.'; return; }
+  sug.innerHTML = items.map(line => (
+    `<div class="suggestion">${escapeHtml(line)}</div>`
+  )).join('');
+}
+$('#suggestions')?.addEventListener('click', (e)=>{
+  const el = e.target.closest('.suggestion');
+  if (!el) return;
+  insertSuggestionAtCursor(el.textContent || '');
+});
+jdEl?.addEventListener('input', refreshSuggestions);
+editor?.addEventListener('input', ()=> renderCoverage(topJDKeywords({
+  jdText: jdEl.value||'',
+  resumeHtml: getResumeHTML(),
+  profileSkills: (readProfile().skills||[]),
+  cap: 24
+})));
+
+// Initial paint
+refreshSuggestions();
+
+// ---------- tiny UI helpers ----------
+function injectStyles(){
   const css = `
-    .ins { background:#f4fff4; outline:1px dashed #8fd48f; border-radius:4px; padding:0 2px; }
-    .hide-diffs .ins { background:transparent; outline:none; }
-    .why-btn { display:inline-block; margin-left:.4rem; border:1px solid #ccd; border-radius:999px;
-               width:22px; height:22px; line-height:20px; text-align:center; cursor:pointer;
-               background:#f7f7ff; color:#333; font-weight:700; }
-    .auto-insert { position:relative; }
-    #why-pop { position:absolute; z-index:10000; max-width:360px; background:#fff; border:1px solid #ddd;
-               border-radius:8px; padding:.7rem .8rem; box-shadow:0 10px 30px rgba(0,0,0,.14); }
-    #why-pop .title { font-weight:700; margin:0 0 .25rem; }
-    #why-pop .meta  { color:#666; font-size:.85em; margin:.15rem 0 .5rem; }
-    #why-pop .jd    { background:#f7f7f7; border-left:3px solid #bde; padding:.45rem .55rem; border-radius:6px; font-size:.92em; }
-    #why-pop .repo  { background:#fffaf2; border-left:3px solid #f1c27d; padding:.45rem .55rem; border-radius:6px; font-size:.92em; margin-top:.5rem; }
-    #why-pop .close { position:absolute; top:4px; right:6px; border:0; background:transparent; font-size:16px; cursor:pointer; color:#666; }
+  .k{display:inline-block;padding:.25rem .5rem;border:1px solid #ccd;border-radius:999px;background:#eef;margin:.1rem;}
+  .hit{background:#eaffea;border-color:#b7f7b7}.miss{background:#ffeaea;border-color:#f6c2c2}
+  .auto-insert{background:#f4fff4;outline:1px dashed #8fd48f;border-radius:6px}
+  .whybtn{border:1px solid #ccd;border-radius:999px;padding:0 .5rem;margin-left:.5rem;background:#fff;cursor:pointer}
   `;
-  const st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
-})();
-
-/* ---------- DOM ---------- */
-const editor        = $('editor');
-const fileInput     = $('docx_file');
-const btnExport     = $('btn_export_docx');
-const btnPrint      = $('btn_print_pdf');
-
-const scoreline     = $('scoreline');
-const gapsEl        = $('gaps');
-const coverageEl    = $('coverage');
-const suggEl        = $('suggestions');
-
-const jobTitle      = $('job_title');
-const jobCompany    = $('job_company');
-const jobLocation   = $('job_location');
-const jobDesc       = $('job_desc');
-const profileBox    = $('profile_json');
-
-const btnAutoServer = $('btn_auto_server');
-const btnUndo       = $('btn_undo_auto');
-const btnClear      = $('btn_clear_auto');
-const autoHint      = $('auto_hint');
-
-/* ---------- Add "Show inline diffs" toggle to toolbar ---------- */
-(function addDiffToggle(){
+  const s = document.createElement('style');
+  s.textContent = css;
+  document.head.appendChild(s);
+}
+function injectDiffToggle(){
   const bar = document.querySelector('.toolbar');
   if (!bar) return;
   const label = document.createElement('label');
+  label.style.marginLeft = 'auto';
   label.className = 'small';
-  label.style.marginLeft = '6px';
-  label.title = 'Toggle highlight of inserted text';
-  label.innerHTML = `<input id="toggle_diffs" type="checkbox" checked> Show inline diffs`;
-  bar.insertBefore(label, scoreline);
-  const cb = label.querySelector('input');
-  cb.onchange = () => document.body.classList.toggle('hide-diffs', !cb.checked);
-})();
-
-/* ---------- "Why added?" popover ---------- */
-let whyPop = null, whyLoadedSlug = "";
-function ensureWhyPop() {
-  if (whyPop) return whyPop;
-  whyPop = document.createElement('div');
-  whyPop.id = 'why-pop';
-  whyPop.style.display = 'none';
-  whyPop.innerHTML = `<button class="close" aria-label="Close">×</button>
-    <div class="title"></div>
-    <div class="meta"></div>
-    <div class="jd"></div>
-    <div class="repo" style="display:none"></div>`;
-  document.body.appendChild(whyPop);
-
-  whyPop.addEventListener('click', (e)=>{ if (e.target.matches('.close')) hideWhyPop(); });
-  document.addEventListener('keydown', (e)=>{ if (e.key === 'Escape') hideWhyPop(); });
-  document.addEventListener('click', (e)=>{
-    if (!whyPop || whyPop.style.display === 'none') return;
-    if (e.target.closest('#why-pop') || e.target.closest('.why-btn')) return;
-    hideWhyPop();
-  });
-  return whyPop;
-}
-function showWhyPop(btn, payload = {}, bulletText = "") {
-  const pop = ensureWhyPop();
-  const r = btn.getBoundingClientRect();
-  pop.style.top = `${r.bottom + window.scrollY + 8}px`;
-  pop.style.left = `${Math.min(window.scrollX + r.left, window.scrollX + document.documentElement.clientWidth - 380)}px`;
-
-  const sigs = Array.isArray(payload.signals) ? payload.signals : [];
-  const labels = { title:'mentioned in the job title', dict:'recognized technology/skill', stem:'extracted from a requirement phrase', 'fallback-jd-miss':'JD miss (fallback)', 'fallback-profile-jd':'Profile∩JD miss (fallback)' };
-  const sigText = sigs.map(s => labels[s] || s).join(', ');
-
-  pop.querySelector('.title').textContent = `Why added: ${payload.target || payload.token || '(target)'}`;
-  pop.querySelector('.meta').textContent =
-    `Score ${Number(payload.score || 0).toFixed(2)} • freq=${payload.frequency || 1}` +
-    (payload.in_title ? ' • in title' : '') +
-    (payload.in_profile ? ' • in your profile' : '') +
-    (sigText ? ` • ${sigText}` : '');
-  pop.querySelector('.jd').textContent = payload.sample ? `JD evidence: “… ${payload.sample} …”` : 'JD evidence: (not found)';
-
-  if (payload.repo_reason || payload.repo_sample) {
-    const rbx = pop.querySelector('.repo');
-    rbx.style.display = 'block';
-    const why = payload.repo_reason ? `Change log: ${payload.repo_reason}` : '';
-    const snip = payload.repo_sample ? `\nSample: “… ${payload.repo_sample} …”` : '';
-    rbx.textContent = `${why}${snip}`;
-  } else {
-    pop.querySelector('.repo').style.display = 'none';
-  }
-
-  pop.style.display = 'block';
-}
-function hideWhyPop(){ if (whyPop) whyPop.style.display = 'none'; }
-
-/* ---------- State ---------- */
-const state = { profile: {}, job: {}, selRange: null, resumeLoaded:false };
-let lastAutoNodes = [];
-let autoNodesAll  = [];
-
-/* ---------- Helpers ---------- */
-function getJobFromUI(){
-  return {
-    title: jobTitle.value || '',
-    company: jobCompany.value || '',
-    location: jobLocation.value || '',
-    description: jobDesc.value || ''
-  };
-}
-function getResumeHTML(){ return editor.innerHTML || ''; }
-function setResumeHTML(html){ editor.innerHTML = html || ''; }
-function rememberSelection(){
-  const sel = window.getSelection();
-  if (sel && sel.rangeCount) state.selRange = sel.getRangeAt(0);
-}
-function sanitize(html){
-  const div = document.createElement('div');
-  div.innerHTML = html;
-  div.querySelectorAll('script,style,iframe,object').forEach(n=>n.remove());
-  return div.innerHTML;
-}
-function jdReady() {
-  const t = tokenize(`${jobTitle.value || ''} ${jobDesc.value || ''}`);
-  return (jobDesc.value || '').trim().length >= 20 || t.length >= 10;
-}
-function hasResume() {
-  const textLen = (editor.textContent || '').trim().length;
-  return state.resumeLoaded || textLen >= 50;
-}
-
-/* ---------- Section-aware weaving (insert into proper <ul>) ---------- */
-function ascend(el) { return (el && el.nodeType === 1) ? el : el?.parentElement || null; }
-function findInsertionList() {
-  // 1) If caret is inside a list, use it
-  let n = state.selRange?.startContainer || editor;
-  n = ascend(n);
-  while (n && n !== editor) {
-    if (n.tagName === 'UL' || n.tagName === 'OL') return n;
-    n = n.parentElement;
-  }
-  // 2) Prefer the list that follows an Experience/Projects header
-  const heads = Array.from(editor.querySelectorAll('h1,h2,h3,strong,b')).filter(h => /experience|work experience|projects/i.test(h.textContent || ''));
-  for (const h of heads) {
-    let sib = h.nextElementSibling;
-    while (sib) {
-      if (/^(UL|OL)$/.test(sib.tagName)) return sib;
-      if (/^(H1|H2|H3|STRONG|B)$/.test(sib.tagName)) break;
-      sib = sib.nextElementSibling;
-    }
-  }
-  // 3) Else, last list; 4) else create one
-  const lists = editor.querySelectorAll('ul,ol');
-  if (lists.length) return lists[lists.length - 1];
-  const ul = document.createElement('ul');
-  editor.appendChild(ul);
-  return ul;
-}
-
-function insertSuggestedBullet(text, why = {}) {
-  const ul = findInsertionList();
-  const li = document.createElement('li');
-  li.className = 'auto-insert';
-  li.setAttribute('data-why', JSON.stringify(why));
-  li.innerHTML = `<span class="ins">${escapeHtml(text)}</span> <button class="why-btn" type="button" contenteditable="false" title="Why added?">?</button>`;
-  ul.appendChild(li);
-
-  lastAutoNodes = [li];
-  autoNodesAll.push(li);
-  li.scrollIntoView({ behavior: 'smooth', block: 'center' });
-}
-
-/* ---------- Optional repo-backed "why" (loaded on-demand, no 404 spam) ---------- */
-function slugify(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,''); }
-async function loadWhyChangesIfNeeded(job) {
-  const slug = `${slugify(job.company)}_${slugify(job.title)}`;
-  if (!slug || slug === whyLoadedSlug) return null;
-  whyLoadedSlug = slug;
-
-  const tryPaths = [`./changes/${slug}.json`, `./changes/${slug}.changes.json`];
-  for (const p of tryPaths) {
-    try {
-      const r = await fetch(p, { cache: 'no-store' });
-      if (!r.ok) continue;
-      const obj = await r.json();
-      const arr = Array.isArray(obj) ? obj : Array.isArray(obj?.changes) ? obj.changes : [];
-      const map = new Map();
-      for (const it of arr) {
-        const sent   = String(it.inserted_sentence || it.modified_paragraph_text || "");
-        const reason = String(it.reason || "").trim();
-        const sample = sent.replace(/\s+/g,' ').slice(0,240);
-        tokenize(sent).forEach(tok => {
-          const cur = map.get(tok) || { repo_reason: "", repo_sample: "" };
-          if (reason && !cur.repo_reason) cur.repo_reason = reason;
-          if (sample && !cur.repo_sample) cur.repo_sample = sample;
-          map.set(tok, cur);
-        });
-      }
-      return { slug, map };
-    } catch { /* ignore */ }
-  }
-  return null;
-}
-
-/* ---------- Scoring & coverage ---------- */
-function render(){
-  try{
-    state.job = getJobFromUI();
-
-    if (!jdReady()) {
-      scoreline.textContent = 'Score: —';
-      gapsEl.innerHTML = '<span class="small muted">Paste a job description to see gaps.</span>';
-      suggEl.innerHTML = '<span class="small muted">Suggestions appear after you paste a JD.</span>';
-      coverageEl.innerHTML = '<span class="small muted">Shown after JD is pasted.</span>';
-      enableButtons();
-      return;
-    }
-
-    const s = scoreJob(state.job, state.profile);
-    scoreline.textContent = `Score: ${s.toFixed(4)}`;
-
-    const gaps = explainGaps(state.job, state.profile);
-    const coverage = jdCoverageAgainstResume(state.job, getResumeHTML());
-
-    gapsEl.innerHTML = `
-      <div>Location OK: <strong>${gaps.location_ok ? "Yes" : "No"}</strong></div>
-      <div>Missing must-haves (profile → JD):
-        ${(gaps.missing_must_haves || []).map(k=>`<span class="k miss">${pretty(k)}</span>`).join(" ") || "<em>none</em>"}
-      </div>
-      <div><strong>Uncovered JD keywords (JD → your resume):</strong>
-        ${(coverage.misses || []).slice(0,60).map(k=>`<span class="k miss">${pretty(k)}</span>`).join(" ") || "<em>none</em>"}
-      </div>
-    `;
-
-    const jobToks = [...coverage.job_tokens];
-    const skills  = [...tokensFromTerms(state.profile.skills || [])];
-    coverageEl.innerHTML = `
-      <div>JD tokens (${jobToks.length}): ${jobToks.slice(0,120).map(k=>`<span class="k">${pretty(k)}</span>`).join(" ")}</div>
-      <div>Your resume coverage: ${(coverage.score*100).toFixed(0)}% of JD tokens present</div>
-      <div>Profile skills (${skills.length}): ${skills.map(k=>`<span class="k">${pretty(k)}</span>`).join(" ")}</div>
-    `;
-
-    rebuildSuggestions();
-    enableButtons();
-  }catch(e){
-    scoreline.textContent = `Score: error`;
-    gapsEl.textContent = e.message;
-  }
-}
-
-/* ---------- SMART suggestions (templates + fallbacks) ---------- */
-const CATEGORY = {
-  rails:'framework', nodejs:'framework', react:'frontend', reactnative:'frontend',
-  postgresql:'database', mysql:'database', mongodb:'database', redis:'database', plpgsql:'database',
-  playwright:'testing', cypress:'testing', jest:'testing', pytest:'testing', selenium:'testing',
-  githubactions:'devops', cicd:'devops', docker:'devops', kubernetes:'devops', terraform:'devops',
-  pwa:'webplat', serviceworker:'webplat', graphql:'webplat', rest:'webplat', grpc:'webplat', websocket:'webplat',
-  huggingface:'ml', pytorch:'ml', tensorflow:'ml', opencv:'ml',
-  'c++':'language', csharp:'language', typescript:'language', javascript:'language', python:'language', java:'language', go:'language', rust:'language', ruby:'language'
-};
-
-const TEMPLATES = {
-  framework: [
-    t => `• Accomplished [X outcome] as measured by [Y] by implementing ${t} APIs/background jobs to [Z action].`,
-    t => `• Shipped [feature] on ${t}, improving P95 latency by [X%] via query tuning/caching.`,
-  ],
-  frontend: [
-    t => `• Delivered [feature] in ${t}, reducing bundle size by [X%] and improving TTI by [Y%].`,
-    t => `• Built accessible UI in ${t} with [pattern], increasing task success rate by [X%].`,
-  ],
-  database: [
-    t => `• Reduced query time by [X%] on ${t} by adding indexes and rewriting [JOIN/CTE].`,
-    t => `• Designed schema + migrations on ${t} to support [feature], cutting storage by [X%].`,
-  ],
-  testing: [
-    t => `• Raised test coverage by [X pts] with ${t} e2e suites; stabilized flakiness < [Y%].`,
-    t => `• Automated regression tests in ${t}, reducing escaped defects by [X%].`,
-  ],
-  devops: [
-    t => `• Cut build time by [X%] by parallelizing CI in ${t} and caching dependencies.`,
-    t => `• Shipped one‑click deploys with ${t}, reducing change‑failure rate by [X%].`,
-  ],
-  webplat: [
-    t => `• Implemented offline‑first PWA using ${t}, improving repeat‑load by [X%].`,
-    t => `• Added background sync/push with ${t}, raising task completion by [X%].`,
-  ],
-  ml: [
-    t => `• Deployed [model] with ${t}, improving F1 by [Δ] and latency by [X%].`,
-    t => `• Built data pipeline for ${t} training/inference, cutting labeling time by [X%].`,
-  ],
-  language: [
-    t => `• Refactored critical module in ${t}, reducing cyclomatic complexity by [X%].`,
-    t => `• Implemented [algo/pattern] in ${t}, speeding up [workload] by [X%].`,
-  ],
-  default: [
-    t => `• Accomplished [X outcome] as measured by [Y] by using ${t} to [Z action].`,
-    t => `• Built/automated [process] in ${t} to meet [KPI], verified by [test/monitor].`,
-  ]
-};
-
-function bulletsFor(tool, token) {
-  const cat = CATEGORY[token] || 'default';
-  const raws = TEMPLATES[cat] || TEMPLATES.default;
-  return raws.map(fn => fn(tool));
-}
-
-async function rebuildSuggestions(){
-  if (!jdReady()) {
-    suggEl.innerHTML = '<span class="small muted">Suggestions appear after you paste a JD.</span>';
-    return;
-  }
-
-  const job = getJobFromUI();
-  const resumeHtml = getResumeHTML();
-  let targets = smartJDTargets(job, resumeHtml, state.profile, 18);
-
-  // ---- Fallback 1: JD→Resume token misses (filtered) ----
-  if (!targets.length) {
-    const cov = jdCoverageAgainstResume(job, resumeHtml);
-    const misses = (cov.misses || []).filter(usefulToken);
-    targets = misses.slice(0, 8).map(t => ({
-      token: t,
-      display: pretty(t),
-      score: 0.8,
-      why: { frequency: 1, signals: ["fallback-jd-miss"], in_profile: false, in_title: false, sample: "" }
-    }));
-  }
-
-  // ---- Fallback 2: Profile∩JD skills not yet in resume ----
-  if (!targets.length) {
-    const jobToks = new Set(tokenize(`${job.title} ${job.description}`));
-    const resToks = new Set(tokenize(resumeHtml));
-    const prof = tokensFromTerms(state.profile.skills || []);
-    const add = prof.filter(p => jobToks.has(p) && !resToks.has(p)).filter(usefulToken);
-    targets = add.slice(0, 8).map(t => ({
-      token: t,
-      display: pretty(t),
-      score: 0.7,
-      why: { frequency: 1, signals: ["fallback-profile-jd"], in_profile: true, in_title: false, sample: "" }
-    }));
-  }
-
-  // If still nothing, keep the helper text
-  if (!targets.length) {
-    suggEl.innerHTML = '<span class="small muted">No high-signal targets found in this JD. Paste the full requirements section for smarter suggestions.</span>';
-    return;
-  }
-
-  // Load optional repo-backed "why" map lazily (avoid 404 spam on load)
-  let repoWhyMap = null;
-  const loaded = await loadWhyChangesIfNeeded(job);
-  if (loaded?.map) repoWhyMap = loaded.map;
-
-  const cards = [];
-  for (const t of targets) {
-    const tool = t.display;
-    const btxt = bulletsFor(tool, t.token);
-
-    // enrich "why" with repo info if available
-    let repo = repoWhyMap?.get(t.token) || null;
-    const why = { target: tool, token: t.token, score: t.score, ...t.why, ...(repo || {}) };
-
-    btxt.forEach(txt => {
-      const tip = [
-        `Target: ${tool}`,
-        t.why.in_title ? "appears in title" : "",
-        t.why.in_profile ? "in your profile" : "",
-        (t.why.signals || []).includes("stem") ? "found in requirement stem" : "",
-        (t.why.signals || []).includes("dict") ? "dictionary hit" : "",
-        `freq=${t.why.frequency || 1}`,
-      ].filter(Boolean).join(" • ");
-      cards.push(`<div class="suggestion" title="${escapeHtml(tip)}"
-          data-txt="${encodeURIComponent(txt)}"
-          data-why='${escapeAttr(JSON.stringify(why))}'>${escapeHtml(txt)}</div>`);
+  label.innerHTML = `<input id="toggle_diffs" type="checkbox" checked/> Show inline diffs`;
+  bar.appendChild(label);
+  $('#toggle_diffs').addEventListener('change', (e)=>{
+    const on = e.target.checked;
+    $$('.auto-insert span.auto-insert', editor).forEach(sp=>{
+      sp.style.background = on ? '#f4fff4' : 'transparent';
+      sp.style.outline = on ? '1px dashed #8fd48f' : 'none';
     });
-  }
-
-  suggEl.innerHTML = cards.slice(0, 40).join("");
+  });
 }
 
-/* ---------- Insert suggestion as a real bullet ---------- */
-document.addEventListener("click", (ev)=>{
-  const n = ev.target.closest('.suggestion');
-  if (!n) return;
-  const txt = decodeURIComponent(n.getAttribute('data-txt') || '');
-  let why = {};
-  try { why = JSON.parse(n.getAttribute('data-why') || '{}'); } catch {}
-  insertSuggestedBullet(txt, why);
-  render();
-});
-
-/* ---------- Why popover handler ---------- */
-document.addEventListener('click', (e)=>{
-  const btn = e.target.closest('.why-btn');
-  if (!btn) return;
-  const host = btn.closest('.auto-insert');
-  let why = {};
-  try { why = JSON.parse(host?.getAttribute('data-why') || '{}'); } catch {}
-  showWhyPop(btn, why, (host?.textContent || '').trim());
-});
-
-/* ---------- DOCX import / export / print ---------- */
-fileInput.addEventListener('change', async (e)=>{
-  const f = e.target.files?.[0]; if (!f) return;
-  try {
-    await ensureMammoth();
-    const buf = await f.arrayBuffer();
-    const { value: html } = await window.mammoth.convertToHtml({ arrayBuffer: buf });
-    setResumeHTML(sanitize(html));
-    state.resumeLoaded = true;
-    enableButtons();
-    render();
-  } catch (err) {
-    alert('Could not import .docx: ' + String(err?.message || err));
-  }
-});
-btnExport.addEventListener('click', ()=>{
-  if (!window.htmlDocx?.asBlob) return alert('Export library not loaded yet, try again.');
-  const html = `<!doctype html><html><head><meta charset="utf-8"></head><body>${getResumeHTML()}</body></html>`;
-  const blob = window.htmlDocx.asBlob(html);
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'resume-edited.docx';
-  a.click(); URL.revokeObjectURL(a.href);
-});
-btnPrint.addEventListener('click', ()=> window.print());
-
-/* ---------- Auto-tailor (server) ---------- */
-async function callServer() {
-  await ensureSupabase();
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session) { alert("Sign in first on the Profile page."); return null; }
-
-  const body = {
-    title: jobTitle.value || '',
-    company: jobCompany.value || '',
-    location: jobLocation.value || '',
-    jd_text: jobDesc.value || '',
-    resume_html: getResumeHTML(),
-    profile_json: (()=>{ try { return JSON.parse(profileBox.value || "{}"); } catch { return {}; } })()
-  };
-
-  const { data, error } = await supabase.functions.invoke('power-tailor', { body });
-  if (error) throw new Error(error.message || 'invoke failed');
-  return data?.result || null;
-}
-
-async function autoTailorServer() {
-  btnAutoServer.disabled = true;
-  try {
-    const result = await callServer();
-    if (!result?.block_html) throw new Error('No block returned');
-
-    lastAutoNodes = [];
-    const beforeCount = editor.childNodes.length;
-
-    const range = state.selRange || document.createRange();
-    if (!state.selRange) { range.selectNodeContents(editor); range.collapse(false); }
-    const frag = document.createElement('template');
-    frag.innerHTML = result.block_html.trim();
-    const node = frag.content.cloneNode(true);
-    range.insertNode(node);
-
-    const afterCount = editor.childNodes.length;
-    for (let i = beforeCount; i < afterCount; i++) {
-      const node = editor.childNodes[i];
-      lastAutoNodes.push(node);
-      autoNodesAll.push(node);
-    }
-    render();
-  } catch (e) {
-    alert('Auto-tailor failed: ' + String(e.message || e));
-  } finally {
-    enableButtons();
-  }
-}
-btnAutoServer.addEventListener('click', autoTailorServer);
-
-/* ---------- Undo / Clear ---------- */
-function undoAuto() {
-  lastAutoNodes.forEach(n => n.remove());
-  autoNodesAll = autoNodesAll.filter(n => !lastAutoNodes.includes(n));
-  lastAutoNodes = [];
-  enableButtons();
-  render();
-}
-function clearAuto() {
-  editor.querySelectorAll('.auto-insert').forEach(n => n.remove());
-  lastAutoNodes = [];
-  autoNodesAll = [];
-  enableButtons();
-  render();
-}
-btnUndo.addEventListener('click', undoAuto);
-btnClear.addEventListener('click', clearAuto);
-
-/* ---------- Toggle state & live inputs ---------- */
-function setAutoHint(reason) {
-  btnAutoServer.title = reason || 'Send to server to insert a tailored block';
-  autoHint.textContent = reason || '';
-  autoHint.style.display = reason ? 'inline' : 'none';
-}
-function enableButtons() {
-  const needs = [];
-  if (!hasResume()) needs.push('load or paste your resume');
-  if (!jdReady())  needs.push('paste a JD (≥20 chars)');
-  const ok = needs.length === 0;
-  btnAutoServer.disabled = !ok;
-  btnUndo.disabled = lastAutoNodes.length === 0;
-  btnClear.disabled = autoNodesAll.length === 0;
-  setAutoHint(ok ? '' : `To enable: ${needs.join(' and ')}`);
-}
-
-// inputs
-for (const id of ["job_title","job_company","job_location","job_desc","profile_json"]){
-  document.addEventListener("input", (ev)=>{ if (ev.target && ev.target.id===id) {
-    if (id === "profile_json"){
-      try { state.profile = JSON.parse(profileBox.value || "{}"); } catch(_){ state.profile = {}; }
-    }
-    render();
-  }});
-}
-editor.addEventListener('input', ()=>{
-  if ((editor.textContent||'').trim().length >= 50) state.resumeLoaded = true;
-  enableButtons();
-});
-editor.addEventListener('keyup', ()=>{ render(); rememberSelection(); });
-editor.addEventListener('mouseup', rememberSelection);
-editor.addEventListener('blur', rememberSelection);
-
-/* ---------- Load profile into textarea (quiet if table missing) ---------- */
-async function loadUserProfileFromSupabase() {
-  try {
-    await ensureSupabase();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return false;
-
-    // If table doesn't exist, Supabase REST returns 404; swallow and continue.
-    const { data, error } = await supabase.from('profiles').select('*').eq('id', user.id).single();
-    if (error || !data) return false;
-
-    const json = {
-      skills: data.skills || [],
-      target_titles: data.target_titles || [],
-      must_haves: data.must_haves || [],
-      location_policy: data.search_policy || {},
-      // Optional: projects: [{ name:"Pointkedex", url:"https://...", tags:["pwa","serviceworker","react"] }]
-    };
-
-    profileBox.value = JSON.stringify(json, null, 2);
-    state.profile = json;
-    return true;
-  } catch { return false; }
-}
-async function tryLoadProfileFile(){
-  try{
-    const r = await fetch('./data/profile.json', { cache: 'no-store' });
-    if (r.ok){
-      const j = await r.json();
-      if (!profileBox.value.trim()) {
-        profileBox.value = JSON.stringify(j||{}, null, 2);
-        state.profile = j||{};
-      }
-    }
-  }catch(_){}
-}
-
-/* ---------- Init ---------- */
-window.addEventListener('DOMContentLoaded', async ()=>{
-  await ensureSupabase();
-  const loaded = await loadUserProfileFromSupabase();
-  if (!loaded) await tryLoadProfileFile();
-  render(); enableButtons();
-});
-
-/* ---------- utils ---------- */
-function pretty(t){
-  const map = {
-    huggingface: "Hugging Face",
-    reactnative: "React Native",
-    serviceworker: "Service Worker",
-    githubactions: "GitHub Actions",
-    postgresql: "PostgreSQL",
-    plpgsql: "PL/pgSQL",
-    cicd: "CI/CD",
-    fullstack: "Full-Stack"
-  };
-  return map[t] || t;
-}
-function escapeHtml(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-function escapeAttr(s){ return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function toast(msg){ try{ console.log(msg); }catch{} }
