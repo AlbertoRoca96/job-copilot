@@ -1,115 +1,98 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Power Edit (Resume)</title>
-  <link rel="stylesheet" href="https://unpkg.com/@picocss/pico@2/css/pico.min.css">
-  <link rel="icon" href="data:,">
+  <meta charset="utf-8" />
+  <title>job-copilot — Power Edit (resume)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="style.css" />
+
   <style>
-    :root { --pane-bg:#fff; --chip:#eef; --miss:#ffeaea; --hit:#eaffea; }
-    body.container { max-width: 1200px; }
-    .grid { display:grid; grid-template-columns: 1fr 1fr; gap:1rem; }
-    #editor { border:1px solid #ddd; background:var(--pane-bg); min-height:60vh; padding:1rem; border-radius:8px; }
-    #editor[contenteditable="true"]:focus { outline: 2px solid #bde; }
-    .k { display:inline-block; padding:.25rem .5rem; border:1px solid #ccd; border-radius:999px; background:var(--chip); margin:.1rem; }
-    .miss { background:var(--miss) !important; border-color:#f6c2c2 !important; }
-    .hit  { background:var(--hit)  !important; border-color:#b7f7b7 !important; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-    .toolbar { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; }
-    .toolbar input[type=file] { max-width: 280px; }
-    .right-rail { background:var(--pane-bg); border:1px solid #ddd; border-radius:8px; padding:1rem; }
-    .suggestion { border:1px dashed #ccd; padding:.5rem; border-radius:8px; margin:.25rem 0; cursor:pointer; }
-    .suggestion:hover { background:#f7f7ff; }
-    .small { font-size:.875rem; color:#555; }
-    .auto-insert { background:#f4fff4; outline:1px dashed #8fd48f; border-radius:6px; }
-    #auto_hint { white-space:nowrap; }
-    .pill { display:inline-block; padding:.2rem .5rem; border:1px solid #e0e0e0; border-radius:999px; background:#f7f7f7; font-size:.8rem; }
-    .controls-inline { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }
-    .controls-inline label { display:flex; gap:.35rem; align-items:center; }
-    .controls-inline input[type=number] { width: 5rem; }
+    .wrap { max-width: 1100px; margin:20px auto; padding:0 12px; }
+    .card { border:1px solid #e5e5e5; border-radius:12px; padding:16px; background:#fcfcfc; }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .btn { padding:6px 10px; border:1px solid #ccc; background:#fff; border-radius:8px; cursor:pointer; text-decoration:none; display:inline-block; }
+    .pill { display:inline-block; padding:2px 8px; margin:2px; border:1px solid #e0e0e0; border-radius:999px; font-size:12px; background:#f6f6f6; }
+    .ctl { margin:6px 8px 0 0; min-width:260px; }
+    textarea { width:100%; min-height:160px; padding:8px; border:1px solid #e0e0e0; border-radius:8px; font: 13px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; background:#fff; }
+
+    .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+    .pane { background:#fff; border:1px solid #eee; border-radius:10px; padding:10px; }
+    .pane h3 { margin: 6px 0; }
+    .muted { color:#666; }
+    .small { font-size:12px; }
+    .mono { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; background:#fff; border:1px dashed #eee; padding:10px; border-radius:8px; }
+    .change-card { border:1px solid #eee; border-radius:8px; padding:10px; margin-bottom:10px; background:#fafafa; }
+    .change-title { font-weight:600; margin-bottom:6px; }
+    .change-reason { color:#555; font-size:12px; margin-top:6px; }
+    .change-insert { display:inline-block; padding:2px 6px; font-size:12px; border:1px solid #ddd; border-radius:999px; background:#e6ffed; margin:6px 0; }
+
+    /* Header score strip */
+    .scorebox { font-size:13px; background:#fff; border:1px solid #eee; border-radius:8px; padding:6px 8px; }
   </style>
 </head>
-<body class="container">
-  <h2 style="display:flex;align-items:center;gap:.5rem">
-    Power Edit (live)
-    <span id="mode_badge" class="pill">Client-only</span>
-  </h2>
 
-  <article class="toolbar">
-    <input id="docx_file" type="file" accept=".docx"/>
-    <button id="btn_export_docx" class="secondary">Export .docx</button>
-    <button id="btn_print_pdf" class="secondary">Print / Save as PDF</button>
+<body>
+  <main class="wrap">
+    <h1>Power Edit (resume)</h1>
+    <p class="muted">This version mirrors Profile’s complex rewrite flow. Upload a resume, paste a JD, and get bullet rewrites. No “insert suggestions”.</p>
 
-    <!-- === requested controls (minimal HTML nits) === -->
-    <div class="controls-inline" style="margin-left:.25rem">
-      <label>Joiner</label>
-      <select id="joiner_style" data-dash-threshold="7">
-        <option value="auto" selected>auto</option>
-        <option value="comma">comma</option>
-        <option value="dash">dash</option>
-      </select>
-
-      <label style="margin-left:8px">Placements per phrase</label>
-      <input id="place_count" type="number" min="1" max="5" value="1" style="width:70px">
-
-      <label style="margin-left:8px">Max inserts per bullet</label>
-      <input id="max_per_bullet" type="number" min="1" max="3" value="1" style="width:70px">
+    <div class="row" style="margin-bottom:8px">
+      <button id="chooseFile" class="btn">Choose .docx</button>
+      <input id="fileInput" type="file" accept=".docx" style="display:none" />
+      <button id="exportDocx" class="btn">Export .docx</button>
+      <button id="printPdf" class="btn">Print / Save as PDF</button>
+      <span class="scorebox">Score: <span id="scoreVal">—</span></span>
+      <span id="signinState" class="pill">Signed in (server boost)</span>
     </div>
-    <!-- === end requested controls === -->
 
-    <button id="btn_auto_server" class="contrast" title="Enabled after resume + JD" disabled>Auto-tailor (server)</button>
-    <button id="btn_undo_auto" class="secondary" disabled>Undo</button>
-    <button id="btn_clear_auto" class="secondary" disabled>Clear inserts</button>
+    <section class="card" style="margin-top:8px">
+      <div class="grid2">
+        <div class="pane">
+          <h3>Your Resume (editable)</h3>
+          <div class="small muted">If you upload a .docx we’ll extract plaintext to start; you can edit freely.</div>
+          <textarea id="resumeText" placeholder="Paste your resume plaintext here…"></textarea>
+        </div>
+        <div class="pane">
+          <h3>Job Description (paste here)</h3>
+          <div class="row">
+            <input id="jobTitle" class="ctl" type="text" placeholder="e.g., Software Engineer I (Full-Stack)" />
+            <input id="jobCompany" class="ctl" type="text" placeholder="e.g., RoadRunner" />
+          </div>
+          <textarea id="jobDesc" placeholder="Paste the JD here…"></textarea>
+          <div class="row" style="margin-top:6px">
+            <label>Max words per bullet</label>
+            <input id="maxWords" class="ctl" type="number" min="12" max="60" value="28" style="max-width:110px" />
+            <button id="autoTailor" class="btn">Auto-tailor (server)</button>
+            <span id="tailorMsg" class="muted"></span>
+          </div>
+        </div>
+      </div>
+    </section>
 
-    <span id="auto_hint" class="small muted" style="margin-left:6px;"></span>
-    <span class="mono" id="scoreline" style="margin-left:auto">Score: —</span>
-  </article>
+    <section class="card" style="margin-top:12px">
+      <h2 style="margin:6px 0">Change Log</h2>
+      <div id="changes"></div>
+    </section>
 
-  <div class="grid">
-    <article>
-      <details open>
-        <summary>Job Description (paste here)</summary>
-        <label>Title <input id="job_title" placeholder="e.g., Software Engineer I (Full-Stack)"/></label>
-        <label>Company <input id="job_company" placeholder="e.g., RoadRunner"/></label>
-        <label>Location <input id="job_location" placeholder="e.g., Remote, USA"/></label>
-        <label>Job Description <textarea id="job_desc" rows="10" placeholder="Paste JD text here..."></textarea></label>
-      </details>
+    <section class="card" style="margin-top:12px">
+      <h2 style="margin:6px 0">Preview (After)</h2>
+      <pre id="afterPreview" class="mono">(no changes yet)</pre>
+    </section>
+  </main>
 
-      <details>
-        <summary>Profile (auto-fills if signed in)</summary>
-        <textarea id="profile_json" rows="6" placeholder='{"skills":["excel","crm"],"target_titles":["coordinator"]}'></textarea>
-      </details>
-
-      <h4>Your Resume (editable)</h4>
-      <div id="editor" contenteditable="true" spellcheck="true"></div>
-      <p class="small">Paste a JD and load/paste your resume to enable scoring and Auto-tailor. Click suggestions to weave them into the best existing bullets (never Education headers). Use <em>Shift-click</em> to force multi-placement quickly.</p>
-    </article>
-
-    <article class="right-rail">
-      <h4>Gaps & Coverage</h4>
-      <div id="gaps" class="small muted">Paste a job description to see gaps.</div>
-      <h5 style="margin-top:.75rem">Suggest inserts (click to weave)</h5>
-      <div id="suggestions" class="small muted">Suggestions appear after you paste a JD.</div>
-      <hr/>
-      <h5>Keyword coverage</h5>
-      <div id="coverage" class="small muted">Shown after JD is pasted.</div>
-    </article>
-  </div>
-
-  <!-- Supabase config (same project values as profile.html) -->
+  <!-- Supabase config -->
   <script>
     window.SUPABASE_URL = "https://imozfqawxpsasjdmgdkh.supabase.co";
     window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc";
   </script>
   <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <!-- Mammoth: .docx -> HTML/text in browser -->
+  <script defer src="https://unpkg.com/mammoth@1.6.0/mammoth.browser.min.js"></script>
+  <!-- docx: export .docx -->
+  <script defer src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
 
-  <!-- DOCX -> HTML (browser) -->
-  <script defer src="https://unpkg.com/mammoth@1.5.1/mammoth.browser.min.js"></script>
-  <!-- HTML -> DOCX -->
-  <script defer src="https://cdn.jsdelivr.net/gh/evidenceprime/html-docx-js/dist/html-docx.js"></script>
-
-  <!-- App (cache-busted) -->
-  <script type="module" src="./js/power-edit.js?v=2025-10-13-3"></script>
+  <!-- IMPORTANT: absolute path for GitHub Pages project sites -->
+  <script defer src="/job-copilot/scording.js?v=2025-10-07"></script>
+  <script defer src="/job-copilot/power-edit.js?v=2025-10-07"></script>
 </body>
 </html>
