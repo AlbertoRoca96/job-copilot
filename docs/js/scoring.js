@@ -1,4 +1,4 @@
-// docs/js/scoring.js
+// js/scoring.js
 // Deterministic helpers + "smart suggestion" extraction.
 // Exports:
 // - tokenize, tokensFromTerms, explainGaps, scoreJob
