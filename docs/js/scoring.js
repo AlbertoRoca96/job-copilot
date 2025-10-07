@@ -122,16 +122,17 @@ export function bridgeForToken(display, category = "other", style = "auto", dash
   const words = phrase ? phrase.split(/\s+/).length : 0;
   const delim  = (style === "comma") ? ", " : (style === "dash") ? " — " : (words >= dashThreshold ? " — " : ", ");
 
-  const tail =
-    category === "database" ? `with ${phrase}` :
-    category === "devops"   ? `via ${phrase}`  :
-    category === "frontend" ? `with ${phrase}` :
-    category === "backend"  ? `with ${phrase}` :
-    category === "analytics"? `for ${phrase}`  :
-    category === "cloud"    ? `on ${phrase}`   :
-    `with ${phrase}`;
+  // No "and" joins; use prepositions by category to keep variety
+  const lead =
+    category === "cloud"    ? "on"    :
+    category === "devops"   ? "via"   :
+    category === "database" ? "with"  :
+    category === "frontend" ? "with"  :
+    category === "backend"  ? "with"  :
+    category === "analytics"? "for"   :
+    category === "testing"  ? "using" : "with";
 
-  return `${delim}${tail}`;
+  return `${delim}${lead} ${phrase}`;
 }
 
 /* -------- weakness detection & metric templates -------- */
