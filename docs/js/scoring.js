@@ -1,85 +1,115 @@
-// docs/scording.js
-// Lightweight ATS-style scoring used on Power Edit.
-// Intentionally simple: JD tokens vs resume tokens; phrase boost from obvious 2+ word phrases.
-// NO insert suggestions here (UI removed); just a numeric "Score" and internal hits/misses.
+// docs/js/scoring.js
+// Tiny, deterministic ATS-ish scorer + allowed-vocab miner used by Power Edit.
+// Exposes two globals:
+//   window.computeAtsScore(jdText, resumeText) -> { score(0..10), hits[], misses[] }
+//   window.deriveAllowedVocabFromResume(resumeText) -> string[] (<=200)
 
-(function (global) {
+(function () {
   const WORD_RE = /[A-Za-z][A-Za-z0-9+./-]{1,}/g;
   const STOP = new Set([
     "the","a","an","and","or","for","with","to","of","in","on","as","by","using",
-    "we","you","i","our","your","their","they","it","its","it’s","is","are","be",
-    "this","that","these","those","will","role","responsibilities","requirements",
-    "preferred","must","including","include","etc","ability","skills","excellent",
-    "communication","experience","years","year","team","teams","work","job","title",
-    "company","location","applicants","range","bonus","salary","benefits","visa","sponsor"
+    "we","you","our","your","their","they","it","its","is","are","be","this","that","these","those",
+    "will","role","responsibilities","requirements","preferred","must","including","include","etc",
+    "ability","skills","experience","years","year","team","teams","work","job","title","company",
+    "location","applicants","salary","benefits","visa","sponsor","bonus","range"
   ]);
 
-  function toks(s) { return (String(s || "").toLowerCase().match(WORD_RE)) || []; }
+  const CURATED_PHRASES = [
+    // editorial / comms
+    "AP style","CMS","content calendar","social media","copyediting","proofreading","fact checking",
+    "style guide","house style","seo","analytics",
+    // admin / ops
+    "calendar management","travel arrangements","expense reports","meeting notes","data entry",
+    "record keeping","documentation","process improvement","help desk","ticketing","crm",
+    // tech-lite
+    "Microsoft Office","Word","Excel","PowerPoint","Outlook","Google Sheets","Google Docs",
+    "Adobe","Photoshop","Illustrator","InDesign",
+    // common SWE/data (kept generic; used only if present in resume)
+    "Python","JavaScript","TypeScript","React","SQL","PostgreSQL","Linux","GitHub Actions",
+    "Playwright","REST API","data pipeline","machine learning","Tableau",
+  ];
+
+  function toks(s) {
+    return (String(s || "").toLowerCase().match(WORD_RE) || []);
+  }
   function tokset(s) { return new Set(toks(s)); }
-  function uniq(arr) { const seen = new Set(); return arr.filter(x => (seen.has(x) ? false : (seen.add(x), true))); }
-
-  function minePhrases(jd) {
-    // very small phrase miner: keep 2–3 word chunks that look like skills/tools
-    const low = String(jd || "").toLowerCase();
-    const cand = [
-      "ruby on rails","react native","react","typescript","javascript","python",
-      "postgresql","sql","linux","github actions","playwright","flask","power bi",
-      "machine learning","computer vision","customer service","inventory","pos",
-      "excel","powerpoint","outlook","microsoft office","ap style","cms"
-    ];
-    const hits = [];
-    for (const p of cand) if (low.includes(p)) hits.push(p);
-    return uniq(hits);
+  function norm(s) { return String(s || "").toLowerCase(); }
+  function uniq(arr) {
+    const seen = new Set(); const out = [];
+    for (const x of arr) { const k = String(x).toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push(x); } }
+    return out;
   }
 
-  function tokensFrom(text) {
-    const arr = toks(text).filter((w) => !STOP.has(w));
-    const set = new Set(arr);
-    // add split variants for hyphenated tokens
-    arr.forEach((w) => {
-      if (w.includes("-")) {
-        w.split("-").forEach((p) => p && set.add(p));
-        set.add(w.replace(/-/g, ""));
-      }
-    });
-    return set;
+  // ---- JD term ranking (very lightweight reflection of server side) ----
+  function rankJdTerms(jd, allowed, cap = 48) {
+    const desc = norm(jd);
+    const allowedSet = new Set((allowed || []).map((s) => norm(s)));
+    const scores = new Map();
+
+    // phrase boost
+    for (const a of allowedSet) {
+      if (!a || a.split(" ").length < 2) continue;
+      const re = new RegExp(`\\b${a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+      if (re.test(desc)) scores.set(a, (scores.get(a) || 0) + 3);
+    }
+    // unigram pass
+    const seen = new Set(toks(desc));
+    for (const w of seen) {
+      if (STOP.has(w)) continue;
+      if (allowedSet.size && !allowedSet.has(w) && w.length <= 2) continue;
+      scores.set(w, (scores.get(w) || 0) + 1);
+    }
+    return [...scores.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([k]) => k)
+      .filter((k) => k && !STOP.has(k))
+      .slice(0, cap);
   }
 
+  // ---- Scoring (0..10) using JD terms coverage
   function computeAtsScore(jdText, resumeText) {
-    const jdTokens = tokensFrom(jdText || "");
-    const resTokens = tokensFrom(resumeText || "");
-    const phrases = minePhrases(jdText || "");
-    let hits = 0, wants = 0;
+    const allowed = deriveAllowedVocabFromResume(resumeText);
+    const terms = rankJdTerms(jdText, allowed, 48);
 
-    // phrase boosts (count each once)
-    for (const ph of phrases) {
-      wants++;
-      const words = ph.split(/\s+/);
-      const ok = words.every((w) => resTokens.has(w));
-      if (ok) hits += 2; // phrase gets extra credit
+    const rset = tokset(resumeText);
+    const hits = [];
+    const misses = [];
+    for (const t of terms) {
+      const ts = toks(t).filter((x) => !STOP.has(x));
+      const ok = ts.some((x) => rset.has(x));
+      (ok ? hits : misses).push(t);
+    }
+    // score: weighted coverage, scaled to 0..10
+    const raw = terms.length ? hits.length / terms.length : 0;
+    const score = Math.max(0, Math.min(10, +(raw * 10).toFixed(1)));
+    return { score, hits, misses, terms };
+  }
+
+  // ---- Allowed vocab miner (resume-derived)
+  function deriveAllowedVocabFromResume(resumeText) {
+    const text = String(resumeText || "");
+    const baseTokens = toks(text).filter((t) => !STOP.has(t));
+    const uniques = uniq(baseTokens);
+
+    // detect common bigrams in the resume (to give phrases a chance)
+    const words = (String(resumeText || "").toLowerCase().match(WORD_RE) || []);
+    const bigrams = [];
+    for (let i = 0; i < words.length - 1; i++) {
+      const ph = `${words[i]} ${words[i + 1]}`;
+      if (!STOP.has(words[i]) && !STOP.has(words[i + 1])) bigrams.push(ph);
     }
 
-    // unigram coverage
-    jdTokens.forEach((t) => {
-      wants++;
-      if (resTokens.has(t)) hits += 1;
-    });
+    // include curated phrases only if they appear anywhere in the resume (case-insensitive)
+    const presentCurated = CURATED_PHRASES.filter((p) =>
+      new RegExp(`\\b${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(resumeText || "")
+    );
 
-    const score = wants ? (100 * hits / (wants * 1.0)) : 0;
-    // Provide diagnostic lists if you ever want to surface later (kept internal here)
-    const miss = [];
-    jdTokens.forEach((t) => { if (!resTokens.has(t)) miss.push(t); });
-    return { score: Math.max(0, Math.min(100, score)), misses: miss.slice(0, 64), phrases };
+    // merge & cap
+    const vocab = uniq([...presentCurated, ...bigrams, ...uniques]).slice(0, 200);
+    return vocab;
   }
 
-  function deriveAllowedVocabFromResume(resumePlain) {
-    // basic: collect 2+ character tokens that look skill-like
-    const arr = toks(resumePlain || "");
-    const keep = arr.filter((w) => w.length >= 2 && !STOP.has(w));
-    return uniq(keep).slice(0, 200);
-  }
-
-  // expose globals used by power-edit.js
-  global.computeAtsScore = computeAtsScore;
-  global.deriveAllowedVocabFromResume = deriveAllowedVocabFromResume;
-})(window);
+  // expose
+  window.computeAtsScore = computeAtsScore;
+  window.deriveAllowedVocabFromResume = deriveAllowedVocabFromResume;
+})();
