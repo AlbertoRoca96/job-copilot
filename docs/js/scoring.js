@@ -1,217 +1,85 @@
-/* docs/js/scoring.js
- * Scoring + tokenization + morphology + template builders for Power Edit.
- * Deterministic, browser‑only. Plays nicely with server suggestions.
- *
- * Upgrades in this version:
- *  - Stronger STOP list (drops EEO/benefits/disclaimer boilerplate and generic nouns)
- *  - Morphology: light stemming so "manage/managed/managing" align
- *  - Smarter JD miner that avoids numeric/time tokens and short words
- *  - Optional banlist: e.g., company name, location, or any garbage tokens
- *  - Bridge builder that varies prepositions by category (never auto "and")
- *  - Coverage now ignores STOP/banlist so Misses are meaningful
- */
+// docs/scording.js
+// Lightweight ATS-style scoring used on Power Edit.
+// Intentionally simple: JD tokens vs resume tokens; phrase boost from obvious 2+ word phrases.
+// NO insert suggestions here (UI removed); just a numeric "Score" and internal hits/misses.
 
-/* -------------------- Stopwords & weak phrases -------------------- */
+(function (global) {
+  const WORD_RE = /[A-Za-z][A-Za-z0-9+./-]{1,}/g;
+  const STOP = new Set([
+    "the","a","an","and","or","for","with","to","of","in","on","as","by","using",
+    "we","you","i","our","your","their","they","it","its","it’s","is","are","be",
+    "this","that","these","those","will","role","responsibilities","requirements",
+    "preferred","must","including","include","etc","ability","skills","excellent",
+    "communication","experience","years","year","team","teams","work","job","title",
+    "company","location","applicants","range","bonus","salary","benefits","visa","sponsor"
+  ]);
 
-export const STOP = new Set([
-  // articles, preps, auxiliaries, generic JD boilerplate
-  "the","and","for","with","to","of","in","on","as","by","or","an","a","at","from","using",
-  "we","you","our","your","their","they","them","it","its","it’s","is","are","be","this","that","these","those",
-  "will","would","can","could","should","may","might","must","nice","plus",
-  "role","responsibilities","requirements","preferred","required","requirement","responsibility","scope",
-  "including","include","etc","ability","abilities","skills","skill","excellent","communication","experience","experiences",
-  "years","year","team","teams","work","job","title","company","location","about","while","across","within","between",
-  "each","other","deeply","planet","zero","waste","motivation","daily","value","passion","create","creating","make","making",
-  // EEO / benefits / policy / HR boilerplate
-  "equal","opportunity","employer","eeo","affirmative","action","veteran","veterans",
-  "disability","disabilities","accommodation","accommodations","reasonable","individual","individuals","applicant","applicants",
-  "employment","employed","eligible","eligibility","authorization","authorized","sponsorship","sponsor","visa","h-1b","h1b",
-  "background","check","checks","drug","test","testing","screen","screening","policy","policies","compliance",
-  "benefit","benefits","compensation","salary","salaries","pay","paid","unpaid","bonus","bonuses","range","ranges",
-  "health","medical","dental","vision","retirement","pension","401k","pto","vacation","holiday","holidays",
-  // time / unit fillers often mined by accident
-  "day","days","week","weeks","month","months","year","years","hour","hours","per",
-  // generic CV nouns that produce garbage phrases
-  "business","application","applications","strong","review","reviews","have","employment","design",
-  "provide","providing","provided","use","used","uses","using","build","built","building","implement","implemented","implementing"
-]);
+  function toks(s) { return (String(s || "").toLowerCase().match(WORD_RE)) || []; }
+  function tokset(s) { return new Set(toks(s)); }
+  function uniq(arr) { const seen = new Set(); return arr.filter(x => (seen.has(x) ? false : (seen.add(x), true))); }
 
-// Guardrails for rewrites; keep concise, ATS‑friendly
-export const WEAK_PHRASES = [
-  "responsible for","duties included","worked on","helped","assisted","participated in",
-  "utilized","leveraged","various","etc","successfully","dynamic","rockstar","go-getter"
-];
-
-/* -------------------- Pretty names & category cues -------------------- */
-
-const PRETTY = {
-  "js":"JavaScript","javascript":"JavaScript","ts":"TypeScript","typescript":"TypeScript",
-  "react":"React","reactjs":"React","react native":"React Native","node":"Node.js",
-  "postgres":"PostgreSQL","postgresql":"PostgreSQL","sql":"SQL",
-  "github actions":"GitHub Actions","gh actions":"GitHub Actions",
-  "ci":"CI","ci/cd":"CI/CD","docker":"Docker",
-  "aws":"AWS","azure":"Azure","gcp":"GCP","kubernetes":"Kubernetes","k8s":"Kubernetes",
-  "rails":"Ruby on Rails","ruby on rails":"Ruby on Rails",
-  "flask":"Flask","django":"Django","java":"Java","c++":"C++","c#":"C#","c":"C",
-  "pandas":"pandas","numpy":"NumPy","playwright":"Playwright",
-  "mammoth":"Mammoth","html-docx-js":"html-docx-js"
-};
-
-export const CUE_SETS = {
-  database: ["database","sql","postgres","postgresql","schema","index","query","etl","migration","warehouse"],
-  backend:  ["api","service","microservice","endpoint","server","auth","oauth","jwt","flask","django","rails","spring","node"],
-  frontend: ["ui","ux","component","react","javascript","typescript","spa","responsive","accessibility"],
-  devops:   ["ci","ci/cd","pipeline","build","deploy","docker","container","kubernetes","workflow","github actions"],
-  analytics:["analytics","metrics","kpi","dashboard","tracking","events","instrumentation","report"],
-  cloud:    ["aws","gcp","azure","s3","lambda","ec2","cloud","k8s"],
-  testing:  ["test","qa","automation","e2e","integration","unit","playwright","jest","pytest"]
-};
-
-export function categorize(tok) {
-  const t = (tok || "").toLowerCase();
-  if (["postgres","postgresql","sql","database","warehouse"].some(w => t.includes(w))) return "database";
-  if (["react","javascript","typescript","frontend","component","ui","ux"].some(w => t.includes(w))) return "frontend";
-  if (["api","flask","django","rails","spring","backend","node"].some(w => t.includes(w))) return "backend";
-  if (["ci","github actions","pipeline","docker","kubernetes","k8s"].some(w => t.includes(w))) return "devops";
-  if (["kpi","analytics","dashboard","metrics"].some(w => t.includes(w))) return "analytics";
-  if (["aws","gcp","azure","s3","lambda","cloud"].some(w => t.includes(w))) return "cloud";
-  if (["test","qa","automation","jest","pytest","playwright"].some(w => t.includes(w))) return "testing";
-  return "other";
-}
-
-/* -------------------- Core text helpers -------------------- */
-
-export const canon = (s) => (s || "").replace(/\s+/g, " ").trim();
-
-export function pretty(tok) {
-  const t = (tok || "").toLowerCase();
-  return PRETTY[t] || tok.replace(/\baws\b/gi,"AWS").replace(/\bgcp\b/gi,"GCP");
-}
-
-export function tokenize(text) {
-  const out = [];
-  (text || "").toLowerCase().replace(/[A-Za-z][A-Za-z0-9+./-]{1,}/g, m => { out.push(m); return m; });
-  return out;
-}
-
-export function tokenSet(text, banlist = []) {
-  const ban = new Set((banlist || []).map(x => String(x || "").toLowerCase()));
-  const toks = tokenize(text).filter(t => !STOP.has(t) && !ban.has(t));
-  return new Set(toks);
-}
-
-/* -------------------- Light stemming (variants) -------------------- */
-/* Mirrors Jobscan‑style acceptance of close variants so hits/misses are useful.  */
-const STEM_RULES = [[/ing$/, ""],[/ed$/, ""],[/s$/, ""],[/ies$/, "y"]];
-function stem(word) { let w = (word || "").toLowerCase(); for (const [re,r] of STEM_RULES) w = w.replace(re,r); return w; }
-export function morphEq(a, b) { return stem(a) === stem(b); }
-
-/* -------------------- JD target miner -------------------- */
-
-function badWord(w, ban) { return STOP.has(w) || ban.has(w) || /\d/.test(w) || w.length < 3; }
-
-/**
- * smartJDTargets(jdText, allowed = [], banlist = [])
- *  - prefers tokens from `allowed` (profile skills/titles)
- *  - drops STOP words, numbers, short words, and anything in `banlist`
- *  - lifts bigrams/trigrams that aren’t numeric/filler
- */
-export function smartJDTargets(jdText, allowed = [], banlist = []) {
-  const toks = tokenize(jdText);
-  const scores = new Map();
-  const allowedSet = new Set((allowed || []).map(x => String(x).toLowerCase()));
-  const ban = new Set((banlist || []).map(x => String(x).toLowerCase()));
-
-  // 1) score unigrams (skip numerics/stopwords)
-  for (const t of toks) {
-    if (badWord(t, ban)) continue;
-    const base = allowedSet.size ? (allowedSet.has(t) ? 4 : 1) : 1;
-    scores.set(t, (scores.get(t) || 0) + base);
+  function minePhrases(jd) {
+    // very small phrase miner: keep 2–3 word chunks that look like skills/tools
+    const low = String(jd || "").toLowerCase();
+    const cand = [
+      "ruby on rails","react native","react","typescript","javascript","python",
+      "postgresql","sql","linux","github actions","playwright","flask","power bi",
+      "machine learning","computer vision","customer service","inventory","pos",
+      "excel","powerpoint","outlook","microsoft office","ap style","cms"
+    ];
+    const hits = [];
+    for (const p of cand) if (low.includes(p)) hits.push(p);
+    return uniq(hits);
   }
 
-  // 2) phrase lift (bigrams/trigrams) but reject digits/filler
-  const words = (jdText || "").toLowerCase().split(/\s+/);
-  for (let i = 0; i < words.length - 1; i++) {
-    const bigram = `${words[i]} ${words[i+1]}`.trim();
-    const partsB = bigram.split(" ");
-    if (partsB.some(w => badWord(w, ban))) continue;
-    if (bigram.length < 5) continue;
-    scores.set(bigram, (scores.get(bigram) || 0) + 6);  // stronger lift
-
-    if (i + 2 < words.length) {
-      const trigram = `${words[i]} ${words[i+1]} ${words[i+2]}`.trim();
-      const partsT = trigram.split(" ");
-      if (!partsT.some(w => badWord(w, ban)) && trigram.length >= 7) {
-        scores.set(trigram, (scores.get(trigram) || 0) + 4);
+  function tokensFrom(text) {
+    const arr = toks(text).filter((w) => !STOP.has(w));
+    const set = new Set(arr);
+    // add split variants for hyphenated tokens
+    arr.forEach((w) => {
+      if (w.includes("-")) {
+        w.split("-").forEach((p) => p && set.add(p));
+        set.add(w.replace(/-/g, ""));
       }
+    });
+    return set;
+  }
+
+  function computeAtsScore(jdText, resumeText) {
+    const jdTokens = tokensFrom(jdText || "");
+    const resTokens = tokensFrom(resumeText || "");
+    const phrases = minePhrases(jdText || "");
+    let hits = 0, wants = 0;
+
+    // phrase boosts (count each once)
+    for (const ph of phrases) {
+      wants++;
+      const words = ph.split(/\s+/);
+      const ok = words.every((w) => resTokens.has(w));
+      if (ok) hits += 2; // phrase gets extra credit
     }
+
+    // unigram coverage
+    jdTokens.forEach((t) => {
+      wants++;
+      if (resTokens.has(t)) hits += 1;
+    });
+
+    const score = wants ? (100 * hits / (wants * 1.0)) : 0;
+    // Provide diagnostic lists if you ever want to surface later (kept internal here)
+    const miss = [];
+    jdTokens.forEach((t) => { if (!resTokens.has(t)) miss.push(t); });
+    return { score: Math.max(0, Math.min(100, score)), misses: miss.slice(0, 64), phrases };
   }
 
-  // Rank, dedupe by stem, emit up to 24 targets with category
-  const ranked = [...scores.entries()].sort((a,b) => b[1] - a[1]).map(([k]) => k);
-  const seen = new Set();
-  const out = [];
-  for (const k of ranked) {
-    const key = stem(k);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ token: k, display: pretty(k), category: categorize(k) });
-    if (out.length >= 24) break;
+  function deriveAllowedVocabFromResume(resumePlain) {
+    // basic: collect 2+ character tokens that look skill-like
+    const arr = toks(resumePlain || "");
+    const keep = arr.filter((w) => w.length >= 2 && !STOP.has(w));
+    return uniq(keep).slice(0, 200);
   }
-  return out;
-}
 
-/* -------------------- Bridge builder (mid‑sentence / end) -------------------- */
-
-export function bridgeForToken(display, category = "other", style = "auto", dashThreshold = 7) {
-  const phrase = String(display || "").trim();
-  const words = phrase ? phrase.split(/\s+/).length : 0;
-  const delim  = (style === "comma") ? ", " : (style === "dash") ? " — " : (words >= dashThreshold ? " — " : ", ");
-
-  // Vary the preposition so we never rely on “and …”
-  const tail =
-    category === "database" ? `with ${phrase}` :
-    category === "devops"   ? `via ${phrase}`  :
-    category === "frontend" ? `with ${phrase}` :
-    category === "backend"  ? `with ${phrase}` :
-    category === "analytics"? `for ${phrase}`  :
-    category === "cloud"    ? `on ${phrase}`   :
-    category === "testing"  ? `using ${phrase}`:
-    `with ${phrase}`;
-
-  return `${delim}${tail}`;
-}
-
-/* -------------------- Weakness detection & metric templates -------------------- */
-
-export function assessWeakness(text, wordCap = 40) {
-  const t = canon(text);
-  const words = t ? t.split(/\s+/).length : 0;
-  const long = words > wordCap;
-  const weak = WEAK_PHRASES.find(w => new RegExp(`\\b${w}\\b`, "i").test(t)) || null;
-  return { long, weak, words };
-}
-
-export function templatesForSkill(skill) {
-  const s = pretty(skill);
-  return [
-    `Implemented ${s} to improve [KPI] by [X%].`,
-    `Built ${s} workflow reducing [time/cost/defects] by [X%].`,
-    `Used ${s} to deliver [feature/output], meeting [SLA/target].`
-  ];
-}
-
-/* -------------------- Coverage -------------------- */
-
-export function jdCoverageAgainstResume(jd, resumePlain, banlist = []) {
-  const jdWords = tokenSet(jd, banlist);
-  const resWords = tokenSet(resumePlain, banlist);
-  const hits   = [...jdWords].filter(w => [...resWords].some(r => morphEq(w, r)));
-  const misses = [...jdWords].filter(w => ![...resWords].some(r => morphEq(w, r)));
-  return { hits, misses };
-}
-
-export function explainGaps(jd, resumePlain, banlist = []) {
-  const { hits, misses } = jdCoverageAgainstResume(jd, resumePlain, banlist);
-  return { hits, misses: misses.slice(0, 50) };
-}
+  // expose globals used by power-edit.js
+  global.computeAtsScore = computeAtsScore;
+  global.deriveAllowedVocabFromResume = deriveAllowedVocabFromResume;
+})(window);
