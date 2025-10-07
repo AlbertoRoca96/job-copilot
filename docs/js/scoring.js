@@ -1,21 +1,48 @@
 /* docs/js/scoring.js
  * Scoring + tokenization + morphology + template builders for Power Edit.
  * Deterministic, browser‑only. Plays nicely with server suggestions.
+ *
+ * Upgrades in this version:
+ *  - Stronger STOP list (drops EEO/benefits/disclaimer boilerplate and generic nouns)
+ *  - Morphology: light stemming so "manage/managed/managing" align
+ *  - Smarter JD miner that avoids numeric/time tokens and short words
+ *  - Optional banlist: e.g., company name, location, or any garbage tokens
+ *  - Bridge builder that varies prepositions by category (never auto "and")
+ *  - Coverage now ignores STOP/banlist so Misses are meaningful
  */
 
+/* -------------------- Stopwords & weak phrases -------------------- */
+
 export const STOP = new Set([
+  // articles, preps, auxiliaries, generic JD boilerplate
   "the","and","for","with","to","of","in","on","as","by","or","an","a","at","from","using",
   "we","you","our","your","their","they","them","it","its","it’s","is","are","be","this","that","these","those",
-  "will","role","responsibilities","requirements","preferred","must","nice","plus",
-  "including","include","etc","ability","skills","excellent","communication","experience",
-  "years","year","team","teams","work","job","title","company","location","about","while",
-  "each","other","deeply","planet","zero","waste","motivation","daily","value","passion","create"
+  "will","would","can","could","should","may","might","must","nice","plus",
+  "role","responsibilities","requirements","preferred","required","requirement","responsibility","scope",
+  "including","include","etc","ability","abilities","skills","skill","excellent","communication","experience","experiences",
+  "years","year","team","teams","work","job","title","company","location","about","while","across","within","between",
+  "each","other","deeply","planet","zero","waste","motivation","daily","value","passion","create","creating","make","making",
+  // EEO / benefits / policy / HR boilerplate
+  "equal","opportunity","employer","eeo","affirmative","action","veteran","veterans",
+  "disability","disabilities","accommodation","accommodations","reasonable","individual","individuals","applicant","applicants",
+  "employment","employed","eligible","eligibility","authorization","authorized","sponsorship","sponsor","visa","h-1b","h1b",
+  "background","check","checks","drug","test","testing","screen","screening","policy","policies","compliance",
+  "benefit","benefits","compensation","salary","salaries","pay","paid","unpaid","bonus","bonuses","range","ranges",
+  "health","medical","dental","vision","retirement","pension","401k","pto","vacation","holiday","holidays",
+  // time / unit fillers often mined by accident
+  "day","days","week","weeks","month","months","year","years","hour","hours","per",
+  // generic CV nouns that produce garbage phrases
+  "business","application","applications","strong","review","reviews","have","employment","design",
+  "provide","providing","provided","use","used","uses","using","build","built","building","implement","implemented","implementing"
 ]);
 
+// Guardrails for rewrites; keep concise, ATS‑friendly
 export const WEAK_PHRASES = [
   "responsible for","duties included","worked on","helped","assisted","participated in",
   "utilized","leveraged","various","etc","successfully","dynamic","rockstar","go-getter"
 ];
+
+/* -------------------- Pretty names & category cues -------------------- */
 
 const PRETTY = {
   "js":"JavaScript","javascript":"JavaScript","ts":"TypeScript","typescript":"TypeScript",
@@ -52,7 +79,7 @@ export function categorize(tok) {
   return "other";
 }
 
-/* -------- core text helpers -------- */
+/* -------------------- Core text helpers -------------------- */
 
 export const canon = (s) => (s || "").replace(/\s+/g, " ").trim();
 
@@ -66,42 +93,61 @@ export function tokenize(text) {
   (text || "").toLowerCase().replace(/[A-Za-z][A-Za-z0-9+./-]{1,}/g, m => { out.push(m); return m; });
   return out;
 }
-export function tokenSet(text) { return new Set(tokenize(text)); }
 
-/* -------- morphology -------- */
+export function tokenSet(text, banlist = []) {
+  const ban = new Set((banlist || []).map(x => String(x || "").toLowerCase()));
+  const toks = tokenize(text).filter(t => !STOP.has(t) && !ban.has(t));
+  return new Set(toks);
+}
+
+/* -------------------- Light stemming (variants) -------------------- */
+/* Mirrors Jobscan‑style acceptance of close variants so hits/misses are useful.  */
 const STEM_RULES = [[/ing$/, ""],[/ed$/, ""],[/s$/, ""],[/ies$/, "y"]];
 function stem(word) { let w = (word || "").toLowerCase(); for (const [re,r] of STEM_RULES) w = w.replace(re,r); return w; }
 export function morphEq(a, b) { return stem(a) === stem(b); }
 
-/* -------- JD target miner -------- */
+/* -------------------- JD target miner -------------------- */
 
-function badWord(w) { return STOP.has(w) || /\d/.test(w) || w.length < 3; }
+function badWord(w, ban) { return STOP.has(w) || ban.has(w) || /\d/.test(w) || w.length < 3; }
 
-export function smartJDTargets(jdText, allowed = []) {
+/**
+ * smartJDTargets(jdText, allowed = [], banlist = [])
+ *  - prefers tokens from `allowed` (profile skills/titles)
+ *  - drops STOP words, numbers, short words, and anything in `banlist`
+ *  - lifts bigrams/trigrams that aren’t numeric/filler
+ */
+export function smartJDTargets(jdText, allowed = [], banlist = []) {
   const toks = tokenize(jdText);
   const scores = new Map();
-  const allowedSet = new Set((allowed || []).map(x => x.toLowerCase()));
+  const allowedSet = new Set((allowed || []).map(x => String(x).toLowerCase()));
+  const ban = new Set((banlist || []).map(x => String(x).toLowerCase()));
 
+  // 1) score unigrams (skip numerics/stopwords)
   for (const t of toks) {
-    if (badWord(t)) continue;
-    const base = allowedSet.size ? (allowedSet.has(t) ? 3 : 1) : 1;
+    if (badWord(t, ban)) continue;
+    const base = allowedSet.size ? (allowedSet.has(t) ? 4 : 1) : 1;
     scores.set(t, (scores.get(t) || 0) + base);
   }
 
+  // 2) phrase lift (bigrams/trigrams) but reject digits/filler
   const words = (jdText || "").toLowerCase().split(/\s+/);
   for (let i = 0; i < words.length - 1; i++) {
     const bigram = `${words[i]} ${words[i+1]}`.trim();
-    if (bigram.split(" ").some(badWord)) continue;
+    const partsB = bigram.split(" ");
+    if (partsB.some(w => badWord(w, ban))) continue;
     if (bigram.length < 5) continue;
-    scores.set(bigram, (scores.get(bigram) || 0) + 4);
+    scores.set(bigram, (scores.get(bigram) || 0) + 6);  // stronger lift
+
     if (i + 2 < words.length) {
       const trigram = `${words[i]} ${words[i+1]} ${words[i+2]}`.trim();
-      if (!trigram.split(" ").some(badWord) && trigram.length >= 7) {
-        scores.set(trigram, (scores.get(trigram) || 0) + 3);
+      const partsT = trigram.split(" ");
+      if (!partsT.some(w => badWord(w, ban)) && trigram.length >= 7) {
+        scores.set(trigram, (scores.get(trigram) || 0) + 4);
       }
     }
   }
 
+  // Rank, dedupe by stem, emit up to 24 targets with category
   const ranked = [...scores.entries()].sort((a,b) => b[1] - a[1]).map(([k]) => k);
   const seen = new Set();
   const out = [];
@@ -115,27 +161,28 @@ export function smartJDTargets(jdText, allowed = []) {
   return out;
 }
 
-/* -------- bridge builder (we provide the preposition when needed) -------- */
+/* -------------------- Bridge builder (mid‑sentence / end) -------------------- */
 
 export function bridgeForToken(display, category = "other", style = "auto", dashThreshold = 7) {
   const phrase = String(display || "").trim();
   const words = phrase ? phrase.split(/\s+/).length : 0;
   const delim  = (style === "comma") ? ", " : (style === "dash") ? " — " : (words >= dashThreshold ? " — " : ", ");
 
-  // No "and" joins; use prepositions by category to keep variety
-  const lead =
-    category === "cloud"    ? "on"    :
-    category === "devops"   ? "via"   :
-    category === "database" ? "with"  :
-    category === "frontend" ? "with"  :
-    category === "backend"  ? "with"  :
-    category === "analytics"? "for"   :
-    category === "testing"  ? "using" : "with";
+  // Vary the preposition so we never rely on “and …”
+  const tail =
+    category === "database" ? `with ${phrase}` :
+    category === "devops"   ? `via ${phrase}`  :
+    category === "frontend" ? `with ${phrase}` :
+    category === "backend"  ? `with ${phrase}` :
+    category === "analytics"? `for ${phrase}`  :
+    category === "cloud"    ? `on ${phrase}`   :
+    category === "testing"  ? `using ${phrase}`:
+    `with ${phrase}`;
 
-  return `${delim}${lead} ${phrase}`;
+  return `${delim}${tail}`;
 }
 
-/* -------- weakness detection & metric templates -------- */
+/* -------------------- Weakness detection & metric templates -------------------- */
 
 export function assessWeakness(text, wordCap = 40) {
   const t = canon(text);
@@ -154,17 +201,17 @@ export function templatesForSkill(skill) {
   ];
 }
 
-/* -------- coverage -------- */
+/* -------------------- Coverage -------------------- */
 
-export function jdCoverageAgainstResume(jd, resumePlain) {
-  const jdWords = tokenSet(jd);
-  const resWords = tokenSet(resumePlain);
+export function jdCoverageAgainstResume(jd, resumePlain, banlist = []) {
+  const jdWords = tokenSet(jd, banlist);
+  const resWords = tokenSet(resumePlain, banlist);
   const hits   = [...jdWords].filter(w => [...resWords].some(r => morphEq(w, r)));
   const misses = [...jdWords].filter(w => ![...resWords].some(r => morphEq(w, r)));
   return { hits, misses };
 }
 
-export function explainGaps(jd, resumePlain) {
-  const { hits, misses } = jdCoverageAgainstResume(jd, resumePlain);
+export function explainGaps(jd, resumePlain, banlist = []) {
+  const { hits, misses } = jdCoverageAgainstResume(jd, resumePlain, banlist);
   return { hits, misses: misses.slice(0, 50) };
 }
