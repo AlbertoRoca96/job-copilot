@@ -1,4 +1,4 @@
-// js/power-edit.js
+// docs/js/power-edit.js
 // Power Edit: live scoring + SMART suggestions + server Auto-tailor.
 // JD→Resume coverage + phrase-aware extraction.
 // Inline diffs (toggle) + one‑click "Why added?" popover for each inserted node.
@@ -9,8 +9,9 @@ import {
   tokenize,
   tokensFromTerms,
   jdCoverageAgainstResume,
-  smartJDTargets
-} from './scoring.js?v=2025-10-06-3';
+  smartJDTargets,
+  usefulToken
+} from './scoring.js?v=2025-10-07-1';
 
 const $ = (id) => document.getElementById(id);
 
@@ -44,9 +45,12 @@ async function ensureMammoth(timeoutMs = 6000) {
   const css = `
     .ins { background:#f4fff4; outline:1px dashed #8fd48f; border-radius:4px; padding:0 2px; }
     .hide-diffs .ins { background:transparent; outline:none; }
-    .why-btn { display:inline-inline; margin-left:.4rem; border:1px solid #ccd; border-radius:999px; width:22px; height:22px; line-height:20px; text-align:center; cursor:pointer; background:#f7f7ff; color:#333; font-weight:700; }
+    .why-btn { display:inline-block; margin-left:.4rem; border:1px solid #ccd; border-radius:999px;
+               width:22px; height:22px; line-height:20px; text-align:center; cursor:pointer;
+               background:#f7f7ff; color:#333; font-weight:700; }
     .auto-insert { position:relative; }
-    #why-pop { position:absolute; z-index:10000; max-width:360px; background:#fff; border:1px solid #ddd; border-radius:8px; padding:.7rem .8rem; box-shadow:0 10px 30px rgba(0,0,0,.14); }
+    #why-pop { position:absolute; z-index:10000; max-width:360px; background:#fff; border:1px solid #ddd;
+               border-radius:8px; padding:.7rem .8rem; box-shadow:0 10px 30px rgba(0,0,0,.14); }
     #why-pop .title { font-weight:700; margin:0 0 .25rem; }
     #why-pop .meta  { color:#666; font-size:.85em; margin:.15rem 0 .5rem; }
     #why-pop .jd    { background:#f7f7f7; border-left:3px solid #bde; padding:.45rem .55rem; border-radius:6px; font-size:.92em; }
@@ -93,7 +97,7 @@ const autoHint      = $('auto_hint');
 })();
 
 /* ---------- "Why added?" popover ---------- */
-let whyPop = null;
+let whyPop = null, whyLoadedSlug = "";
 function ensureWhyPop() {
   if (whyPop) return whyPop;
   whyPop = document.createElement('div');
@@ -109,8 +113,7 @@ function ensureWhyPop() {
   whyPop.addEventListener('click', (e)=>{ if (e.target.matches('.close')) hideWhyPop(); });
   document.addEventListener('keydown', (e)=>{ if (e.key === 'Escape') hideWhyPop(); });
   document.addEventListener('click', (e)=>{
-    if (!whyPop) return;
-    if (whyPop.style.display === 'none') return;
+    if (!whyPop || whyPop.style.display === 'none') return;
     if (e.target.closest('#why-pop') || e.target.closest('.why-btn')) return;
     hideWhyPop();
   });
@@ -119,15 +122,11 @@ function ensureWhyPop() {
 function showWhyPop(btn, payload = {}, bulletText = "") {
   const pop = ensureWhyPop();
   const r = btn.getBoundingClientRect();
-  const top = r.bottom + window.scrollY + 8;
-  const left = Math.min(window.scrollX + r.left, window.scrollX + document.documentElement.clientWidth - 380);
+  pop.style.top = `${r.bottom + window.scrollY + 8}px`;
+  pop.style.left = `${Math.min(window.scrollX + r.left, window.scrollX + document.documentElement.clientWidth - 380)}px`;
 
   const sigs = Array.isArray(payload.signals) ? payload.signals : [];
-  const labels = {
-    title: 'mentioned in the job title',
-    dict: 'recognized technology/skill',
-    stem: 'extracted from a requirement phrase'
-  };
+  const labels = { title:'mentioned in the job title', dict:'recognized technology/skill', stem:'extracted from a requirement phrase', 'fallback-jd-miss':'JD miss (fallback)', 'fallback-profile-jd':'Profile∩JD miss (fallback)' };
   const sigText = sigs.map(s => labels[s] || s).join(', ');
 
   pop.querySelector('.title').textContent = `Why added: ${payload.target || payload.token || '(target)'}`;
@@ -148,16 +147,16 @@ function showWhyPop(btn, payload = {}, bulletText = "") {
     pop.querySelector('.repo').style.display = 'none';
   }
 
-  pop.style.top = `${top}px`; pop.style.left = `${left}px`; pop.style.display = 'block';
+  pop.style.display = 'block';
 }
 function hideWhyPop(){ if (whyPop) whyPop.style.display = 'none'; }
 
 /* ---------- State ---------- */
-const state = { profile: {}, job: {}, selRange: null, resumeLoaded:false, whySlug:'', whyMap:null };
+const state = { profile: {}, job: {}, selRange: null, resumeLoaded:false };
 let lastAutoNodes = [];
 let autoNodesAll  = [];
 
-/* ---------- Helpers: job, selection, sanitize ---------- */
+/* ---------- Helpers ---------- */
 function getJobFromUI(){
   return {
     title: jobTitle.value || '',
@@ -184,7 +183,7 @@ function jdReady() {
 }
 function hasResume() {
   const textLen = (editor.textContent || '').trim().length;
-  return state.resumeLoaded || textLen >= 50; // pasted/typed counts too
+  return state.resumeLoaded || textLen >= 50;
 }
 
 /* ---------- Section-aware weaving (insert into proper <ul>) ---------- */
@@ -197,7 +196,6 @@ function findInsertionList() {
     if (n.tagName === 'UL' || n.tagName === 'OL') return n;
     n = n.parentElement;
   }
-
   // 2) Prefer the list that follows an Experience/Projects header
   const heads = Array.from(editor.querySelectorAll('h1,h2,h3,strong,b')).filter(h => /experience|work experience|projects/i.test(h.textContent || ''));
   for (const h of heads) {
@@ -208,12 +206,9 @@ function findInsertionList() {
       sib = sib.nextElementSibling;
     }
   }
-
-  // 3) Else, last list in the document
+  // 3) Else, last list; 4) else create one
   const lists = editor.querySelectorAll('ul,ol');
   if (lists.length) return lists[lists.length - 1];
-
-  // 4) Else, create a new <ul> at the end
   const ul = document.createElement('ul');
   editor.appendChild(ul);
   return ul;
@@ -232,49 +227,42 @@ function insertSuggestedBullet(text, why = {}) {
   li.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
-/* ---------- Load change-log "why" from ./changes/*.json (optional) ---------- */
+/* ---------- Optional repo-backed "why" (loaded on-demand, no 404 spam) ---------- */
 function slugify(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,''); }
-async function maybeLoadWhyFromChanges(job){
+async function loadWhyChangesIfNeeded(job) {
   const slug = `${slugify(job.company)}_${slugify(job.title)}`;
-  if (slug === state.whySlug) return;
-  state.whySlug = slug; state.whyMap = null;
+  if (!slug || slug === whyLoadedSlug) return null;
+  whyLoadedSlug = slug;
 
-  const tryPaths = [
-    `./changes/${slug}.json`,
-    `./changes/${slug}.changes.json`
-  ];
+  const tryPaths = [`./changes/${slug}.json`, `./changes/${slug}.changes.json`];
   for (const p of tryPaths) {
     try {
       const r = await fetch(p, { cache: 'no-store' });
       if (!r.ok) continue;
       const obj = await r.json();
-      state.whyMap = buildWhyMapFromChanges(obj);
-      return;
-    } catch {}
+      const arr = Array.isArray(obj) ? obj : Array.isArray(obj?.changes) ? obj.changes : [];
+      const map = new Map();
+      for (const it of arr) {
+        const sent   = String(it.inserted_sentence || it.modified_paragraph_text || "");
+        const reason = String(it.reason || "").trim();
+        const sample = sent.replace(/\s+/g,' ').slice(0,240);
+        tokenize(sent).forEach(tok => {
+          const cur = map.get(tok) || { repo_reason: "", repo_sample: "" };
+          if (reason && !cur.repo_reason) cur.repo_reason = reason;
+          if (sample && !cur.repo_sample) cur.repo_sample = sample;
+          map.set(tok, cur);
+        });
+      }
+      return { slug, map };
+    } catch { /* ignore */ }
   }
-}
-function buildWhyMapFromChanges(obj){
-  const arr = Array.isArray(obj) ? obj : Array.isArray(obj?.changes) ? obj.changes : [];
-  const map = new Map();
-  for (const it of arr) {
-    const sent   = String(it.inserted_sentence || it.modified_paragraph_text || "");
-    const reason = String(it.reason || "").trim();
-    const sample = sent.replace(/\s+/g,' ').slice(0,240);
-    tokenize(sent).forEach(tok => {
-      const cur = map.get(tok) || { repo_reason: "", repo_sample: "" };
-      if (reason && !cur.repo_reason) cur.repo_reason = reason;
-      if (sample && !cur.repo_sample) cur.repo_sample = sample;
-      map.set(tok, cur);
-    });
-  }
-  return map;
+  return null;
 }
 
-/* ---------- Scoring, coverage, and rendering ---------- */
+/* ---------- Scoring & coverage ---------- */
 function render(){
   try{
     state.job = getJobFromUI();
-    maybeLoadWhyFromChanges(state.job); // async, non-blocking
 
     if (!jdReady()) {
       scoreline.textContent = 'Score: —';
@@ -285,7 +273,6 @@ function render(){
       return;
     }
 
-    // Profile-aware global score (location & must-haves)
     const s = scoreJob(state.job, state.profile);
     scoreline.textContent = `Score: ${s.toFixed(4)}`;
 
@@ -318,9 +305,8 @@ function render(){
   }
 }
 
-/* ---------- SMART suggestions (category-aware X‑Y‑Z bullets) ---------- */
+/* ---------- SMART suggestions (templates + fallbacks) ---------- */
 const CATEGORY = {
-  // token → category
   rails:'framework', nodejs:'framework', react:'frontend', reactnative:'frontend',
   postgresql:'database', mysql:'database', mongodb:'database', redis:'database', plpgsql:'database',
   playwright:'testing', cypress:'testing', jest:'testing', pytest:'testing', selenium:'testing',
@@ -332,40 +318,40 @@ const CATEGORY = {
 
 const TEMPLATES = {
   framework: [
-    txt => `• Accomplished [X outcome] as measured by [Y metric] by implementing ${txt} APIs and background jobs to [Z concrete action].`,
-    txt => `• Shipped [feature] on ${txt}, improving P95 latency by [X%] via query tuning/caching.`,
+    t => `• Accomplished [X outcome] as measured by [Y] by implementing ${t} APIs/background jobs to [Z action].`,
+    t => `• Shipped [feature] on ${t}, improving P95 latency by [X%] via query tuning/caching.`,
   ],
   frontend: [
-    txt => `• Delivered [feature] in ${txt}, reducing bundle size by [X%] and improving TTI by [Y%].`,
-    txt => `• Built accessible UI in ${txt} with [pattern], increasing task success rate by [X%].`,
+    t => `• Delivered [feature] in ${t}, reducing bundle size by [X%] and improving TTI by [Y%].`,
+    t => `• Built accessible UI in ${t} with [pattern], increasing task success rate by [X%].`,
   ],
   database: [
-    txt => `• Reduced query time by [X%] on ${txt} by adding indexes and rewriting [JOIN/CTE].`,
-    txt => `• Designed schema + migrations on ${txt} to support [feature], cutting storage by [X%].`,
+    t => `• Reduced query time by [X%] on ${t} by adding indexes and rewriting [JOIN/CTE].`,
+    t => `• Designed schema + migrations on ${t} to support [feature], cutting storage by [X%].`,
   ],
   testing: [
-    txt => `• Raised test coverage by [X pts] with ${txt} e2e suites; stabilized flakiness < [Y%].`,
-    txt => `• Automated regression tests in ${txt}, reducing escaped defects by [X%].`,
+    t => `• Raised test coverage by [X pts] with ${t} e2e suites; stabilized flakiness < [Y%].`,
+    t => `• Automated regression tests in ${t}, reducing escaped defects by [X%].`,
   ],
   devops: [
-    txt => `• Cut build time by [X%] by parallelizing CI in ${txt} and caching dependencies.`,
-    txt => `• Shipped one-click deploys with ${txt}, reducing change failure rate by [X%].`,
+    t => `• Cut build time by [X%] by parallelizing CI in ${t} and caching dependencies.`,
+    t => `• Shipped one‑click deploys with ${t}, reducing change‑failure rate by [X%].`,
   ],
   webplat: [
-    txt => `• Implemented offline-first PWA using ${txt}, improving repeat-load by [X%].`,
-    txt => `• Added background sync/push with ${txt}, raising task completion by [X%].`,
+    t => `• Implemented offline‑first PWA using ${t}, improving repeat‑load by [X%].`,
+    t => `• Added background sync/push with ${t}, raising task completion by [X%].`,
   ],
   ml: [
-    txt => `• Deployed [model] with ${txt}, improving F1 by [Δ] and latency by [X%].`,
-    txt => `• Built data pipeline for ${txt} training/inference, cutting labeling time by [X%].`,
+    t => `• Deployed [model] with ${t}, improving F1 by [Δ] and latency by [X%].`,
+    t => `• Built data pipeline for ${t} training/inference, cutting labeling time by [X%].`,
   ],
   language: [
-    txt => `• Refactored critical module in ${txt}, reducing cyclomatic complexity by [X%].`,
-    txt => `• Implemented [algo/pattern] in ${txt}, speeding up [workload] by [X%].`,
+    t => `• Refactored critical module in ${t}, reducing cyclomatic complexity by [X%].`,
+    t => `• Implemented [algo/pattern] in ${t}, speeding up [workload] by [X%].`,
   ],
   default: [
-    txt => `• Accomplished [X outcome] as measured by [Y metric] by using ${txt} to [Z concrete action].`,
-    txt => `• Built/automated [process] in ${txt} to meet [KPI], verified by [test/monitor].`,
+    t => `• Accomplished [X outcome] as measured by [Y] by using ${t} to [Z action].`,
+    t => `• Built/automated [process] in ${t} to meet [KPI], verified by [test/monitor].`,
   ]
 };
 
@@ -375,44 +361,63 @@ function bulletsFor(tool, token) {
   return raws.map(fn => fn(tool));
 }
 
-function rebuildSuggestions(){
+async function rebuildSuggestions(){
   if (!jdReady()) {
     suggEl.innerHTML = '<span class="small muted">Suggestions appear after you paste a JD.</span>';
     return;
   }
 
-  const targets = smartJDTargets(getJobFromUI(), getResumeHTML(), state.profile, 18);
+  const job = getJobFromUI();
+  const resumeHtml = getResumeHTML();
+  let targets = smartJDTargets(job, resumeHtml, state.profile, 18);
 
-  // choose best matching portfolio project (optional)
-  const projects = Array.isArray(state.profile.projects) ? state.profile.projects : [];
-  function bestProjectFor(token){
-    const t = token.toLowerCase();
-    let best = null, score = 0;
-    for (const p of projects){
-      const tags = (p.tags || []).map(x => String(x).toLowerCase());
-      const hit = tags.includes(t) || tags.includes(pretty(t).toLowerCase());
-      if (hit && (p.score || 1) > score) { best = p; score = p.score || 1; }
-    }
-    return best;
+  // ---- Fallback 1: JD→Resume token misses (filtered) ----
+  if (!targets.length) {
+    const cov = jdCoverageAgainstResume(job, resumeHtml);
+    const misses = (cov.misses || []).filter(usefulToken);
+    targets = misses.slice(0, 8).map(t => ({
+      token: t,
+      display: pretty(t),
+      score: 0.8,
+      why: { frequency: 1, signals: ["fallback-jd-miss"], in_profile: false, in_title: false, sample: "" }
+    }));
   }
+
+  // ---- Fallback 2: Profile∩JD skills not yet in resume ----
+  if (!targets.length) {
+    const jobToks = new Set(tokenize(`${job.title} ${job.description}`));
+    const resToks = new Set(tokenize(resumeHtml));
+    const prof = tokensFromTerms(state.profile.skills || []);
+    const add = prof.filter(p => jobToks.has(p) && !resToks.has(p)).filter(usefulToken);
+    targets = add.slice(0, 8).map(t => ({
+      token: t,
+      display: pretty(t),
+      score: 0.7,
+      why: { frequency: 1, signals: ["fallback-profile-jd"], in_profile: true, in_title: false, sample: "" }
+    }));
+  }
+
+  // If still nothing, keep the helper text
+  if (!targets.length) {
+    suggEl.innerHTML = '<span class="small muted">No high-signal targets found in this JD. Paste the full requirements section for smarter suggestions.</span>';
+    return;
+  }
+
+  // Load optional repo-backed "why" map lazily (avoid 404 spam on load)
+  let repoWhyMap = null;
+  const loaded = await loadWhyChangesIfNeeded(job);
+  if (loaded?.map) repoWhyMap = loaded.map;
 
   const cards = [];
   for (const t of targets) {
     const tool = t.display;
-    const proj = bestProjectFor(t.token);
     const btxt = bulletsFor(tool, t.token);
 
-    // enrich "why" with change-log info if we have it
-    let repo = state.whyMap?.get(t.token) || null;
+    // enrich "why" with repo info if available
+    let repo = repoWhyMap?.get(t.token) || null;
     const why = { target: tool, token: t.token, score: t.score, ...t.why, ...(repo || {}) };
 
-    // bullets (keep placeholders bracketed)
-    const bullets = [
-      ...btxt,
-      ...(proj?.url ? [`• Demonstrated ${tool} in ${proj.name} ([link](${proj.url})), achieving [Y] by [Z].`] : [])
-    ];
-
-    bullets.forEach(txt => {
+    btxt.forEach(txt => {
       const tip = [
         `Target: ${tool}`,
         t.why.in_title ? "appears in title" : "",
@@ -506,7 +511,6 @@ async function autoTailorServer() {
     lastAutoNodes = [];
     const beforeCount = editor.childNodes.length;
 
-    // Insert at caret; the server block may include its own <section class="auto-insert">...</section>
     const range = state.selRange || document.createRange();
     if (!state.selRange) { range.selectNodeContents(editor); range.collapse(false); }
     const frag = document.createElement('template');
@@ -547,7 +551,7 @@ function clearAuto() {
 btnUndo.addEventListener('click', undoAuto);
 btnClear.addEventListener('click', clearAuto);
 
-/* ---------- Tiny tooltip/helper for “why disabled” ---------- */
+/* ---------- Toggle state & live inputs ---------- */
 function setAutoHint(reason) {
   btnAutoServer.title = reason || 'Send to server to insert a tailored block';
   autoHint.textContent = reason || '';
@@ -564,28 +568,31 @@ function enableButtons() {
   setAutoHint(ok ? '' : `To enable: ${needs.join(' and ')}`);
 }
 
-/* ---------- Live inputs ---------- */
+// inputs
 for (const id of ["job_title","job_company","job_location","job_desc","profile_json"]){
   document.addEventListener("input", (ev)=>{ if (ev.target && ev.target.id===id) {
     if (id === "profile_json"){
       try { state.profile = JSON.parse(profileBox.value || "{}"); } catch(_){ state.profile = {}; }
     }
-    render(); // suggestions rebuilt inside render()
+    render();
   }});
 }
-// treat typed/pasted resume as a loaded resume too
-editor.addEventListener('input', ()=>{ if ((editor.textContent||'').trim().length >= 50) state.resumeLoaded = true; enableButtons(); });
+editor.addEventListener('input', ()=>{
+  if ((editor.textContent||'').trim().length >= 50) state.resumeLoaded = true;
+  enableButtons();
+});
 editor.addEventListener('keyup', ()=>{ render(); rememberSelection(); });
 editor.addEventListener('mouseup', rememberSelection);
 editor.addEventListener('blur', rememberSelection);
 
-/* ---------- Load profile into textarea ---------- */
+/* ---------- Load profile into textarea (quiet if table missing) ---------- */
 async function loadUserProfileFromSupabase() {
   try {
     await ensureSupabase();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return false;
 
+    // If table doesn't exist, Supabase REST returns 404; swallow and continue.
     const { data, error } = await supabase.from('profiles').select('*').eq('id', user.id).single();
     if (error || !data) return false;
 
@@ -594,8 +601,7 @@ async function loadUserProfileFromSupabase() {
       target_titles: data.target_titles || [],
       must_haves: data.must_haves || [],
       location_policy: data.search_policy || {},
-      // Optional: projects to unlock portfolio-aware bullets:
-      // projects: [{ name:"Pointkedex", url:"https://...", tags:["pwa","serviceworker","react"] }]
+      // Optional: projects: [{ name:"Pointkedex", url:"https://...", tags:["pwa","serviceworker","react"] }]
     };
 
     profileBox.value = JSON.stringify(json, null, 2);
