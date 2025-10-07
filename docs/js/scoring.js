@@ -1,60 +1,67 @@
 /* docs/js/scoring.js
- * Scoring, tokenization and simple “bridge phrase” helpers used by power-edit.js.
- * All functions are deterministic; no network calls.
+ * Shared scoring, tokenization, morphology, and template builders for Power Edit.
+ * Deterministic; no network. Plays nicely with optional server suggestions.
  */
+
+/* -------------------- Stopwords and weak phrases -------------------- */
 
 export const STOP = new Set([
   "the","and","for","with","to","of","in","on","as","by","or","an","a","at","from","using",
   "we","you","our","your","will","role","responsibilities","requirements","preferred","must",
   "including","include","etc","ability","skills","excellent","communication","experience",
-  "years","year","team","teams","work"
+  "years","year","team","teams","work","job","title","company","location"
 ]);
 
-// Pretty render for common tokens
+// Guardrails for rewrites; keep concise, ATS-friendly
+export const WEAK_PHRASES = [
+  "responsible for","duties included","worked on","helped","assisted","participated in",
+  "utilized","leveraged","various","etc","successfully","dynamic","rockstar","go-getter"
+];
+
+/* -------------------- Pretty names & category cues -------------------- */
+
 const PRETTY = {
-  "js": "JavaScript", "javascript": "JavaScript", "ts": "TypeScript", "typescript": "TypeScript",
-  "react": "React", "reactjs": "React", "react native": "React Native", "node": "Node.js",
-  "postgres": "PostgreSQL", "postgresql": "PostgreSQL", "sql": "SQL",
-  "github actions": "GitHub Actions", "gh actions": "GitHub Actions",
-  "ci": "CI", "ci/cd": "CI/CD", "docker": "Docker",
+  "js": "JavaScript","javascript":"JavaScript","ts":"TypeScript","typescript":"TypeScript",
+  "react":"React","reactjs":"React","react native":"React Native","node":"Node.js",
+  "postgres":"PostgreSQL","postgresql":"PostgreSQL","sql":"SQL",
+  "github actions":"GitHub Actions","gh actions":"GitHub Actions",
+  "ci":"CI","ci/cd":"CI/CD","docker":"Docker",
   "aws":"AWS","azure":"Azure","gcp":"GCP","kubernetes":"Kubernetes","k8s":"Kubernetes",
   "rails":"Ruby on Rails","ruby on rails":"Ruby on Rails",
   "flask":"Flask","django":"Django","java":"Java","c++":"C++","c#":"C#","c":"C",
-  "pandas":"pandas","numpy":"NumPy","seaborn":"seaborn","playwright":"Playwright",
+  "pandas":"pandas","numpy":"NumPy","playwright":"Playwright",
   "mammoth":"Mammoth","html-docx-js":"html-docx-js"
 };
 
-// Category cues (used to pick the best bullet to weave into)
 export const CUE_SETS = {
   database: ["database","sql","postgres","postgresql","schema","index","query","etl","migration","warehouse"],
-  backend:  ["api","service","microservice","endpoint","server","requests","auth","oauth","jwt","flask","django","rails","spring"],
+  backend:  ["api","service","microservice","endpoint","server","auth","oauth","jwt","flask","django","rails","spring","node"],
   frontend: ["ui","ux","component","react","javascript","typescript","spa","responsive","accessibility"],
   devops:   ["ci","ci/cd","pipeline","build","deploy","docker","container","kubernetes","workflow","github actions"],
   analytics:["analytics","metrics","kpi","dashboard","tracking","events","instrumentation","report"],
-  cloud:    ["aws","gcp","azure","s3","lambda","ec2","kinesis","pubsub","cloud","k8s"],
+  cloud:    ["aws","gcp","azure","s3","lambda","ec2","cloud","k8s"],
   testing:  ["test","qa","automation","e2e","integration","unit","playwright","jest","pytest"]
 };
 
-// Heuristic mapping for JD tokens to a coarse category
 export function categorize(tok) {
-  const t = tok.toLowerCase();
+  const t = (tok || "").toLowerCase();
   if (["postgres","postgresql","sql","database","warehouse"].some(w => t.includes(w))) return "database";
   if (["react","javascript","typescript","frontend","component","ui","ux"].some(w => t.includes(w))) return "frontend";
   if (["api","flask","django","rails","spring","backend","node"].some(w => t.includes(w))) return "backend";
-  if (["ci","cd","github actions","pipeline","docker","kubernetes","k8s"].some(w => t.includes(w))) return "devops";
+  if (["ci","github actions","pipeline","docker","kubernetes","k8s"].some(w => t.includes(w))) return "devops";
   if (["kpi","analytics","dashboard","metrics"].some(w => t.includes(w))) return "analytics";
   if (["aws","gcp","azure","s3","lambda","cloud"].some(w => t.includes(w))) return "cloud";
   if (["test","qa","automation","jest","pytest","playwright"].some(w => t.includes(w))) return "testing";
   return "other";
 }
 
-export function canon(s) {
-  return (s || "").replace(/\s+/g, " ").trim();
-}
+/* -------------------- Core text helpers -------------------- */
+
+export const canon = (s) => (s || "").replace(/\s+/g, " ").trim();
 
 export function pretty(tok) {
-  const t = tok.toLowerCase();
-  return PRETTY[t] || tok.replace(/\baws\b/i,"AWS").replace(/\bgcp\b/i,"GCP");
+  const t = (tok || "").toLowerCase();
+  return PRETTY[t] || tok.replace(/\baws\b/gi,"AWS").replace(/\bgcp\b/gi,"GCP");
 }
 
 export function tokenize(text) {
@@ -62,60 +69,75 @@ export function tokenize(text) {
   (text || "").toLowerCase().replace(/[A-Za-z][A-Za-z0-9+./-]{1,}/g, m => { out.push(m); return m; });
   return out;
 }
-
 export function tokenSet(text) {
   return new Set(tokenize(text));
 }
 
-// Extract a small, ranked set of JD targets we want to weave
+/* -------------------- Light stemming (variants) -------------------- */
+/* Mirrors Jobscan’s “stemmed skill variants” upgrade: we accept small morphology
+ * differences (plan -> planning, manage -> managed, etc.). 
+ */
+const STEM_RULES = [
+  [/ing$/, ""], [/ed$/, ""], [/s$/, ""], [/ies$/, "y"]
+];
+function stem(word) {
+  let w = (word || "").toLowerCase();
+  for (const [re, r] of STEM_RULES) w = w.replace(re, r);
+  return w;
+}
+export function morphEq(a, b) {
+  return stem(a) === stem(b);
+}
+
+/* -------------------- JD target miner -------------------- */
+
 export function smartJDTargets(jdText, allowed = []) {
   const toks = tokenize(jdText);
   const scores = new Map();
-  const allowedSet = new Set(allowed.map(a => a.toLowerCase()));
+  const allowedSet = new Set((allowed || []).map(x => x.toLowerCase()));
 
+  // 1) score unigrams with boosts for allowed vocab
   for (const t of toks) {
     if (STOP.has(t)) continue;
-    // If we have an allowed list (from profile/skills), weight those higher.
     const base = allowedSet.size ? (allowedSet.has(t) ? 2 : 1) : 1;
     scores.set(t, (scores.get(t) || 0) + base);
   }
-  // phrases (2-3grams) that appear often
+  // 2) phrase lift (bigrams/trigrams)
   const words = (jdText || "").toLowerCase().split(/\s+/);
   for (let i = 0; i < words.length - 1; i++) {
     const bigram = `${words[i]} ${words[i+1]}`.trim();
     if (bigram.split(" ").some(w => STOP.has(w))) continue;
     if (bigram.length < 5) continue;
     scores.set(bigram, (scores.get(bigram) || 0) + 3);
+    if (i + 2 < words.length) {
+      const trigram = `${words[i]} ${words[i+1]} ${words[i+2]}`.trim();
+      if (!trigram.split(" ").some(w => STOP.has(w)) && trigram.length >= 7) {
+        scores.set(trigram, (scores.get(trigram) || 0) + 2);
+      }
+    }
   }
 
-  const ranked = [...scores.entries()]
-    .sort((a,b) => b[1] - a[1])
-    .map(([k,_]) => k)
-    .filter(k => k.length <= 40);
-
-  const deduped = [];
+  // rank & dedupe by light stemming
+  const ranked = [...scores.entries()].sort((a,b) => b[1] - a[1]).map(([k]) => k);
   const seen = new Set();
+  const out = [];
   for (const k of ranked) {
-    const key = k.toLowerCase();
+    const key = stem(k);
     if (seen.has(key)) continue;
     seen.add(key);
-    deduped.push({
-      token: k,
-      display: pretty(k),
-      category: categorize(k)
-    });
-    if (deduped.length >= 24) break;
+    out.push({ token: k, display: pretty(k), category: categorize(k) });
+    if (out.length >= 24) break;
   }
-  return deduped;
+  return out;
 }
 
-// Build a compact, non-fabricating clause that can be appended to a bullet.
+/* -------------------- Bridge builder (mid-sentence / end) -------------------- */
+
 export function bridgeForToken(display, category = "other", style = "dash", dashThreshold = 7) {
-  const phrase = display; // keep it truthful & minimal
+  const phrase = display;
   const words = String(phrase).trim().split(/\s+/).length;
   const delim = (style === "comma") ? ", " : (style === "auto" ? (words >= dashThreshold ? " — " : ", ") : " — ");
 
-  // Category-specific light wording (no outcomes fabricated)
   const tail =
     category === "database" ? `with ${phrase}` :
     category === "devops"   ? `via ${phrase}` :
@@ -128,17 +150,38 @@ export function bridgeForToken(display, category = "other", style = "dash", dash
   return `${delim}${tail}`;
 }
 
-// Coverage helpers (small, Jobscan-style)
+/* -------------------- Weakness detection for rewrites -------------------- */
+
+export function assessWeakness(text, wordCap = 40) {
+  const t = canon(text);
+  const words = t ? t.split(/\s+/).length : 0;
+  const long = words > wordCap;
+  const weak = WEAK_PHRASES.find(w => new RegExp(`\\b${w}\\b`, "i").test(t)) || null;
+  return { long, weak, words };
+}
+
+/* -------------------- Metric-ready templates -------------------- */
+
+export function templatesForSkill(skill) {
+  const s = pretty(skill);
+  return [
+    `Implemented ${s} to improve [KPI] by [X%].`,
+    `Built ${s} workflow reducing [time/cost/defects] by [X%].`,
+    `Used ${s} to deliver [feature/output], meeting [SLA/target].`
+  ];
+}
+
+/* -------------------- Coverage helpers -------------------- */
+
 export function jdCoverageAgainstResume(jd, resumePlain) {
   const jdWords = tokenSet(jd);
   const resWords = tokenSet(resumePlain);
-  const hits = [...jdWords].filter(w => resWords.has(w));
-  const misses = [...jdWords].filter(w => !resWords.has(w));
+  const hits = [...jdWords].filter(w => [...resWords].some(r => morphEq(w, r)));
+  const misses = [...jdWords].filter(w => ![...resWords].some(r => morphEq(w, r)));
   return { hits, misses };
 }
 
 export function explainGaps(jd, resumePlain) {
   const { hits, misses } = jdCoverageAgainstResume(jd, resumePlain);
-  const topMisses = misses.slice(0, 50);
-  return { hits, misses: topMisses };
+  return { hits, misses: misses.slice(0, 50) };
 }
