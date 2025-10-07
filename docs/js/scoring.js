@@ -1,9 +1,10 @@
-// js/scoring.js
+// docs/js/scoring.js
 // Deterministic helpers + "smart suggestion" extraction.
 // Exports:
 // - tokenize, tokensFromTerms, explainGaps, scoreJob
 // - jdCoverageAgainstResume(job, resumeHtml)
 // - smartJDTargets(job, resumeHtml, profile, topN)
+// - usefulToken(token)  <-- small helper for UI fallbacks
 
 //////////////////////////
 // Canon + pretty maps  //
@@ -77,6 +78,12 @@ export function tokensFromTerms(arr = []) {
 const uniq = (arr) => Array.from(new Set(arr.filter(Boolean)));
 const pct  = (n, d) => (d > 0 ? n / d : 0);
 
+// Re-export small usefulness check for UI fallbacks
+export function usefulToken(t) {
+  const x = String(t || "").toLowerCase();
+  return x && !STOP.has(x) && !GENERIC_BAN.has(x);
+}
+
 //////////////////////////
 // Location & scoring   //
 //////////////////////////
@@ -148,34 +155,22 @@ export function jdCoverageAgainstResume(job = {}, resumeHtml = "") {
 // SMART TARGETS        //
 //////////////////////////
 
-// 1) Keep only meaningful JD sections (drop About/EEO/Benefits/legalese).
+// Keep only meaningful JD sections (drop About/EEO/Benefits/legalese).
 function importantJDText(jd = "") {
-  // Split on major paragraph/heading boundaries
   const parts = String(jd).split(/\n{2,}|(?:^|\n)\s*(?:###?|----+)\s*/);
-
-  // Heuristic keepers: requirements/qualifications/responsibilities/what you'll do
   const keepIf = /(require(d|ments)|qualifications?|what\s+you(?:'|’)ll\s+do|responsibilit|skills|must\s+have|nice\s+to\s+have|you\s+will|experience\s+with)/i;
-
-  // Junk sections to drop:
   const dropIf = /(about\s+us|who\s+we\s+are|mission|benefits|compensation|pay\s+range|legal|eeo|equal\s+opportunity|affirmative\s+action|privacy|accommodation|visa|sponsorship|hours?\s+et|work\s+authori[sz]ation)/i;
-
   const kept = parts.filter(p => keepIf.test(p) && !dropIf.test(p));
   return kept.length ? kept.join("\n\n") : String(jd);
 }
 
-// 2) Dictionary of tech/skills we care about (extendable).
+// Tech/skills dictionary (extendable).
 const TECH_DICT = [
-  // languages + runtimes
   "python","java","javascript","typescript","c++","csharp","go","rust","ruby","php",
-  // frameworks
   "rails","django","flask","spring","spring boot","react","reactnative","next.js","nodejs","express",
-  // testing & e2e
   "playwright","cypress","jest","pytest","selenium",
-  // data & ml
   "postgresql","mysql","sqlite","mongodb","redis","plpgsql","pytorch","tensorflow","opencv","huggingface",
-  // devops
   "docker","kubernetes","aws","azure","gcp","lambda","s3","cloudfront","githubactions","cicd","terraform",
-  // web platform
   "pwa","serviceworker","graphql","rest","grpc","websocket"
 ];
 
@@ -200,12 +195,11 @@ function pickSnippet(haystack, raw, canon, display) {
   return "";
 }
 
-// 3) Extract candidate phrases from important JD text.
+// Extract candidate phrases from important JD text.
 function extractCandidates(job = {}) {
   const title = String(job.title || "");
   const core  = importantJDText(String(job.description || ""));
 
-  // (a) grab dictionary hits
   const textLC = precanon(core).toLowerCase();
   const hits = new Map(); // canon -> {display,count,signals:Set,sample?:string}
 
@@ -221,13 +215,13 @@ function extractCandidates(job = {}) {
     hits.set(canon, obj);
   }
 
-  // dict terms
+  // dictionary hits
   for (const term of [...TECH_DICT, ...SOFT_BUT_REAL]) {
     const rx = new RegExp(`\\b${escapeRx(term)}\\b`, "ig");
     textLC.replace(rx, (m) => { addHit(m, "dict"); return m; });
   }
 
-  // (b) phrases after typical requirement stems: "experience with <X>", "proficiency in <Y>"
+  // requirement stems
   const stems = [
     /experience\s+with\s+([a-z0-9+.#\- ]{2,40})/ig,
     /proficien(?:t|cy)\s+in\s+([a-z0-9+.#\- ]{2,40})/ig,
@@ -243,7 +237,7 @@ function extractCandidates(job = {}) {
     }
   }
 
-  // (c) title boost
+  // title boost
   for (const term of [...TECH_DICT, "fullstack","backend","frontend"]) {
     if (new RegExp(`\\b${escapeRx(term)}\\b`, "i").test(precanon(title))) {
       addHit(term, "title");
@@ -254,7 +248,6 @@ function extractCandidates(job = {}) {
 }
 
 function cleanPhrase(s) {
-  // trim to 1–3 words, drop stop/generic, keep tech-y shapes
   const toks = tokenize(s).filter(t => !STOP.has(t) && !GENERIC_BAN.has(t));
   if (toks.length === 0 || toks.length > 3) return "";
   return toks.join(" ");
@@ -263,7 +256,7 @@ function cleanPhrase(s) {
 function escapeRx(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 function titleCase(s){ return s.replace(/\b[a-z]/g, c => c.toUpperCase()); }
 
-// 4) Rank and filter vs resume/profile
+// Rank and filter vs resume/profile
 export function smartJDTargets(job = {}, resumeHtml = "", profile = {}, topN = 15) {
   const cand = extractCandidates(job);
   const resumeSet = new Set(uniq(tokenize(String(resumeHtml))));
@@ -271,24 +264,14 @@ export function smartJDTargets(job = {}, resumeHtml = "", profile = {}, topN = 1
 
   const ranked = [];
   for (const [canon, info] of cand.entries()) {
-    // Ignore if resume already covers the canon token
-    if (resumeSet.has(canon)) continue;
-
-    // Base score from frequency
+    if (resumeSet.has(canon)) continue; // skip already-covered
     let score = Math.min(3, info.count * 0.6);
-
-    // Signals
     if (info.signals.has("title")) score += 1.5;
     if (info.signals.has("dict"))  score += 1.0;
     if (info.signals.has("stem"))  score += 1.0;
+    if (profileSet.has(canon))     score += 1.2;
+    if (GENERIC_BAN.has(canon))    score -= 2.0;
 
-    // Profile overlap (you already claim this skill)
-    if (profileSet.has(canon)) score += 1.2;
-
-    // Nudge against overly generic terms
-    if (GENERIC_BAN.has(canon)) score -= 2.0;
-
-    // Keep only meaningful
     if (score >= 1.0) {
       ranked.push({
         token: canon,
