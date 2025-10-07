@@ -5,7 +5,6 @@
   <title>job-copilot — Power Edit (resume)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="style.css" />
-
   <style>
     .wrap { max-width: 1100px; margin:20px auto; padding:0 12px; }
     .card { border:1px solid #e5e5e5; border-radius:12px; padding:16px; background:#fcfcfc; }
@@ -14,7 +13,6 @@
     .pill { display:inline-block; padding:2px 8px; margin:2px; border:1px solid #e0e0e0; border-radius:999px; font-size:12px; background:#f6f6f6; }
     .ctl { margin:6px 8px 0 0; min-width:260px; }
     textarea { width:100%; min-height:160px; padding:8px; border:1px solid #e0e0e0; border-radius:8px; font: 13px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; background:#fff; }
-
     .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
     .pane { background:#fff; border:1px solid #eee; border-radius:10px; padding:10px; }
     .pane h3 { margin: 6px 0; }
@@ -25,16 +23,17 @@
     .change-title { font-weight:600; margin-bottom:6px; }
     .change-reason { color:#555; font-size:12px; margin-top:6px; }
     .change-insert { display:inline-block; padding:2px 6px; font-size:12px; border:1px solid #ddd; border-radius:999px; background:#e6ffed; margin:6px 0; }
-
-    /* Header score strip */
     .scorebox { font-size:13px; background:#fff; border:1px solid #eee; border-radius:8px; padding:6px 8px; }
   </style>
 </head>
-
 <body>
   <main class="wrap">
     <h1>Power Edit (resume)</h1>
-    <p class="muted">This version mirrors Profile’s complex rewrite flow. Upload a resume, paste a JD, and get bullet rewrites. No “insert suggestions”.</p>
+    <p class="muted">
+      Mirrors the Profile flow for resumes: paste a JD and get
+      <em>compound/complex</em> bullet rewrites with natural JD keyword weaving.
+      No “insert suggestions”.
+    </p>
 
     <div class="row" style="margin-bottom:8px">
       <button id="chooseFile" class="btn">Choose .docx</button>
@@ -42,7 +41,7 @@
       <button id="exportDocx" class="btn">Export .docx</button>
       <button id="printPdf" class="btn">Print / Save as PDF</button>
       <span class="scorebox">Score: <span id="scoreVal">—</span></span>
-      <span id="signinState" class="pill">Signed in (server boost)</span>
+      <span id="signinState" class="pill">Checking sign-in…</span>
     </div>
 
     <section class="card" style="margin-top:8px">
@@ -86,13 +85,13 @@
     window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc";
   </script>
   <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-  <!-- Mammoth: .docx -> HTML/text in browser -->
+  <!-- Mammoth: .docx -> HTML/text -->
   <script defer src="https://unpkg.com/mammoth@1.6.0/mammoth.browser.min.js"></script>
   <!-- docx: export .docx -->
   <script defer src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
 
-  <!-- Local scripts (served from /docs/js on GitHub Pages) -->
-  <script defer src="js/scoring.js?v=2025-10-07"></script>
-  <script defer src="js/power-edit.js?v=2025-10-07"></script>
+  <!-- Local scripts -->
+  <script defer src="js/scoring.js?v=2025-10-07-2"></script>
+  <script defer src="js/power-edit.js?v=2025-10-07-2"></script>
 </body>
 </html>
