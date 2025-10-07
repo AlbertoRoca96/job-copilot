@@ -1,10 +1,9 @@
-// docs/power-edit.js
-// Client for Power Edit (resume): mirrors Profile page's complex rewrites.
-// - Extract plaintext from .docx (mammoth) OR manual paste
-// - Compute a light ATS score (scording.js)
-// - Invoke Edge Function "power-edit-suggest" for rewrites
-// - Show change cards + an "After" preview
-// - Optional export of the "After" preview to .docx (docx library)
+// docs/js/power-edit.js
+// Power Edit client: mirrors Profile's complex rewrite behavior (no insert suggestions).
+// - Reads .docx (mammoth) OR plaintext
+// - Computes lightweight ATS score (scoring.js)
+// - Calls Edge Function "power-edit-suggest" for bullet rewrites
+// - Renders change cards + After preview; export .docx / print
 
 (async function () {
   await new Promise((r) => window.addEventListener("load", r));
@@ -12,14 +11,17 @@
   // ---------- Supabase ----------
   const SUPABASE_URL = window.SUPABASE_URL;
   const SUPABASE_ANON_KEY = window.SUPABASE_ANON_KEY;
-  const sbLib = window.supabase || (await new Promise((resolve, reject) => {
-    const s = document.createElement("script");
-    s.src = "https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js";
-    s.defer = true;
-    s.onload = () => resolve(window.supabase);
-    s.onerror = reject;
-    document.head.appendChild(s);
-  }));
+
+  const sbLib =
+    window.supabase ||
+    (await new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js";
+      s.defer = true;
+      s.onload = () => resolve(window.supabase);
+      s.onerror = reject;
+      document.head.appendChild(s);
+    }));
   const supabase = sbLib.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
   // ---------- DOM ----------
@@ -37,11 +39,32 @@
   const exportDocx = $("exportDocx");
   const printPdf = $("printPdf");
   const scoreVal = $("scoreVal");
+  const signinState = $("signinState");
 
   // ---------- helpers ----------
-  const esc = (s) => String(s || "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  const esc = (s) =>
+    String(s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
   const normalizeWS = (s) => String(s || "").replace(/\s+/g, " ").trim();
+  const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+  // ---------- auth indicator ----------
+  async function refreshAuthPill() {
+    try {
+      const { data } = await supabase.auth.getSession();
+      if (data?.session) {
+        signinState.textContent = "Signed in (server boost)";
+        signinState.style.background = "#e8fff1";
+      } else {
+        signinState.textContent = "Anonymous (rate-limited)";
+        signinState.style.background = "#fff7e6";
+      }
+    } catch {
+      signinState.textContent = "Anonymous (rate-limited)";
+      signinState.style.background = "#fff7e6";
+    }
+  }
+
+  // ---------- bullets from text ----------
   function bulletsFromText(txt) {
     const lines = (txt || "").replace(/\r/g, "").split("\n").map((l) => l.trim());
     const out = [];
@@ -51,12 +74,17 @@
       out.push(m ? m[2] : l);
     }
     // drop likely headers
-    return out.filter((b) => b.length >= 6 && !/^(education|skills|projects|work experience|experience)$/i.test(b));
+    return out.filter(
+      (b) =>
+        b.length >= 6 &&
+        !/^(education|skills|projects|work experience|experience)$/i.test(b)
+    );
   }
 
+  // ---------- change card ----------
   function renderChangeCard(item) {
     const before = String(item.original || "");
-    const after  = String(item.rewritten || "");
+    const after = String(item.rewritten || "");
     return `
       <div class="change-card">
         <div class="change-title">Work Experience</div>
@@ -64,20 +92,22 @@
         <pre class="mono">${esc(before)}</pre>
         <div style="margin-top:8px" class="muted">After</div>
         <pre class="mono">${esc(after)}</pre>
-        <div class="change-reason">${esc(item.reason || "Full rewrite to compound/complex sentence using JD keywords (formatting preserved).")}</div>
+        <div class="change-reason">${esc(
+          item.reason ||
+            "Full rewrite to compound/complex sentence using JD keywords (formatting preserved)."
+        )}</div>
       </div>
     `;
   }
 
+  // ---------- rebuild After preview ----------
   function rebuildAfterPreview(source, rewrites) {
-    // naive map: replace exact "before" lines (ignoring bullet glyphs)
-    let text = (source || "");
+    let text = source || "";
     for (const r of rewrites) {
       const before = (r.original || "").trim();
-      const after  = (r.rewritten || "").trim();
+      const after = (r.rewritten || "").trim();
       if (!before || !after) continue;
 
-      // Pattern to replace lines that equal the "before" after stripping bullet glyphs
       const pattern = new RegExp(
         `(^|\\n)\\s*(?:[•\\-\\u2013\\u2014\\*]|\\d+[.)])?\\s*${escapeRegExp(before)}\\s*(?=\\n|$)`,
         "g"
@@ -86,7 +116,6 @@
     }
     return text;
   }
-  function escapeRegExp(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
   // ---------- .docx import ----------
   chooseFile.onclick = () => fileInput.click();
@@ -101,10 +130,9 @@
       tmp.innerHTML = html;
       const plain = tmp.textContent || tmp.innerText || "";
       resumeText.value = plain.trim();
-      // initial score
       refreshScore();
     } catch (e) {
-      alert("Failed to read .docx: " + e.message);
+      alert("Failed to read .docx: " + (e?.message || e));
     }
   };
 
@@ -116,25 +144,14 @@
   jobDesc.addEventListener("input", refreshScore);
   resumeText.addEventListener("input", refreshScore);
 
-  // ---------- call Edge Function ----------
-  async function ensureSession() {
-    const { data } = await supabase.auth.getSession();
-    return data?.session || null;
-  }
-
+  // ---------- server call ----------
   autoTailor.onclick = async () => {
     tailorMsg.textContent = "";
     changesBox.innerHTML = "";
     afterPreview.textContent = "(working…)";
 
-    // quick score refresh
     refreshScore();
-
-    const session = await ensureSession(); // not strictly required, but boosts rate limits server-side
-    if (!session) {
-      // still allow anonymous — function uses anon key auth; just warn user
-      console.warn("Not signed in; invoking anonymously.");
-    }
+    await refreshAuthPill();
 
     const bullets = bulletsFromText(resumeText.value);
     const allowed = window.deriveAllowedVocabFromResume(resumeText.value);
@@ -148,7 +165,10 @@
           resume_plain: resumeText.value || "",
           bullets,
           allowed_vocab: allowed,
-          max_words: Math.max(12, Math.min(60, parseInt(document.getElementById("maxWords").value || "28", 10) || 28)),
+          max_words: Math.max(
+            12,
+            Math.min(60, parseInt(document.getElementById("maxWords").value || "28", 10) || 28)
+          ),
           mid_sentence_style: "comma",
           dash_threshold_words: 7,
         },
@@ -167,15 +187,15 @@
         return;
       }
 
-      // render cards
       changesBox.innerHTML = rewrites.map(renderChangeCard).join("");
-
-      // build after preview
       const after = rebuildAfterPreview(resumeText.value, rewrites);
       afterPreview.textContent = after;
-      tailorMsg.textContent = `Rewrites: ${rewrites.length} (gated ${data?.stats?.gated ?? 0}, ${data?.stats?.took_ms ?? 0} ms)`;
+
+      const gated = data?.stats?.gated ?? 0;
+      const took = data?.stats?.took_ms ?? 0;
+      tailorMsg.textContent = `Rewrites: ${rewrites.length} (gated ${gated}, ${took} ms)`;
     } catch (e) {
-      tailorMsg.textContent = "Error: " + String(e.message || e);
+      tailorMsg.textContent = "Error: " + String(e?.message || e);
       afterPreview.textContent = "(error)";
     }
   };
@@ -183,8 +203,11 @@
   // ---------- export .docx ----------
   exportDocx.onclick = async () => {
     const { Document, Packer, Paragraph, TextRun } = window.docx || {};
-    if (!Document) { alert("docx library not loaded."); return; }
-    const paraFrom = (line) => new Paragraph({ children: [ new TextRun(line) ] });
+    if (!Document) {
+      alert("docx library not loaded.");
+      return;
+    }
+    const paraFrom = (line) => new Paragraph({ children: [new TextRun(line)] });
 
     const lines = (afterPreview.textContent || resumeText.value || "").split(/\n/);
     const doc = new Document({
@@ -203,12 +226,16 @@
   printPdf.onclick = () => {
     const w = window.open("", "_blank");
     if (!w) return;
-    w.document.write(`<pre style="white-space:pre-wrap;font:13px ui-monospace">${esc(afterPreview.textContent || resumeText.value || "")}</pre>`);
+    w.document.write(
+      `<pre style="white-space:pre-wrap;font:13px ui-monospace">${esc(
+        afterPreview.textContent || resumeText.value || ""
+      )}</pre>`
+    );
     w.document.close();
     w.focus();
     w.print();
   };
 
-  // initial score if fields already filled
+  await refreshAuthPill();
   refreshScore();
 })();
