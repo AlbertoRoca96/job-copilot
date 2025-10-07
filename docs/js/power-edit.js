@@ -1,3 +1,4 @@
+// js/power-edit.js
 // Power Edit: live scoring + SMART suggestions + server Auto-tailor.
 // JD→Resume coverage + phrase-aware extraction.
 // Inline diffs (toggle) + one‑click "Why added?" popover for each inserted node.
@@ -9,7 +10,7 @@ import {
   tokensFromTerms,
   jdCoverageAgainstResume,
   smartJDTargets
-} from './scoring.js?v=2025-10-06-2';
+} from './scoring.js?v=2025-10-06-3';
 
 const $ = (id) => document.getElementById(id);
 
@@ -43,12 +44,13 @@ async function ensureMammoth(timeoutMs = 6000) {
   const css = `
     .ins { background:#f4fff4; outline:1px dashed #8fd48f; border-radius:4px; padding:0 2px; }
     .hide-diffs .ins { background:transparent; outline:none; }
-    .why-btn { display:inline-block; margin-left:.4rem; border:1px solid #ccd; border-radius:999px; width:22px; height:22px; line-height:20px; text-align:center; cursor:pointer; background:#f7f7ff; color:#333; font-weight:700; }
+    .why-btn { display:inline-inline; margin-left:.4rem; border:1px solid #ccd; border-radius:999px; width:22px; height:22px; line-height:20px; text-align:center; cursor:pointer; background:#f7f7ff; color:#333; font-weight:700; }
     .auto-insert { position:relative; }
-    #why-pop { position:absolute; z-index:10000; max-width:340px; background:#fff; border:1px solid #ddd; border-radius:8px; padding:.7rem .8rem; box-shadow:0 10px 30px rgba(0,0,0,.14); }
+    #why-pop { position:absolute; z-index:10000; max-width:360px; background:#fff; border:1px solid #ddd; border-radius:8px; padding:.7rem .8rem; box-shadow:0 10px 30px rgba(0,0,0,.14); }
     #why-pop .title { font-weight:700; margin:0 0 .25rem; }
     #why-pop .meta  { color:#666; font-size:.85em; margin:.15rem 0 .5rem; }
     #why-pop .jd    { background:#f7f7f7; border-left:3px solid #bde; padding:.45rem .55rem; border-radius:6px; font-size:.92em; }
+    #why-pop .repo  { background:#fffaf2; border-left:3px solid #f1c27d; padding:.45rem .55rem; border-radius:6px; font-size:.92em; margin-top:.5rem; }
     #why-pop .close { position:absolute; top:4px; right:6px; border:0; background:transparent; font-size:16px; cursor:pointer; color:#666; }
   `;
   const st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
@@ -100,7 +102,8 @@ function ensureWhyPop() {
   whyPop.innerHTML = `<button class="close" aria-label="Close">×</button>
     <div class="title"></div>
     <div class="meta"></div>
-    <div class="jd"></div>`;
+    <div class="jd"></div>
+    <div class="repo" style="display:none"></div>`;
   document.body.appendChild(whyPop);
 
   whyPop.addEventListener('click', (e)=>{ if (e.target.matches('.close')) hideWhyPop(); });
@@ -117,7 +120,7 @@ function showWhyPop(btn, payload = {}, bulletText = "") {
   const pop = ensureWhyPop();
   const r = btn.getBoundingClientRect();
   const top = r.bottom + window.scrollY + 8;
-  const left = Math.min(window.scrollX + r.left, window.scrollX + document.documentElement.clientWidth - 360);
+  const left = Math.min(window.scrollX + r.left, window.scrollX + document.documentElement.clientWidth - 380);
 
   const sigs = Array.isArray(payload.signals) ? payload.signals : [];
   const labels = {
@@ -135,16 +138,26 @@ function showWhyPop(btn, payload = {}, bulletText = "") {
     (sigText ? ` • ${sigText}` : '');
   pop.querySelector('.jd').textContent = payload.sample ? `JD evidence: “… ${payload.sample} …”` : 'JD evidence: (not found)';
 
+  if (payload.repo_reason || payload.repo_sample) {
+    const rbx = pop.querySelector('.repo');
+    rbx.style.display = 'block';
+    const why = payload.repo_reason ? `Change log: ${payload.repo_reason}` : '';
+    const snip = payload.repo_sample ? `\nSample: “… ${payload.repo_sample} …”` : '';
+    rbx.textContent = `${why}${snip}`;
+  } else {
+    pop.querySelector('.repo').style.display = 'none';
+  }
+
   pop.style.top = `${top}px`; pop.style.left = `${left}px`; pop.style.display = 'block';
 }
 function hideWhyPop(){ if (whyPop) whyPop.style.display = 'none'; }
 
 /* ---------- State ---------- */
-const state = { profile: {}, job: {}, selRange: null, resumeLoaded:false };
+const state = { profile: {}, job: {}, selRange: null, resumeLoaded:false, whySlug:'', whyMap:null };
 let lastAutoNodes = [];
 let autoNodesAll  = [];
 
-/* ---------- Helpers ---------- */
+/* ---------- Helpers: job, selection, sanitize ---------- */
 function getJobFromUI(){
   return {
     title: jobTitle.value || '',
@@ -165,15 +178,6 @@ function sanitize(html){
   div.querySelectorAll('script,style,iframe,object').forEach(n=>n.remove());
   return div.innerHTML;
 }
-function insertAtCursor(htmlFrag){
-  editor.focus();
-  const range = state.selRange || document.createRange();
-  if (!state.selRange) { range.selectNodeContents(editor); range.collapse(false); }
-  const template = document.createElement('template');
-  template.innerHTML = htmlFrag.trim();
-  const node = template.content.cloneNode(true);
-  range.insertNode(node);
-}
 function jdReady() {
   const t = tokenize(`${jobTitle.value || ''} ${jobDesc.value || ''}`);
   return (jobDesc.value || '').trim().length >= 20 || t.length >= 10;
@@ -183,10 +187,94 @@ function hasResume() {
   return state.resumeLoaded || textLen >= 50; // pasted/typed counts too
 }
 
-/* ---------- Scoring & coverage ---------- */
+/* ---------- Section-aware weaving (insert into proper <ul>) ---------- */
+function ascend(el) { return (el && el.nodeType === 1) ? el : el?.parentElement || null; }
+function findInsertionList() {
+  // 1) If caret is inside a list, use it
+  let n = state.selRange?.startContainer || editor;
+  n = ascend(n);
+  while (n && n !== editor) {
+    if (n.tagName === 'UL' || n.tagName === 'OL') return n;
+    n = n.parentElement;
+  }
+
+  // 2) Prefer the list that follows an Experience/Projects header
+  const heads = Array.from(editor.querySelectorAll('h1,h2,h3,strong,b')).filter(h => /experience|work experience|projects/i.test(h.textContent || ''));
+  for (const h of heads) {
+    let sib = h.nextElementSibling;
+    while (sib) {
+      if (/^(UL|OL)$/.test(sib.tagName)) return sib;
+      if (/^(H1|H2|H3|STRONG|B)$/.test(sib.tagName)) break;
+      sib = sib.nextElementSibling;
+    }
+  }
+
+  // 3) Else, last list in the document
+  const lists = editor.querySelectorAll('ul,ol');
+  if (lists.length) return lists[lists.length - 1];
+
+  // 4) Else, create a new <ul> at the end
+  const ul = document.createElement('ul');
+  editor.appendChild(ul);
+  return ul;
+}
+
+function insertSuggestedBullet(text, why = {}) {
+  const ul = findInsertionList();
+  const li = document.createElement('li');
+  li.className = 'auto-insert';
+  li.setAttribute('data-why', JSON.stringify(why));
+  li.innerHTML = `<span class="ins">${escapeHtml(text)}</span> <button class="why-btn" type="button" contenteditable="false" title="Why added?">?</button>`;
+  ul.appendChild(li);
+
+  lastAutoNodes = [li];
+  autoNodesAll.push(li);
+  li.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+/* ---------- Load change-log "why" from ./changes/*.json (optional) ---------- */
+function slugify(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,''); }
+async function maybeLoadWhyFromChanges(job){
+  const slug = `${slugify(job.company)}_${slugify(job.title)}`;
+  if (slug === state.whySlug) return;
+  state.whySlug = slug; state.whyMap = null;
+
+  const tryPaths = [
+    `./changes/${slug}.json`,
+    `./changes/${slug}.changes.json`
+  ];
+  for (const p of tryPaths) {
+    try {
+      const r = await fetch(p, { cache: 'no-store' });
+      if (!r.ok) continue;
+      const obj = await r.json();
+      state.whyMap = buildWhyMapFromChanges(obj);
+      return;
+    } catch {}
+  }
+}
+function buildWhyMapFromChanges(obj){
+  const arr = Array.isArray(obj) ? obj : Array.isArray(obj?.changes) ? obj.changes : [];
+  const map = new Map();
+  for (const it of arr) {
+    const sent   = String(it.inserted_sentence || it.modified_paragraph_text || "");
+    const reason = String(it.reason || "").trim();
+    const sample = sent.replace(/\s+/g,' ').slice(0,240);
+    tokenize(sent).forEach(tok => {
+      const cur = map.get(tok) || { repo_reason: "", repo_sample: "" };
+      if (reason && !cur.repo_reason) cur.repo_reason = reason;
+      if (sample && !cur.repo_sample) cur.repo_sample = sample;
+      map.set(tok, cur);
+    });
+  }
+  return map;
+}
+
+/* ---------- Scoring, coverage, and rendering ---------- */
 function render(){
   try{
     state.job = getJobFromUI();
+    maybeLoadWhyFromChanges(state.job); // async, non-blocking
 
     if (!jdReady()) {
       scoreline.textContent = 'Score: —';
@@ -230,7 +318,63 @@ function render(){
   }
 }
 
-/* ---------- SMART suggestions (X‑Y‑Z bullets) ---------- */
+/* ---------- SMART suggestions (category-aware X‑Y‑Z bullets) ---------- */
+const CATEGORY = {
+  // token → category
+  rails:'framework', nodejs:'framework', react:'frontend', reactnative:'frontend',
+  postgresql:'database', mysql:'database', mongodb:'database', redis:'database', plpgsql:'database',
+  playwright:'testing', cypress:'testing', jest:'testing', pytest:'testing', selenium:'testing',
+  githubactions:'devops', cicd:'devops', docker:'devops', kubernetes:'devops', terraform:'devops',
+  pwa:'webplat', serviceworker:'webplat', graphql:'webplat', rest:'webplat', grpc:'webplat', websocket:'webplat',
+  huggingface:'ml', pytorch:'ml', tensorflow:'ml', opencv:'ml',
+  'c++':'language', csharp:'language', typescript:'language', javascript:'language', python:'language', java:'language', go:'language', rust:'language', ruby:'language'
+};
+
+const TEMPLATES = {
+  framework: [
+    txt => `• Accomplished [X outcome] as measured by [Y metric] by implementing ${txt} APIs and background jobs to [Z concrete action].`,
+    txt => `• Shipped [feature] on ${txt}, improving P95 latency by [X%] via query tuning/caching.`,
+  ],
+  frontend: [
+    txt => `• Delivered [feature] in ${txt}, reducing bundle size by [X%] and improving TTI by [Y%].`,
+    txt => `• Built accessible UI in ${txt} with [pattern], increasing task success rate by [X%].`,
+  ],
+  database: [
+    txt => `• Reduced query time by [X%] on ${txt} by adding indexes and rewriting [JOIN/CTE].`,
+    txt => `• Designed schema + migrations on ${txt} to support [feature], cutting storage by [X%].`,
+  ],
+  testing: [
+    txt => `• Raised test coverage by [X pts] with ${txt} e2e suites; stabilized flakiness < [Y%].`,
+    txt => `• Automated regression tests in ${txt}, reducing escaped defects by [X%].`,
+  ],
+  devops: [
+    txt => `• Cut build time by [X%] by parallelizing CI in ${txt} and caching dependencies.`,
+    txt => `• Shipped one-click deploys with ${txt}, reducing change failure rate by [X%].`,
+  ],
+  webplat: [
+    txt => `• Implemented offline-first PWA using ${txt}, improving repeat-load by [X%].`,
+    txt => `• Added background sync/push with ${txt}, raising task completion by [X%].`,
+  ],
+  ml: [
+    txt => `• Deployed [model] with ${txt}, improving F1 by [Δ] and latency by [X%].`,
+    txt => `• Built data pipeline for ${txt} training/inference, cutting labeling time by [X%].`,
+  ],
+  language: [
+    txt => `• Refactored critical module in ${txt}, reducing cyclomatic complexity by [X%].`,
+    txt => `• Implemented [algo/pattern] in ${txt}, speeding up [workload] by [X%].`,
+  ],
+  default: [
+    txt => `• Accomplished [X outcome] as measured by [Y metric] by using ${txt} to [Z concrete action].`,
+    txt => `• Built/automated [process] in ${txt} to meet [KPI], verified by [test/monitor].`,
+  ]
+};
+
+function bulletsFor(tool, token) {
+  const cat = CATEGORY[token] || 'default';
+  const raws = TEMPLATES[cat] || TEMPLATES.default;
+  return raws.map(fn => fn(tool));
+}
+
 function rebuildSuggestions(){
   if (!jdReady()) {
     suggEl.innerHTML = '<span class="small muted">Suggestions appear after you paste a JD.</span>';
@@ -239,7 +383,7 @@ function rebuildSuggestions(){
 
   const targets = smartJDTargets(getJobFromUI(), getResumeHTML(), state.profile, 18);
 
-  // Optional: portfolio-aware linking (profile_json.projects: [{name,url,tags:[]}, ...])
+  // choose best matching portfolio project (optional)
   const projects = Array.isArray(state.profile.projects) ? state.profile.projects : [];
   function bestProjectFor(token){
     const t = token.toLowerCase();
@@ -252,66 +396,49 @@ function rebuildSuggestions(){
     return best;
   }
 
-  const bullets = [];
+  const cards = [];
   for (const t of targets) {
-    const proj = bestProjectFor(t.token);
     const tool = t.display;
+    const proj = bestProjectFor(t.token);
+    const btxt = bulletsFor(tool, t.token);
 
-    // X-Y-Z formula (Accomplished [X] as measured by [Y] by doing [Z])
-    bullets.push({
-      txt: `• Accomplished [X outcome] as measured by [Y metric] by using ${tool} to [Z concrete action].`,
-      why: { target: tool, token: t.token, score: t.score, ...t.why }
-    });
-    bullets.push({
-      txt: `• Shipped [feature] with ${tool}, reducing [time/cost] by [X%] via [method].`,
-      why: { target: tool, token: t.token, score: t.score, ...t.why }
-    });
-    bullets.push({
-      txt: `• Built/automated [process] in ${tool} to meet [KPI], verified by [test/monitor].`,
-      why: { target: tool, token: t.token, score: t.score, ...t.why }
-    });
+    // enrich "why" with change-log info if we have it
+    let repo = state.whyMap?.get(t.token) || null;
+    const why = { target: tool, token: t.token, score: t.score, ...t.why, ...(repo || {}) };
 
-    if (proj?.url) {
-      bullets.push({
-        txt: `• Demonstrated ${tool} in ${proj.name} ([link](${proj.url})), achieving [Y] by [Z].`,
-        why: { target: tool, token: t.token, score: t.score, ...t.why, project: proj.name, project_url: proj.url }
-      });
-    }
+    // bullets (keep placeholders bracketed)
+    const bullets = [
+      ...btxt,
+      ...(proj?.url ? [`• Demonstrated ${tool} in ${proj.name} ([link](${proj.url})), achieving [Y] by [Z].`] : [])
+    ];
+
+    bullets.forEach(txt => {
+      const tip = [
+        `Target: ${tool}`,
+        t.why.in_title ? "appears in title" : "",
+        t.why.in_profile ? "in your profile" : "",
+        (t.why.signals || []).includes("stem") ? "found in requirement stem" : "",
+        (t.why.signals || []).includes("dict") ? "dictionary hit" : "",
+        `freq=${t.why.frequency || 1}`,
+      ].filter(Boolean).join(" • ");
+      cards.push(`<div class="suggestion" title="${escapeHtml(tip)}"
+          data-txt="${encodeURIComponent(txt)}"
+          data-why='${escapeAttr(JSON.stringify(why))}'>${escapeHtml(txt)}</div>`);
+    });
   }
 
-  // Render with reasons as tooltips
-  suggEl.innerHTML = bullets.slice(0, 36).map(b => {
-    const w = b.why || {};
-    const tip = [
-      `Target: ${w.target || w.token}`,
-      w.in_title ? "appears in title" : "",
-      w.in_profile ? "in your profile" : "",
-      (w.signals || []).includes("stem") ? "found in requirement stem" : "",
-      (w.signals || []).includes("dict") ? "dictionary hit" : "",
-      `freq=${w.frequency || 1}`,
-    ].filter(Boolean).join(" • ");
-    return `<div class="suggestion" title="${escapeHtml(tip)}" data-txt="${encodeURIComponent(b.txt)}" data-why='${escapeAttr(JSON.stringify(w))}'>${escapeHtml(b.txt)}</div>`;
-  }).join("");
+  suggEl.innerHTML = cards.slice(0, 40).join("");
 }
 
-/* ---------- Insert suggestion + attach why JSON ---------- */
+/* ---------- Insert suggestion as a real bullet ---------- */
 document.addEventListener("click", (ev)=>{
   const n = ev.target.closest('.suggestion');
-  if (n){
-    const txt = decodeURIComponent(n.getAttribute('data-txt') || '');
-    let why = {};
-    try { why = JSON.parse(n.getAttribute('data-why') || '{}'); } catch {}
-    rememberSelection();
-
-    const payload = escapeAttr(JSON.stringify(why));
-    const html = `
-      <div class="auto-insert" data-why='${payload}'>
-        <span class="ins">${escapeHtml(txt)}</span>
-        <button class="why-btn" type="button" contenteditable="false" title="Why added?">?</button>
-      </div>`;
-    insertAtCursor(html);
-    render();
-  }
+  if (!n) return;
+  const txt = decodeURIComponent(n.getAttribute('data-txt') || '');
+  let why = {};
+  try { why = JSON.parse(n.getAttribute('data-why') || '{}'); } catch {}
+  insertSuggestedBullet(txt, why);
+  render();
 });
 
 /* ---------- Why popover handler ---------- */
@@ -379,8 +506,13 @@ async function autoTailorServer() {
     lastAutoNodes = [];
     const beforeCount = editor.childNodes.length;
 
-    rememberSelection();
-    insertAtCursor(result.block_html);
+    // Insert at caret; the server block may include its own <section class="auto-insert">...</section>
+    const range = state.selRange || document.createRange();
+    if (!state.selRange) { range.selectNodeContents(editor); range.collapse(false); }
+    const frag = document.createElement('template');
+    frag.innerHTML = result.block_html.trim();
+    const node = frag.content.cloneNode(true);
+    range.insertNode(node);
 
     const afterCount = editor.childNodes.length;
     for (let i = beforeCount; i < afterCount; i++) {
@@ -438,7 +570,7 @@ for (const id of ["job_title","job_company","job_location","job_desc","profile_j
     if (id === "profile_json"){
       try { state.profile = JSON.parse(profileBox.value || "{}"); } catch(_){ state.profile = {}; }
     }
-    render(); // rebuildSuggestions() happens inside render()
+    render(); // suggestions rebuilt inside render()
   }});
 }
 // treat typed/pasted resume as a loaded resume too
@@ -462,7 +594,7 @@ async function loadUserProfileFromSupabase() {
       target_titles: data.target_titles || [],
       must_haves: data.must_haves || [],
       location_policy: data.search_policy || {},
-      // Optional: add projects to unlock portfolio-aware bullets
+      // Optional: projects to unlock portfolio-aware bullets:
       // projects: [{ name:"Pointkedex", url:"https://...", tags:["pwa","serviceworker","react"] }]
     };
 
