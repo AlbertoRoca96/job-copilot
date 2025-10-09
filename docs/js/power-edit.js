@@ -1,10 +1,10 @@
 // Power Edit client: mirrors Profile's complex rewrite behavior (no insert suggestions).
 // Format-preserving .docx export (v4):
-// - Replace ONLY text inside existing <w:t> nodes; never remove runs/children.
-// - Distribute new sentence across existing runs (keeps inline links/bold/italics).
-// - Preserve bullet/numbering/custom glyphs/tabs/line-breaks/indents/margins.
-// - Prefer list items; conservative similarity thresholds.
-// - Skip the full "Education" and "References" sections entirely.
+// - Protect ENTIRE Education and References sections (header -> next section header).
+// - Replace ONLY the text inside existing <w:t> runs; never delete runs or non-text nodes.
+// - Preserve bullets/numbering, custom glyphs, tabs, line breaks, margins/indents, and ALL run/paragraph formatting.
+// - Keep hyperlink text runs as-is; pour new text only into non-link runs.
+// - Distribute the new sentence across the original run boundaries by proportional length, preserving each run’s leading/trailing spaces.
 
 (async function () {
   await new Promise((r) => window.addEventListener("load", r));
@@ -151,80 +151,34 @@
     const t = String(s).replace(/\s+/g, "");
     return /^[•◦▪▫■□●○·\-–—]+$/u.test(t);
   }
-
-  // Identify section headings & lock regions (education/references)
-  const SECTION_ALIASES = new Map([
-    ["education", "education"],
-    ["references", "references"],
-    ["reference", "references"],
-    ["work experience", "work"],
-    ["experience", "work"],
-    ["side projects", "projects"],
-    ["projects", "projects"],
-    ["technical skills", "skills"],
-    ["skills", "skills"],
-    ["certifications", "certifications"],
-    ["awards", "awards"],
-    ["volunteer experience", "volunteer"],
-    ["summary", "summary"],
-    ["objective", "summary"],
-  ]);
-
-  function normalizeHeadingText(s = "") {
-    return String(s).toLowerCase().replace(/[^a-z\s]/g, "").replace(/\s+/g, " ").trim();
+  function inHyperlink(node) {
+    let p = node && node.parentNode;
+    while (p) {
+      if (p.namespaceURI === W_NS && p.localName === "hyperlink") return true;
+      p = p.parentNode;
+    }
+    return false;
   }
 
   function paraMeta(xmlDoc, p) {
-    const pPr = p.getElementsByTagNameNS(W_NS, "pPr")[0];
-
-    // Detect numbering/bullets via w:numPr
     const isList =
       !!p.getElementsByTagNameNS(W_NS, "numPr").length ||
-      !!(pPr && pPr.getElementsByTagNameNS(W_NS, "numPr").length);
+      !!Array.from(p.childNodes).find(
+        (n) => n.namespaceURI === W_NS && n.localName === "pPr" && n.getElementsByTagNameNS(W_NS, "numPr").length
+      );
 
-    // Style name (helps with heading detection)
-    let pStyle = "";
-    const styleEl = pPr && pPr.getElementsByTagNameNS(W_NS, "pStyle")[0];
-    if (styleEl && styleEl.getAttributeNS(W_NS, "val")) {
-      pStyle = styleEl.getAttributeNS(W_NS, "val");
-    }
-
-    // Concatenate all w:t for the paragraph in doc order
     const tNodes = Array.from(p.getElementsByTagNameNS(W_NS, "t"));
-    const textConcat = tNodes.map((t) => t.textContent || "").join("");
-    const text = normalizeWS(textConcat);
+    const text = tNodes.map((t) => t.textContent || "").join("");
 
-    // First run references (for later formatting cloning if needed)
     const runs = Array.from(p.getElementsByTagNameNS(W_NS, "r"));
     let firstRun = null, firstRunWithText = null;
     for (const r of runs) {
       if (!firstRun) firstRun = r;
-      if (r.getElementsByTagNameNS(W_NS, "t").length > 0 && !firstRunWithText) {
-        firstRunWithText = r;
-      }
+      if (r.getElementsByTagNameNS(W_NS, "t").length > 0 && !firstRunWithText) firstRunWithText = r;
       if (firstRun && firstRunWithText) break;
     }
 
-    // Heading heuristics
-    const normHead = normalizeHeadingText(text);
-    const alias = SECTION_ALIASES.get(normHead) || "";
-    const looksHeading =
-      (!isList && !!alias) ||
-      (!isList && (pStyle || "").toLowerCase().includes("heading")) ||
-      (!isList && text.length <= 40 && /^[A-Z][A-Za-z ]+$/.test(text) && SECTION_ALIASES.has(normHead));
-
-    return {
-      node: p,
-      text,
-      rawText: textConcat,
-      isList,
-      pStyle,
-      isHeading: !!looksHeading,
-      headingAlias: looksHeading ? (alias || normHead) : "",
-      firstRun,
-      firstRunWithText,
-      tNodes
-    };
+    return { node: p, text: normalizeWS(text), isList, firstRun, firstRunWithText, tNodes };
   }
 
   function getParagraphs(xmlDoc) {
@@ -232,27 +186,31 @@
     return ps.map((p) => paraMeta(xmlDoc, p));
   }
 
-  // Build locked ranges for Education and References
-  function buildLockedRanges(paragraphs) {
-    const heads = [];
-    for (let i = 0; i < paragraphs.length; i++) {
-      const p = paragraphs[i];
-      if (p.isHeading) heads.push({ i, alias: p.headingAlias });
-    }
-    const ranges = [];
-    for (let h = 0; h < heads.length; h++) {
-      const { i, alias } = heads[h];
-      const nextStart = (heads[h + 1]?.i ?? paragraphs.length);
-      if (alias === "education" || alias === "references") {
-        ranges.push([i, nextStart - 1]); // inclusive range
+  // ---- section protection (Education & References) ----
+  const HEADING_TERMS = new Set([
+    "summary","objective","profile","education","work experience","experience","professional experience",
+    "side projects","projects","technical skills","skills","certifications","awards","publications",
+    "activities","volunteering","volunteer experience","leadership","interests","references","reference","referees"
+  ]);
+  function normLower(s) { return String(s||"").toLowerCase().replace(/\s+/g," ").trim(); }
+  function isExactHeading(text) { return HEADING_TERMS.has(normLower(text)); }
+  function computeProtectedMask(paragraphs) {
+    const n = paragraphs.length;
+    const protectedMask = new Array(n).fill(false);
+    const startTerms = new Set(["education","references","reference","referees"]);
+    for (let i = 0; i < n; i++) {
+      const t = normLower(paragraphs[i].text);
+      if (!startTerms.has(t)) continue;
+      // mark from i to before next heading (exclusive)
+      let j = i;
+      while (++j < n) {
+        const tj = normLower(paragraphs[j].text);
+        if (isExactHeading(tj)) break;
       }
+      for (let k = i; k < j; k++) protectedMask[k] = true;
+      i = j - 1;
     }
-    return ranges;
-  }
-
-  function indexInLockedRanges(idx, ranges) {
-    for (const [a, b] of ranges) if (idx >= a && idx <= b) return true;
-    return false;
+    return protectedMask;
   }
 
   function ensureTextRun(xmlDoc, pMeta) {
@@ -271,22 +229,30 @@
 
     const pNode = pMeta.node;
     const pPr = pNode.getElementsByTagNameNS(W_NS, "pPr")[0];
-    if (pPr && pPr.nextSibling) {
-      pNode.insertBefore(r, pPr.nextSibling);
-    } else {
-      pNode.appendChild(r);
-    }
+    if (pPr && pPr.nextSibling) pNode.insertBefore(r, pPr.nextSibling);
+    else pNode.appendChild(r);
     return [t];
   }
 
-  // Distribute newText across existing <w:t> nodes to keep inline formatting/hyperlinks intact
-  function distributeAcrossRuns(xmlDoc, pMeta, startIdx, newText) {
+  // Distribute new text across editable <w:t> nodes by proportional original length
+  function replaceParagraphTextInRuns(xmlDoc, pMeta, newText) {
     const pNode = pMeta.node;
     let tNodes = Array.from(pNode.getElementsByTagNameNS(W_NS, "t"));
     if (!tNodes.length) tNodes = ensureTextRun(xmlDoc, pMeta);
 
-    // Guarantee we have at least one editable node
-    if (startIdx >= tNodes.length) {
+    // Preserve leading bullet-like glyph run
+    let editable = Array.from(tNodes);
+    if (editable.length) {
+      const firstText = editable[0].textContent || "";
+      if (isBulletLikeText(firstText) || /^\s*[•◦▪▫■□●○·\-–—]\s+$/u.test(firstText)) {
+        editable = editable.slice(1);
+      }
+    }
+    // Filter out hyperlink-contained text nodes (keep link text intact)
+    editable = editable.filter((t) => !inHyperlink(t));
+
+    if (!editable.length) {
+      // If all nodes are preserved, create a new editable node right after the first
       const r = xmlDoc.createElementNS(W_NS, "w:r");
       const srcRun = pMeta.firstRunWithText || pMeta.firstRun;
       if (srcRun) {
@@ -296,57 +262,64 @@
       const t = xmlDoc.createElementNS(W_NS, "w:t");
       t.setAttributeNS(XML_NS, "xml:space", "preserve");
       r.appendChild(t);
-      const anchor = tNodes[tNodes.length - 1]?.parentNode;
-      if (anchor) anchor.parentNode.appendChild(r);
-      tNodes = Array.from(pNode.getElementsByTagNameNS(W_NS, "w:t")); // refresh
+      const anchor = tNodes[0]?.parentNode;
+      if (anchor && anchor.nextSibling) pNode.insertBefore(r, anchor.nextSibling);
+      else pNode.appendChild(r);
+      editable = [t];
     }
 
-    let remaining = newText;
-    const editableCount = Math.max(1, tNodes.length - startIdx);
+    // Build capacity per run from existing text lengths (trimmed core)
+    const caps = editable.map((t) => {
+      const s = t.textContent || "";
+      return Math.max(1, s.trim().length);
+    });
+    const capSum = caps.reduce((a, b) => a + b, 0);
 
-    for (let i = startIdx; i < tNodes.length; i++) {
-      const t = tNodes[i];
-      t.setAttributeNS(XML_NS, "xml:space", "preserve");
-      if (!remaining.length) { t.textContent = ""; continue; }
-
-      // Approximate chunk size based on current node's original length (preserves emphasis spans)
-      const origLen = (t.textContent || "").length;
-      const nodesLeft = tNodes.length - i;
-      const cap = Math.max(origLen || Math.ceil(remaining.length / nodesLeft), 0);
-      const chunk = remaining.slice(0, cap || remaining.length); // last node takes all
-      t.textContent = chunk;
-      remaining = remaining.slice(chunk.length);
-    }
-
-    if (remaining.length) {
-      // Append one more run if needed (clone formatting from last textual run)
-      const lastRun = tNodes[tNodes.length - 1]?.parentNode;
-      const r = xmlDoc.createElementNS(W_NS, "w:r");
-      const rPr = lastRun && lastRun.getElementsByTagNameNS(W_NS, "rPr")[0];
-      if (rPr) r.appendChild(rPr.cloneNode(true));
-      const t = xmlDoc.createElementNS(W_NS, "w:t");
-      t.setAttributeNS(XML_NS, "xml:space", "preserve");
-      t.textContent = remaining;
-      r.appendChild(t);
-      lastRun && lastRun.parentNode && lastRun.parentNode.appendChild(r);
-    }
-  }
-
-  function replaceParagraphTextInRuns(xmlDoc, pMeta, newText) {
-    const pNode = pMeta.node;
-    let tNodes = Array.from(pNode.getElementsByTagNameNS(W_NS, "t"));
-    if (!tNodes.length) tNodes = ensureTextRun(xmlDoc, pMeta);
-
-    // Preserve a leading bullet-like glyph (if it's its own <w:t> or run)
-    let startIdx = 0;
-    if (tNodes.length) {
-      const firstText = tNodes[0].textContent || "";
-      if (isBulletLikeText(firstText) || /^\s*[•◦▪▫■□●○·\-–—]\s+$/u.test(firstText)) {
-        startIdx = 1;
+    // Tokenize new text preserving spaces
+    const tokens = (newText || "").split(/(\s+)/);
+    let tokenIdx = 0;
+    function takeApprox(chars, isLast) {
+      if (isLast) {
+        const rest = tokens.slice(tokenIdx).join("");
+        tokenIdx = tokens.length;
+        return rest;
       }
+      let acc = "";
+      let used = 0;
+      while (tokenIdx < tokens.length) {
+        const t = tokens[tokenIdx];
+        const next = acc + t;
+        if (used + t.length > chars && /\S/.test(t)) break;
+        acc = next;
+        used += t.length;
+        tokenIdx++;
+      }
+      return acc;
     }
 
-    distributeAcrossRuns(xmlDoc, pMeta, startIdx, newText);
+    // Fill each editable node
+    let remainingCap = capSum;
+    editable.forEach((t, i) => {
+      const raw = t.textContent || "";
+      const lead = (raw.match(/^\s*/) || [""])[0];
+      const trail = (raw.match(/\s*$/) || [""])[0];
+      const isLast = i === editable.length - 1;
+      const target = Math.round((caps[i] / remainingCap) * (newText.length - (tokens.slice(0, tokenIdx).join("").length)));
+      const piece = takeApprox(Math.max(1, target), isLast);
+      t.setAttributeNS(XML_NS, "xml:space", "preserve");
+      t.textContent = lead + piece + trail;
+      remainingCap -= caps[i];
+    });
+
+    // Clear any *non-editable* extra text nodes after our editable set to avoid ghost text,
+    // but never delete nodes (keeps formatting/runs), and never touch hyperlinks/bullets.
+    const editableSet = new Set(editable);
+    for (const t of tNodes) {
+      if (editableSet.has(t)) continue;
+      if (inHyperlink(t)) continue;
+      const txt = t.textContent || "";
+      if (!isBulletLikeText(txt)) t.textContent = txt.replace(/\S.*/s, ""); // keep only leading spaces if any
+    }
   }
 
   async function buildDocxWithRewrites(buffer, rewrites) {
@@ -361,17 +334,17 @@
     const serializer = new XMLSerializer();
 
     const paragraphs = getParagraphs(xmlDoc);
-    const locked = buildLockedRanges(paragraphs); // lock Education & References
+    const protectedMask = computeProtectedMask(paragraphs);
 
     const replaced = new Set();
 
     function bestMatchIndex(originalText) {
       const target = normalizeWS(originalText || "");
-      let bestIdx = -1, bestScore = 0;
 
-      // Pass 1: list paragraphs not in locked ranges
+      // Pass 1: prefer list paragraphs, not protected
+      let bestIdx = -1, bestScore = 0;
       for (let i = 0; i < paragraphs.length; i++) {
-        if (replaced.has(i) || indexInLockedRanges(i, locked)) continue;
+        if (replaced.has(i) || protectedMask[i]) continue;
         const p = paragraphs[i];
         if (!p.isList) continue;
         const score = jaccard(target, p.text);
@@ -379,15 +352,15 @@
       }
       if (bestScore >= 0.72) return bestIdx;
 
-      // Pass 2: any paragraph (still skip locked); very high bar
+      // Pass 2: any unprotected paragraph (very high bar; avoids headings)
       bestIdx = -1; bestScore = 0;
       for (let i = 0; i < paragraphs.length; i++) {
-        if (replaced.has(i) || indexInLockedRanges(i, locked)) continue;
+        if (replaced.has(i) || protectedMask[i]) continue;
         const p = paragraphs[i];
         const score = jaccard(target, p.text);
         if (score > bestScore) { bestScore = score; bestIdx = i; }
       }
-      return bestScore >= 0.90 ? bestIdx : -1;
+      return bestScore >= 0.92 ? bestIdx : -1;
     }
 
     for (const r of rewrites || []) {
@@ -396,7 +369,8 @@
       if (!before || !after) continue;
 
       const idx = bestMatchIndex(before);
-      if (idx === -1) continue;
+      if (idx === -1) continue;                   // no safe match
+      if (protectedMask[idx]) continue;           // belt + suspenders
 
       replaceParagraphTextInRuns(xmlDoc, paragraphs[idx], after);
       replaced.add(idx);
@@ -423,7 +397,6 @@
       const xmlDoc = new DOMParser().parseFromString(xmlStr, "application/xml");
       const paragraphs = getParagraphs(xmlDoc);
 
-      // For editing UX in the textarea, prefix only actual list items with "• "
       const plain = paragraphs
         .map(({ text, isList }) => (isList ? `• ${text}` : text))
         .join("\n")
@@ -533,13 +506,14 @@
       }
     }
 
-    // Fallback: simple generator (no original .docx)
+    // Fallback: simple paragraphs from preview/plaintext
     const { Document, Packer, Paragraph, TextRun } = window.docx || {};
     if (!Document) {
       alert("docx library not loaded.");
       return;
     }
     const paraFrom = (line) => new Paragraph({ children: [new TextRun(line)] });
+
     const lines = (afterPreview.textContent || resumeText.value || "").split(/\n/);
     const doc = new Document({
       sections: [{ properties: {}, children: lines.map(paraFrom) }],
