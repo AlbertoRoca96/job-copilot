@@ -1,10 +1,10 @@
 // Power Edit client: mirrors Profile's complex rewrite behavior (no insert suggestions).
-// NOW WITH: format-preserving .docx export by patching the original document.xml.
+// FORMAT-PRESERVING EXPORT: updates text while keeping original runs (<w:r>) and run props (<w:rPr>).
 // - Reads .docx (JSZip) OR plaintext (textarea)
 // - Computes lightweight ATS score (scoring.js)
 // - Calls Edge Function "power-edit-suggest" for bullet rewrites
 // - Renders change cards + After preview
-// - Export .docx: if an original .docx was loaded, replace paragraph text in-place (keep lists/fonts/spacing);
+// - Export .docx: if an original .docx was loaded, patch word/document.xml in place;
 //                 otherwise fall back to simple generator.
 
 (async function () {
@@ -163,14 +163,49 @@
     });
   }
 
+  // Replace paragraph text while preserving run formatting/hyperlinks when present.
   function replaceParagraphText(xmlDoc, pNode, newText) {
-    // Keep <w:pPr>, drop other children, then add single <w:r><w:t xml:space="preserve">…</w:t></w:r>
+    const tNodes = Array.from(pNode.getElementsByTagNameNS(W_NS, "t"));
+    const hasLinkish =
+      pNode.getElementsByTagNameNS(W_NS, "hyperlink")?.length > 0 ||
+      pNode.getElementsByTagNameNS(W_NS, "fldSimple")?.length > 0 ||
+      pNode.getElementsByTagNameNS(W_NS, "instrText")?.length > 0;
+
+    // If we have any runs already (esp. with links/fields), avoid rebuilding.
+    if ((hasLinkish && tNodes.length) || tNodes.length > 0) {
+      // Put the whole sentence into the first <w:t>, clear the rest.
+      // This keeps rPr, hyperlinks, tabs, proofing marks, etc.
+      const first = tNodes[0];
+      if (first) {
+        first.setAttributeNS(XML_NS, "xml:space", "preserve");
+        first.textContent = newText;
+        for (let i = 1; i < tNodes.length; i++) {
+          tNodes[i].textContent = "";
+        }
+        return;
+      }
+    }
+
+    // Otherwise rebuild, but carry over the first run's rPr so font/size stay identical.
+    let rPrClone = null;
+    const firstRunWithText = Array.from(pNode.getElementsByTagNameNS(W_NS, "r")).find(
+      (r) => r.getElementsByTagNameNS(W_NS, "t").length
+    );
+    if (firstRunWithText) {
+      const rPr = Array.from(firstRunWithText.childNodes).find(
+        (n) => n.nodeType === 1 && n.namespaceURI === W_NS && n.localName === "rPr"
+      );
+      if (rPr) rPrClone = rPr.cloneNode(true);
+    }
+
+    // Keep <w:pPr>, drop other children.
     const kids = Array.from(pNode.childNodes);
     for (const k of kids) {
       const isPPr = k.nodeType === 1 && k.namespaceURI === W_NS && k.localName === "pPr";
       if (!isPPr) pNode.removeChild(k);
     }
     const r = xmlDoc.createElementNS(W_NS, "w:r");
+    if (rPrClone) r.appendChild(rPrClone);
     const t = xmlDoc.createElementNS(W_NS, "w:t");
     t.setAttributeNS(XML_NS, "xml:space", "preserve");
     t.textContent = newText;
@@ -190,11 +225,9 @@
     const xmlDoc = new DOMParser().parseFromString(xmlStr, "application/xml");
     const serializer = new XMLSerializer();
 
-    // Gather paragraphs
     const paragraphs = getParagraphs(xmlDoc);
-
-    // Index which paragraphs have been replaced (avoid double-matching)
     const replaced = new Set();
+    const MIN_SIM = 0.65; // stricter to avoid touching headings/labels
 
     function bestMatchIndex(originalText) {
       const target = normalizeWS(originalText || "");
@@ -202,15 +235,13 @@
       for (let i = 0; i < paragraphs.length; i++) {
         if (replaced.has(i)) continue;
         const p = paragraphs[i];
-        // Prefer list paragraphs; add a small bias
-        const score = jaccard(target, p.text) + (p.isList ? 0.05 : 0);
+        const score = jaccard(target, p.text) + (p.isList ? 0.06 : 0);
         if (score > bestScore) {
           bestScore = score;
           bestIdx = i;
         }
       }
-      // Require a reasonable similarity to avoid wrong replacements
-      return bestScore >= 0.50 ? bestIdx : -1;
+      return bestScore >= MIN_SIM ? bestIdx : -1;
     }
 
     for (const r of rewrites || []) {
@@ -236,19 +267,18 @@
     const f = fileInput.files?.[0];
     if (!f) return;
     try {
-      // keep original buffer for format-preserving export
       const arrayBuffer = await f.arrayBuffer();
       originalDocxBuffer = arrayBuffer;
       setFmtState(true);
 
-      // Parse document.xml directly to derive a clean plaintext that mirrors paragraph order.
+      // Parse document.xml to derive clean plaintext that mirrors paragraph order.
       const zip = await window.JSZip.loadAsync(arrayBuffer);
       const docPath = "word/document.xml";
       const xmlStr = await zip.file(docPath).async("string");
       const xmlDoc = new DOMParser().parseFromString(xmlStr, "application/xml");
       const paragraphs = getParagraphs(xmlDoc);
 
-      // Produce a readable text version for editing (prefix list items with • )
+      // Prefix list items with • for readability while editing.
       const plain = paragraphs
         .map(({ text, isList }) => (isList ? `• ${text}` : text))
         .join("\n")
@@ -257,7 +287,7 @@
       resumeText.value = plain;
       refreshScore();
     } catch (e) {
-      // Fallback to Mammoth (best-effort) to at least load plaintext
+      // Fallback to Mammoth if direct read fails
       try {
         const arrayBuffer = await f.arrayBuffer();
         const result = await window.mammoth.convertToHtml({ arrayBuffer });
@@ -266,7 +296,7 @@
         tmp.innerHTML = html;
         const plain = (tmp.textContent || tmp.innerText || "").trim();
         resumeText.value = plain;
-        setFmtState(true); // We still keep original buffer; export will try to preserve styles.
+        setFmtState(true);
         refreshScore();
       } catch (e2) {
         setFmtState(false);
@@ -302,100 +332,3 @@
           job_company: jobCompany.value || "",
           job_description: jobDesc.value || "",
           resume_plain: resumeText.value || "",
-          bullets,
-          allowed_vocab: allowed,
-          max_words: Math.max(
-            12,
-            Math.min(60, parseInt(document.getElementById("maxWords").value || "28", 10) || 28)
-          ),
-          mid_sentence_style: "comma",
-          dash_threshold_words: 7,
-        },
-      });
-
-      if (error) {
-        tailorMsg.textContent = "Server error: " + (error.message || "invoke failed");
-        afterPreview.textContent = "(error)";
-        lastRewrites = [];
-        return;
-      }
-
-      const rewrites = Array.isArray(data?.rewrites) ? data.rewrites : [];
-      lastRewrites = rewrites;
-
-      if (!rewrites.length) {
-        tailorMsg.textContent = "No eligible rewrite suggestions returned.";
-        afterPreview.textContent = resumeText.value || "(no input)";
-        return;
-      }
-
-      changesBox.innerHTML = rewrites.map(renderChangeCard).join("");
-      const after = rebuildAfterPreview(resumeText.value, rewrites);
-      afterPreview.textContent = after;
-
-      const gated = data?.stats?.gated ?? 0;
-      const took = data?.stats?.took_ms ?? 0;
-      tailorMsg.textContent = `Rewrites: ${rewrites.length} (gated ${gated}, ${took} ms)`;
-    } catch (e) {
-      tailorMsg.textContent = "Error: " + String(e?.message || e);
-      afterPreview.textContent = "(error)";
-      lastRewrites = [];
-    }
-  };
-
-  // ---------- export .docx ----------
-  exportDocx.onclick = async () => {
-    // Prefer format-preserving export if a .docx was loaded
-    if (originalDocxBuffer) {
-      try {
-        const blob = await buildDocxWithRewrites(originalDocxBuffer, lastRewrites);
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = "Resume-tailored.docx";
-        a.click();
-        URL.revokeObjectURL(a.href);
-        return;
-      } catch (e) {
-        console.warn("Format-preserving export failed; falling back:", e);
-      }
-    }
-
-    // Fallback: simple paragraphs from preview/plaintext
-    const { Document, Packer, Paragraph, TextRun } = window.docx || {};
-    if (!Document) {
-      alert("docx library not loaded.");
-      return;
-    }
-    const paraFrom = (line) => new Paragraph({ children: [new TextRun(line)] });
-
-    const lines = (afterPreview.textContent || resumeText.value || "").split(/\n/);
-    const doc = new Document({
-      sections: [{ properties: {}, children: lines.map(paraFrom) }],
-    });
-
-    const blob = await Packer.toBlob(doc);
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "Resume-tailored.docx";
-    a.click();
-    URL.revokeObjectURL(a.href);
-  };
-
-  // ---------- print / save PDF ----------
-  printPdf.onclick = () => {
-    const w = window.open("", "_blank");
-    if (!w) return;
-    w.document.write(
-      `<pre style="white-space:pre-wrap;font:13px ui-monospace">${esc(
-        afterPreview.textContent || resumeText.value || ""
-      )}</pre>`
-    );
-    w.document.close();
-    w.focus();
-    w.print();
-  };
-
-  await refreshAuthPill();
-  setFmtState(false);
-  refreshScore();
-})();
