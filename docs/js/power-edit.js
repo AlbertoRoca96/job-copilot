@@ -1,9 +1,11 @@
-// docs/js/power-edit.js
 // Power Edit client: mirrors Profile's complex rewrite behavior (no insert suggestions).
-// - Reads .docx (mammoth) OR plaintext
+// NOW WITH: format-preserving .docx export by patching the original document.xml.
+// - Reads .docx (JSZip) OR plaintext (textarea)
 // - Computes lightweight ATS score (scoring.js)
 // - Calls Edge Function "power-edit-suggest" for bullet rewrites
-// - Renders change cards + After preview; export .docx / print
+// - Renders change cards + After preview
+// - Export .docx: if an original .docx was loaded, replace paragraph text in-place (keep lists/fonts/spacing);
+//                 otherwise fall back to simple generator.
 
 (async function () {
   await new Promise((r) => window.addEventListener("load", r));
@@ -40,12 +42,37 @@
   const printPdf = $("printPdf");
   const scoreVal = $("scoreVal");
   const signinState = $("signinState");
+  const fmtState = $("fmtState");
+
+  // ---------- state ----------
+  let originalDocxBuffer = null;   // ArrayBuffer of uploaded .docx
+  let lastRewrites = [];           // server rewrites for format-preserving export
 
   // ---------- helpers ----------
   const esc = (s) =>
     String(s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
   const normalizeWS = (s) => String(s || "").replace(/\s+/g, " ").trim();
   const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const WORD_RE = /[A-Za-z][A-Za-z0-9+./-]{1,}/g;
+
+  function toks(s = "") { return (String(s).toLowerCase().match(WORD_RE) || []); }
+  function tokset(s = "") { return new Set(toks(s)); }
+  function jaccard(a = "", b = "") {
+    const A = tokset(a), B = tokset(b);
+    const inter = [...A].filter((x) => B.has(x)).length;
+    const uni = new Set([...A, ...B]).size || 1;
+    return inter / uni;
+  }
+
+  function setFmtState(active) {
+    if (active) {
+      fmtState.textContent = "Formatting: original preserved";
+      fmtState.style.background = "#e8fff1";
+    } else {
+      fmtState.textContent = "Formatting: simple";
+      fmtState.style.background = "#f6f6f6";
+    }
+  }
 
   // ---------- auth indicator ----------
   async function refreshAuthPill() {
@@ -117,22 +144,134 @@
     return text;
   }
 
+  // ---------- .docx (format-preserving) utilities ----------
+  const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+  const XML_NS = "http://www.w3.org/XML/1998/namespace";
+
+  function getParagraphs(xmlDoc) {
+    const ps = Array.from(xmlDoc.getElementsByTagNameNS(W_NS, "p"));
+    return ps.map((p) => {
+      const tNodes = Array.from(p.getElementsByTagNameNS(W_NS, "t"));
+      const text = tNodes.map((t) => t.textContent || "").join("");
+      const isList =
+        !!p.getElementsByTagNameNS(W_NS, "numPr").length ||
+        !!Array.from(p.childNodes).find(
+          (n) => n.namespaceURI === W_NS && n.localName === "pPr" &&
+                 n.getElementsByTagNameNS(W_NS, "numPr").length
+        );
+      return { node: p, text: normalizeWS(text), isList };
+    });
+  }
+
+  function replaceParagraphText(xmlDoc, pNode, newText) {
+    // Keep <w:pPr>, drop other children, then add single <w:r><w:t xml:space="preserve">…</w:t></w:r>
+    const kids = Array.from(pNode.childNodes);
+    for (const k of kids) {
+      const isPPr = k.nodeType === 1 && k.namespaceURI === W_NS && k.localName === "pPr";
+      if (!isPPr) pNode.removeChild(k);
+    }
+    const r = xmlDoc.createElementNS(W_NS, "w:r");
+    const t = xmlDoc.createElementNS(W_NS, "w:t");
+    t.setAttributeNS(XML_NS, "xml:space", "preserve");
+    t.textContent = newText;
+    r.appendChild(t);
+    pNode.appendChild(r);
+  }
+
+  async function buildDocxWithRewrites(buffer, rewrites) {
+    const JSZip = window.JSZip;
+    if (!JSZip) throw new Error("JSZip not loaded");
+
+    // Fresh zip from original buffer each time (avoid cumulative edits)
+    const zip = await JSZip.loadAsync(buffer);
+    const docPath = "word/document.xml";
+    const xmlStr = await zip.file(docPath).async("string");
+
+    const xmlDoc = new DOMParser().parseFromString(xmlStr, "application/xml");
+    const serializer = new XMLSerializer();
+
+    // Gather paragraphs
+    const paragraphs = getParagraphs(xmlDoc);
+
+    // Index which paragraphs have been replaced (avoid double-matching)
+    const replaced = new Set();
+
+    function bestMatchIndex(originalText) {
+      const target = normalizeWS(originalText || "");
+      let bestIdx = -1, bestScore = 0;
+      for (let i = 0; i < paragraphs.length; i++) {
+        if (replaced.has(i)) continue;
+        const p = paragraphs[i];
+        // Prefer list paragraphs; add a small bias
+        const score = jaccard(target, p.text) + (p.isList ? 0.05 : 0);
+        if (score > bestScore) {
+          bestScore = score;
+          bestIdx = i;
+        }
+      }
+      // Require a reasonable similarity to avoid wrong replacements
+      return bestScore >= 0.50 ? bestIdx : -1;
+    }
+
+    for (const r of rewrites || []) {
+      const before = String(r.original || "").trim();
+      const after = String(r.rewritten || "").trim();
+      if (!before || !after) continue;
+
+      const idx = bestMatchIndex(before);
+      if (idx === -1) continue;
+
+      replaceParagraphText(xmlDoc, paragraphs[idx].node, after);
+      replaced.add(idx);
+    }
+
+    const outXml = serializer.serializeToString(xmlDoc);
+    zip.file(docPath, outXml);
+    return await zip.generateAsync({ type: "blob" });
+  }
+
   // ---------- .docx import ----------
   chooseFile.onclick = () => fileInput.click();
   fileInput.onchange = async () => {
     const f = fileInput.files?.[0];
     if (!f) return;
     try {
+      // keep original buffer for format-preserving export
       const arrayBuffer = await f.arrayBuffer();
-      const result = await window.mammoth.convertToHtml({ arrayBuffer });
-      const html = result.value || "";
-      const tmp = document.createElement("div");
-      tmp.innerHTML = html;
-      const plain = tmp.textContent || tmp.innerText || "";
-      resumeText.value = plain.trim();
+      originalDocxBuffer = arrayBuffer;
+      setFmtState(true);
+
+      // Parse document.xml directly to derive a clean plaintext that mirrors paragraph order.
+      const zip = await window.JSZip.loadAsync(arrayBuffer);
+      const docPath = "word/document.xml";
+      const xmlStr = await zip.file(docPath).async("string");
+      const xmlDoc = new DOMParser().parseFromString(xmlStr, "application/xml");
+      const paragraphs = getParagraphs(xmlDoc);
+
+      // Produce a readable text version for editing (prefix list items with • )
+      const plain = paragraphs
+        .map(({ text, isList }) => (isList ? `• ${text}` : text))
+        .join("\n")
+        .trim();
+
+      resumeText.value = plain;
       refreshScore();
     } catch (e) {
-      alert("Failed to read .docx: " + (e?.message || e));
+      // Fallback to Mammoth (best-effort) to at least load plaintext
+      try {
+        const arrayBuffer = await f.arrayBuffer();
+        const result = await window.mammoth.convertToHtml({ arrayBuffer });
+        const html = result.value || "";
+        const tmp = document.createElement("div");
+        tmp.innerHTML = html;
+        const plain = (tmp.textContent || tmp.innerText || "").trim();
+        resumeText.value = plain;
+        setFmtState(true); // We still keep original buffer; export will try to preserve styles.
+        refreshScore();
+      } catch (e2) {
+        setFmtState(false);
+        alert("Failed to read .docx: " + (e?.message || e));
+      }
     }
   };
 
@@ -177,10 +316,13 @@
       if (error) {
         tailorMsg.textContent = "Server error: " + (error.message || "invoke failed");
         afterPreview.textContent = "(error)";
+        lastRewrites = [];
         return;
       }
 
       const rewrites = Array.isArray(data?.rewrites) ? data.rewrites : [];
+      lastRewrites = rewrites;
+
       if (!rewrites.length) {
         tailorMsg.textContent = "No eligible rewrite suggestions returned.";
         afterPreview.textContent = resumeText.value || "(no input)";
@@ -197,11 +339,28 @@
     } catch (e) {
       tailorMsg.textContent = "Error: " + String(e?.message || e);
       afterPreview.textContent = "(error)";
+      lastRewrites = [];
     }
   };
 
   // ---------- export .docx ----------
   exportDocx.onclick = async () => {
+    // Prefer format-preserving export if a .docx was loaded
+    if (originalDocxBuffer) {
+      try {
+        const blob = await buildDocxWithRewrites(originalDocxBuffer, lastRewrites);
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "Resume-tailored.docx";
+        a.click();
+        URL.revokeObjectURL(a.href);
+        return;
+      } catch (e) {
+        console.warn("Format-preserving export failed; falling back:", e);
+      }
+    }
+
+    // Fallback: simple paragraphs from preview/plaintext
     const { Document, Packer, Paragraph, TextRun } = window.docx || {};
     if (!Document) {
       alert("docx library not loaded.");
@@ -237,5 +396,6 @@
   };
 
   await refreshAuthPill();
+  setFmtState(false);
   refreshScore();
 })();
