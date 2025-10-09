@@ -42,13 +42,14 @@
       <button id="printPdf" class="btn">Print / Save as PDF</button>
       <span class="scorebox">Score: <span id="scoreVal">—</span></span>
       <span id="signinState" class="pill">Checking sign-in…</span>
+      <span id="fmtState" class="pill" title="Shown when a .docx has been loaded; export will preserve original list/paragraph styles.">Formatting: simple</span>
     </div>
 
     <section class="card" style="margin-top:8px">
       <div class="grid2">
         <div class="pane">
           <h3>Your Resume (editable)</h3>
-          <div class="small muted">If you upload a .docx we’ll extract plaintext to start; you can edit freely.</div>
+          <div class="small muted">If you upload a .docx we’ll extract plaintext to start; you can edit freely. Export will preserve the original .docx’s list/paragraph styles.</div>
           <textarea id="resumeText" placeholder="Paste your resume plaintext here…"></textarea>
         </div>
         <div class="pane">
@@ -85,13 +86,18 @@
     window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc";
   </script>
   <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-  <!-- Mammoth: .docx -> HTML/text -->
+
+  <!-- Mammoth: .docx -> HTML/text (kept; not required for export anymore) -->
   <script defer src="https://unpkg.com/mammoth@1.6.0/mammoth.browser.min.js"></script>
-  <!-- docx: export .docx -->
+
+  <!-- JSZip: read/modify original .docx so we can preserve styles on export -->
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+  <!-- docx: fallback export when no original .docx is present -->
   <script defer src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
 
   <!-- Local scripts -->
   <script defer src="js/scoring.js?v=2025-10-07-2"></script>
-  <script defer src="js/power-edit.js?v=2025-10-07-2"></script>
+  <script defer src="js/power-edit.js?v=2025-10-09-1"></script>
 </body>
 </html>
