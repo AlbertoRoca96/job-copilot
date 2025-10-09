@@ -87,17 +87,17 @@
   </script>
   <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 
-  <!-- Mammoth: .docx -> HTML/text (kept; not required for export anymore) -->
+  <!-- Mammoth (kept for import fallback) -->
   <script defer src="https://unpkg.com/mammoth@1.6.0/mammoth.browser.min.js"></script>
 
-  <!-- JSZip: read/modify original .docx so we can preserve styles on export -->
+  <!-- JSZip to patch original DOCX -->
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
-  <!-- docx: fallback export when no original .docx is present -->
+  <!-- docx: fallback export only -->
   <script defer src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
 
   <!-- Local scripts -->
   <script defer src="js/scoring.js?v=2025-10-07-2"></script>
-  <script defer src="js/power-edit.js?v=2025-10-09-4"></script>
+  <script defer src="js/power-edit.js?v=2025-10-09-5"></script>
 </body>
 </html>
