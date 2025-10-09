@@ -1,10 +1,9 @@
 // Power Edit client: mirrors Profile's complex rewrite behavior (no insert suggestions).
 // Format-preserving .docx export (v4):
-// - Protect ENTIRE Education and References sections (header -> next section header).
-// - Replace ONLY the text inside existing <w:t> runs; never delete runs or non-text nodes.
-// - Preserve bullets/numbering, custom glyphs, tabs, line breaks, margins/indents, and ALL run/paragraph formatting.
-// - Keep hyperlink text runs as-is; pour new text only into non-link runs.
-// - Distribute the new sentence across the original run boundaries by proportional length, preserving each run’s leading/trailing spaces.
+// - Education + References are HARD-LOCKED (never rewritten) both in plaintext bullets and DOCX export.
+// - Only edit inside existing <w:t> nodes; never remove runs/non-text nodes.
+// - Preserve bullet glyph run, hyperlinks (leave <w:hyperlink> text intact), tabs/indents/numPr/fonts/sizes/bold/italics.
+// - Prefer list paragraphs when matching; very high fallback threshold to avoid headers.
 
 (async function () {
   await new Promise((r) => window.addEventListener("load", r));
@@ -54,6 +53,39 @@
   const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const WORD_RE = /[A-Za-z][A-Za-z0-9+./-]{1,}/g;
 
+  const HEADERS_CANON = new Map([
+    ["education","education"],
+    ["references","references"],
+    ["reference","references"],
+    ["work experience","work experience"],
+    ["experience","experience"],
+    ["side projects","side projects"],
+    ["projects","projects"],
+    ["technical skills","technical skills"],
+    ["skills","skills"],
+    ["certifications","certifications"],
+    ["awards","awards"],
+    ["publications","publications"],
+    ["summary","summary"],
+    ["objective","objective"],
+    ["profile","profile"],
+    ["volunteer experience","volunteer experience"],
+    ["volunteering","volunteer experience"],
+    ["leadership","leadership"],
+    ["additional information","additional information"],
+    ["interests","interests"]
+  ]);
+  const PROTECTED_SECTIONS = new Set(["education", "references"]);
+
+  const normalizeHeader = (s) =>
+    String(s || "")
+      .toLowerCase()
+      .replace(/&/g, "and")
+      .replace(/[:.]/g, "")
+      .replace(/[^a-z\s]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
   function toks(s = "") { return (String(s).toLowerCase().match(WORD_RE) || []); }
   function tokset(s = "") { return new Set(toks(s)); }
   function jaccard(a = "", b = "") {
@@ -90,21 +122,34 @@
     }
   }
 
-  // ---------- bullets from text ----------
+  // ---------- plaintext section-aware bullets ----------
   function bulletsFromText(txt) {
-    const lines = (txt || "").replace(/\r/g, "").split("\n").map((l) => l.trim());
+    const lines = (txt || "").replace(/\r/g, "").split("\n");
+
+    let current = null;
     const out = [];
-    for (const l of lines) {
+
+    for (let raw of lines) {
+      const l = raw.trim();
       if (!l) continue;
+
+      // Section header detection in textarea
+      const maybeHeader = normalizeHeader(l);
+      if (HEADERS_CANON.has(maybeHeader)) {
+        current = HEADERS_CANON.get(maybeHeader);
+        continue;
+      }
+
+      // Skip protected sections entirely
+      if (PROTECTED_SECTIONS.has(current)) continue;
+
+      // Only consider lines that look like bullets in the textarea
       const m = l.match(/^([•\-\u2013\u2014\*]|\d+[.)])\s+(.*)$/);
-      out.push(m ? m[2] : l);
+      if (m) {
+        out.push(m[2]);
+      }
     }
-    // drop likely headers
-    return out.filter(
-      (b) =>
-        b.length >= 6 &&
-        !/^(education|skills|projects|work experience|experience|references?)$/i.test(b)
-    );
+    return out;
   }
 
   // ---------- change card ----------
@@ -126,9 +171,11 @@
     `;
   }
 
-  // ---------- rebuild After preview ----------
+  // ---------- rebuild After preview (respect bullets only) ----------
   function rebuildAfterPreview(source, rewrites) {
     let text = source || "";
+
+    // We only injected bullets into the textarea for list items, so replace those.
     for (const r of rewrites) {
       const before = (r.original || "").trim();
       const after = (r.rewritten || "").trim();
@@ -151,11 +198,12 @@
     const t = String(s).replace(/\s+/g, "");
     return /^[•◦▪▫■□●○·\-–—]+$/u.test(t);
   }
-  function inHyperlink(node) {
-    let p = node && node.parentNode;
-    while (p) {
-      if (p.namespaceURI === W_NS && p.localName === "hyperlink") return true;
-      p = p.parentNode;
+
+  function nodeHasAncestorTagNS(node, localName, ns) {
+    let n = node;
+    while (n) {
+      if (n.nodeType === 1 && n.localName === localName && n.namespaceURI === ns) return true;
+      n = n.parentNode;
     }
     return false;
   }
@@ -164,21 +212,34 @@
     const isList =
       !!p.getElementsByTagNameNS(W_NS, "numPr").length ||
       !!Array.from(p.childNodes).find(
-        (n) => n.namespaceURI === W_NS && n.localName === "pPr" && n.getElementsByTagNameNS(W_NS, "numPr").length
+        (n) =>
+          n.namespaceURI === W_NS &&
+          n.localName === "pPr" &&
+          n.getElementsByTagNameNS(W_NS, "numPr").length
       );
 
     const tNodes = Array.from(p.getElementsByTagNameNS(W_NS, "t"));
-    const text = tNodes.map((t) => t.textContent || "").join("");
+    const textConcat = tNodes.map((t) => t.textContent || "").join("");
 
     const runs = Array.from(p.getElementsByTagNameNS(W_NS, "r"));
     let firstRun = null, firstRunWithText = null;
     for (const r of runs) {
       if (!firstRun) firstRun = r;
-      if (r.getElementsByTagNameNS(W_NS, "t").length > 0 && !firstRunWithText) firstRunWithText = r;
+      if (r.getElementsByTagNameNS(W_NS, "t").length > 0 && !firstRunWithText) {
+        firstRunWithText = r;
+      }
       if (firstRun && firstRunWithText) break;
     }
 
-    return { node: p, text: normalizeWS(text), isList, firstRun, firstRunWithText, tNodes };
+    return {
+      node: p,
+      text: normalizeWS(textConcat),
+      isList,
+      firstRun,
+      firstRunWithText,
+      tNodes,
+      section: null  // to be filled later
+    };
   }
 
   function getParagraphs(xmlDoc) {
@@ -186,31 +247,24 @@
     return ps.map((p) => paraMeta(xmlDoc, p));
   }
 
-  // ---- section protection (Education & References) ----
-  const HEADING_TERMS = new Set([
-    "summary","objective","profile","education","work experience","experience","professional experience",
-    "side projects","projects","technical skills","skills","certifications","awards","publications",
-    "activities","volunteering","volunteer experience","leadership","interests","references","reference","referees"
-  ]);
-  function normLower(s) { return String(s||"").toLowerCase().replace(/\s+/g," ").trim(); }
-  function isExactHeading(text) { return HEADING_TERMS.has(normLower(text)); }
-  function computeProtectedMask(paragraphs) {
-    const n = paragraphs.length;
-    const protectedMask = new Array(n).fill(false);
-    const startTerms = new Set(["education","references","reference","referees"]);
-    for (let i = 0; i < n; i++) {
-      const t = normLower(paragraphs[i].text);
-      if (!startTerms.has(t)) continue;
-      // mark from i to before next heading (exclusive)
-      let j = i;
-      while (++j < n) {
-        const tj = normLower(paragraphs[j].text);
-        if (isExactHeading(tj)) break;
+  function labelParagraphsWithSections(paragraphs) {
+    let current = null;
+    for (let i = 0; i < paragraphs.length; i++) {
+      const p = paragraphs[i];
+      let label = null;
+
+      // Header candidates: not list, shortish, and matches known headers
+      if (!p.isList && p.text && p.text.length <= 60) {
+        const maybe = normalizeHeader(p.text);
+        if (HEADERS_CANON.has(maybe)) {
+          label = HEADERS_CANON.get(maybe);
+          current = label;
+          p.section = current;
+          continue;
+        }
       }
-      for (let k = i; k < j; k++) protectedMask[k] = true;
-      i = j - 1;
+      p.section = current;
     }
-    return protectedMask;
   }
 
   function ensureTextRun(xmlDoc, pMeta) {
@@ -229,30 +283,40 @@
 
     const pNode = pMeta.node;
     const pPr = pNode.getElementsByTagNameNS(W_NS, "pPr")[0];
-    if (pPr && pPr.nextSibling) pNode.insertBefore(r, pPr.nextSibling);
-    else pNode.appendChild(r);
+    if (pPr && pPr.nextSibling) {
+      pNode.insertBefore(r, pPr.nextSibling);
+    } else {
+      pNode.appendChild(r);
+    }
     return [t];
   }
 
-  // Distribute new text across editable <w:t> nodes by proportional original length
   function replaceParagraphTextInRuns(xmlDoc, pMeta, newText) {
     const pNode = pMeta.node;
     let tNodes = Array.from(pNode.getElementsByTagNameNS(W_NS, "t"));
     if (!tNodes.length) tNodes = ensureTextRun(xmlDoc, pMeta);
 
-    // Preserve leading bullet-like glyph run
-    let editable = Array.from(tNodes);
-    if (editable.length) {
-      const firstText = editable[0].textContent || "";
+    // Preserve leading bullet-like text node if present
+    let startIdx = 0;
+    if (tNodes.length) {
+      const firstText = tNodes[0].textContent || "";
       if (isBulletLikeText(firstText) || /^\s*[•◦▪▫■□●○·\-–—]\s+$/u.test(firstText)) {
-        editable = editable.slice(1);
+        startIdx = 1;
       }
     }
-    // Filter out hyperlink-contained text nodes (keep link text intact)
-    editable = editable.filter((t) => !inHyperlink(t));
 
-    if (!editable.length) {
-      // If all nodes are preserved, create a new editable node right after the first
+    // Find first text node that belongs to a hyperlink to keep links unchanged
+    let firstHyperIdx = -1;
+    for (let i = 0; i < tNodes.length; i++) {
+      if (nodeHasAncestorTagNS(tNodes[i], "hyperlink", W_NS)) {
+        firstHyperIdx = i;
+        break;
+      }
+    }
+    const endIdx = firstHyperIdx >= 0 ? firstHyperIdx : tNodes.length;
+
+    // If everything before the first hyperlink is preserved (e.g., bullet only), create a new t after it
+    if (startIdx >= endIdx) {
       const r = xmlDoc.createElementNS(W_NS, "w:r");
       const srcRun = pMeta.firstRunWithText || pMeta.firstRun;
       if (srcRun) {
@@ -262,64 +326,28 @@
       const t = xmlDoc.createElementNS(W_NS, "w:t");
       t.setAttributeNS(XML_NS, "xml:space", "preserve");
       r.appendChild(t);
-      const anchor = tNodes[0]?.parentNode;
-      if (anchor && anchor.nextSibling) pNode.insertBefore(r, anchor.nextSibling);
-      else pNode.appendChild(r);
-      editable = [t];
-    }
 
-    // Build capacity per run from existing text lengths (trimmed core)
-    const caps = editable.map((t) => {
-      const s = t.textContent || "";
-      return Math.max(1, s.trim().length);
-    });
-    const capSum = caps.reduce((a, b) => a + b, 0);
-
-    // Tokenize new text preserving spaces
-    const tokens = (newText || "").split(/(\s+)/);
-    let tokenIdx = 0;
-    function takeApprox(chars, isLast) {
-      if (isLast) {
-        const rest = tokens.slice(tokenIdx).join("");
-        tokenIdx = tokens.length;
-        return rest;
+      const anchorRun = tNodes[0]?.parentNode;
+      if (anchorRun && anchorRun.nextSibling) {
+        pNode.insertBefore(r, anchorRun.nextSibling);
+      } else {
+        pNode.appendChild(r);
       }
-      let acc = "";
-      let used = 0;
-      while (tokenIdx < tokens.length) {
-        const t = tokens[tokenIdx];
-        const next = acc + t;
-        if (used + t.length > chars && /\S/.test(t)) break;
-        acc = next;
-        used += t.length;
-        tokenIdx++;
-      }
-      return acc;
+
+      // refresh list
+      tNodes = Array.from(pNode.getElementsByTagNameNS(W_NS, "t"));
+      // set new editable window
+      startIdx = Math.min(startIdx + 1, tNodes.length - 1);
     }
 
-    // Fill each editable node
-    let remainingCap = capSum;
-    editable.forEach((t, i) => {
-      const raw = t.textContent || "";
-      const lead = (raw.match(/^\s*/) || [""])[0];
-      const trail = (raw.match(/\s*$/) || [""])[0];
-      const isLast = i === editable.length - 1;
-      const target = Math.round((caps[i] / remainingCap) * (newText.length - (tokens.slice(0, tokenIdx).join("").length)));
-      const piece = takeApprox(Math.max(1, target), isLast);
-      t.setAttributeNS(XML_NS, "xml:space", "preserve");
-      t.textContent = lead + piece + trail;
-      remainingCap -= caps[i];
-    });
+    // Fill the first editable t and clear any remaining editable ts up to hyperlink
+    tNodes[startIdx].setAttributeNS(XML_NS, "xml:space", "preserve");
+    tNodes[startIdx].textContent = newText;
 
-    // Clear any *non-editable* extra text nodes after our editable set to avoid ghost text,
-    // but never delete nodes (keeps formatting/runs), and never touch hyperlinks/bullets.
-    const editableSet = new Set(editable);
-    for (const t of tNodes) {
-      if (editableSet.has(t)) continue;
-      if (inHyperlink(t)) continue;
-      const txt = t.textContent || "";
-      if (!isBulletLikeText(txt)) t.textContent = txt.replace(/\S.*/s, ""); // keep only leading spaces if any
+    for (let i = startIdx + 1; i < endIdx; i++) {
+      tNodes[i].textContent = "";
     }
+    // Do not touch any <w:t> inside hyperlinks (keep link text visible/clickable)
   }
 
   async function buildDocxWithRewrites(buffer, rewrites) {
@@ -334,29 +362,31 @@
     const serializer = new XMLSerializer();
 
     const paragraphs = getParagraphs(xmlDoc);
-    const protectedMask = computeProtectedMask(paragraphs);
+    labelParagraphsWithSections(paragraphs);
 
     const replaced = new Set();
 
     function bestMatchIndex(originalText) {
       const target = normalizeWS(originalText || "");
-
-      // Pass 1: prefer list paragraphs, not protected
       let bestIdx = -1, bestScore = 0;
+
+      // Pass 1: list paragraphs outside protected sections
       for (let i = 0; i < paragraphs.length; i++) {
-        if (replaced.has(i) || protectedMask[i]) continue;
+        if (replaced.has(i)) continue;
         const p = paragraphs[i];
         if (!p.isList) continue;
+        if (PROTECTED_SECTIONS.has(p.section)) continue;
         const score = jaccard(target, p.text);
         if (score > bestScore) { bestScore = score; bestIdx = i; }
       }
       if (bestScore >= 0.72) return bestIdx;
 
-      // Pass 2: any unprotected paragraph (very high bar; avoids headings)
+      // Pass 2: any paragraph (still exclude protected sections, keep high bar)
       bestIdx = -1; bestScore = 0;
       for (let i = 0; i < paragraphs.length; i++) {
-        if (replaced.has(i) || protectedMask[i]) continue;
+        if (replaced.has(i)) continue;
         const p = paragraphs[i];
+        if (PROTECTED_SECTIONS.has(p.section)) continue;
         const score = jaccard(target, p.text);
         if (score > bestScore) { bestScore = score; bestIdx = i; }
       }
@@ -369,8 +399,7 @@
       if (!before || !after) continue;
 
       const idx = bestMatchIndex(before);
-      if (idx === -1) continue;                   // no safe match
-      if (protectedMask[idx]) continue;           // belt + suspenders
+      if (idx === -1) continue;
 
       replaceParagraphTextInRuns(xmlDoc, paragraphs[idx], after);
       replaced.add(idx);
@@ -396,9 +425,14 @@
       const xmlStr = await zip.file(docPath).async("string");
       const xmlDoc = new DOMParser().parseFromString(xmlStr, "application/xml");
       const paragraphs = getParagraphs(xmlDoc);
+      labelParagraphsWithSections(paragraphs);
 
+      // Plaintext for editing: add "• " only to actual list items; education/references stay as-is
       const plain = paragraphs
-        .map(({ text, isList }) => (isList ? `• ${text}` : text))
+        .map(({ text, isList, section }) => {
+          if (isList && !PROTECTED_SECTIONS.has(section)) return `• ${text}`;
+          return text;
+        })
         .join("\n")
         .trim();
 
@@ -506,7 +540,7 @@
       }
     }
 
-    // Fallback: simple paragraphs from preview/plaintext
+    // Fallback: simple generator (used only if no .docx uploaded)
     const { Document, Packer, Paragraph, TextRun } = window.docx || {};
     if (!Document) {
       alert("docx library not loaded.");
