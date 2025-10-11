@@ -148,6 +148,17 @@
       </div>
     </section>
 
+    <!-- NEW: Applications tracker (cards + promote buttons) -->
+    <section id="tracker" class="card hidden" style="margin-top:16px">
+      <div class="row" style="justify-content:space-between">
+        <h2 style="margin:0">Applications tracker</h2>
+        <div class="row">
+          <button id="refreshTracker" class="btn">Refresh</button>
+        </div>
+      </div>
+      <div id="trackerList"></div>
+    </section>
+
     <!-- Shortlist -->
     <section id="shortlist" class="card hidden" style="margin-top:16px">
       <h2>Your shortlist</h2>
@@ -189,7 +200,7 @@
   </script>
   <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
   <!-- IMPORTANT: absolute path for GitHub Pages project sites -->
-  <script defer src="/job-copilot/profile.js?v=2025-09-30-2"></script>
+  <script defer src="/job-copilot/profile.js?v=2025-10-11-tracker"></script>
   <script>
     // Defensive reveal in case of async timing; profile.js does the real gating
     window.addEventListener('load', () => {
