@@ -1,5 +1,6 @@
-// docs/profile.js — auth + profile + shortlist + drafting + JD-aware preview cards
-// Uses supabase.functions.invoke(...) for request-run / request-draft (cleaner & fully auth'ed).
+// docs/profile.js — auth + profile + shortlist + drafting + JD-aware preview cards + Applications Tracker
+// Uses supabase.functions.invoke(...) for request-run / request-draft.
+// Adds: Tracker view via v_tracker_cards and status promotion by inserting into public.applications.
 
 (async function () {
   // Wait for DOM
@@ -31,9 +32,16 @@
   const signinOnly = $("signinOnly");
   const profBox = $("profile");
   const onboard = $("onboard");
+
+  // Tracker
+  const trackerBox = $("tracker");
+  const trackerList = $("trackerList");
+  const refreshTrackerBtn = $("refreshTracker");
+
+  // Shortlist + materials
   const shortlist = $("shortlist");
   const jobsTable = $("jobs");
-  const jobsBody = jobsTable.querySelector("tbody");
+  const jobsBody = jobsTable?.querySelector("tbody");
   const materials = $("materials");
   const cardsEl = $("cards");
 
@@ -104,15 +112,15 @@
   // ---------- auth gate ----------
   const user = await getUser();
   if (!user) {
-    signinOnly.classList.remove("hidden");
+    signinOnly?.classList.remove("hidden");
     return;
   }
   who.textContent = `Signed in as ${user.email || user.id}`;
-  profBox.classList.remove("hidden");
-  onboard.classList.remove("hidden");
+  profBox?.classList.remove("hidden");
+  onboard?.classList.remove("hidden");
 
-  // Hide the sign-in notice and reveal JobScan cards (Match Report + Power Edit)
-  if (signinOnly) signinOnly.classList.add("hidden");
+  // Reveal cards that are auth-gated
+  signinOnly?.classList.add("hidden");
   document.getElementById("matchCard")?.classList.remove("hidden");
   document.getElementById("powerEditCard")?.classList.remove("hidden");
 
@@ -205,13 +213,13 @@
             remote_only: remoteOnly,
           },
         },
-      }); // supabase-js attaches the Authorization header automatically.
+      });
       if (error) {
         runMsg.textContent = `Error: ${error.message || "invoke failed"}`;
         return;
       }
       runMsg.textContent = `Queued: ${data?.request_id || "ok"}`;
-      setTimeout(loadShortlist, 3000);
+      setTimeout(() => { loadShortlist(); }, 3000);
     } catch (e) {
       runMsg.textContent = "Error: " + String(e);
     }
@@ -233,7 +241,7 @@
         return;
       }
       draftMsg.textContent = `Drafts queued: ${data?.request_id || "ok"} (top=${data?.top || top})`;
-      setTimeout(loadMaterials, 3000);
+      setTimeout(() => { loadMaterials(); }, 3000);
     } catch (e) {
       draftMsg.textContent = "Error: " + String(e);
     }
@@ -248,9 +256,9 @@
     const url = await sign("outputs", key, 60);
 
     if (!url) {
-      shortlist.classList.remove("hidden");
-      jobsTable.classList.add("hidden");
-      $("noData").classList.remove("hidden");
+      shortlist?.classList.remove("hidden");
+      jobsTable?.classList.add("hidden");
+      $("noData")?.classList.remove("hidden");
       return;
     }
 
@@ -261,13 +269,13 @@
     } catch {}
 
     if (!Array.isArray(arr) || arr.length === 0) {
-      shortlist.classList.remove("hidden");
-      jobsTable.classList.add("hidden");
-      $("noData").classList.remove("hidden");
+      shortlist?.classList.remove("hidden");
+      jobsTable?.classList.add("hidden");
+      $("noData")?.classList.remove("hidden");
       return;
     }
 
-    jobsBody.innerHTML = "";
+    if (jobsBody) jobsBody.innerHTML = "";
     arr.sort((a, b) => (b.score || 0) - (a.score || 0));
     for (const j of arr) {
       const tr = document.createElement("tr");
@@ -297,21 +305,21 @@
       tdPosted.textContent = j.posted_at ? String(j.posted_at).slice(0, 10) : "—";
       tr.appendChild(tdPosted);
 
-      jobsBody.appendChild(tr);
+      jobsBody?.appendChild(tr);
     }
 
-    shortlist.classList.remove("hidden");
-    jobsTable.classList.remove("hidden");
-    $("noData").classList.add("hidden");
+    shortlist?.classList.remove("hidden");
+    jobsTable?.classList.remove("hidden");
+    $("noData")?.classList.add("hidden");
   }
 
-  // ---------- change-log modal ----------
+  // ---------- change-log modal (unchanged) ----------
   function renderChangeCard(it) {
     const before = String(it.original_paragraph_text || "");
     const after = String(it.modified_paragraph_text || "");
     const added = String(it.inserted_sentence || "");
     const sec = String(it.anchor_section || "");
-       const anchor = String(it.anchor || "");
+    const anchor = String(it.anchor || "");
     const reason = String(it.reason || "");
 
     const afterHTML = esc(after).replace(
@@ -365,7 +373,7 @@
     const ixUrl = await sign("outputs", ixKey, 60);
 
     if (!ixUrl) {
-      materials.classList.remove("hidden");
+      materials?.classList.remove("hidden");
       cardsEl.innerHTML = `<div class="muted">No drafts yet.</div>`;
       return;
     }
@@ -500,17 +508,106 @@
     if (cards.length) cards.forEach((c) => cardsEl.appendChild(c));
     else cardsEl.innerHTML = `<div class="muted">No drafts yet.</div>`;
 
-    materials.classList.remove("hidden");
+    materials?.classList.remove("hidden");
   }
+
+  // ---------- Applications Tracker ----------
+  const STATUS_ORDER = ["saved", "applied", "interview", "offer", "rejected"];
+  function statusButtons(current) {
+    const div = document.createElement("div");
+    for (const s of STATUS_ORDER) {
+      const b = document.createElement("button");
+      b.className = "btn";
+      b.disabled = s === current;
+      b.textContent = s;
+      b.onclick = async () => {
+        try {
+          const { error } = await supabase.from("applications").insert([
+            { user_id: (await getUser())?.id, job_id: b.dataset.jobId, status: s }
+          ]);
+          if (error) throw error;
+          await loadTracker();
+        } catch (e) {
+          alert("Update failed: " + (e?.message || e));
+        }
+      };
+      div.appendChild(b);
+    }
+    return div;
+  }
+
+  async function loadTracker() {
+    const u = await getUser();
+    if (!u || !trackerBox || !trackerList) return;
+
+    const { data, error } = await supabase
+      .from("v_tracker_cards")
+      .select("*")
+      .order("job_created_at", { ascending: false })
+      .limit(100);
+
+    trackerList.innerHTML = "";
+    if (error) {
+      trackerBox.classList.remove("hidden");
+      trackerList.innerHTML = `<div class="muted">Tracker load error: ${esc(error.message)}</div>`;
+      return;
+    }
+    if (!data || !data.length) {
+      trackerBox.classList.remove("hidden");
+      trackerList.innerHTML = `<div class="muted">No tracked applications yet.</div>`;
+      return;
+    }
+
+    for (const row of data) {
+      const card = document.createElement("div");
+      card.className = "card";
+
+      const head = document.createElement("div");
+      head.className = "card-head";
+
+      const titleEl = document.createElement("div");
+      titleEl.className = "title";
+      titleEl.innerHTML = `${esc(row.company || "")} — ${esc(row.title || "")}`;
+      head.appendChild(titleEl);
+
+      const badge = document.createElement("span");
+      badge.className = "pill";
+      badge.textContent = row.latest_status || "saved";
+      head.appendChild(badge);
+
+      card.appendChild(head);
+
+      const meta = document.createElement("div");
+      meta.className = "muted";
+      const loc = row.location ? ` • ${esc(row.location)}` : "";
+      const when = row.latest_status_at ? ` • ${String(row.latest_status_at).slice(0,10)}` : "";
+      meta.innerHTML = `<a href="${esc(row.url || "#")}" target="_blank" rel="noopener">Open posting</a>${loc}${when}`;
+      card.appendChild(meta);
+
+      const controls = statusButtons(row.latest_status || "saved");
+      // attach job id for inserts
+      controls.querySelectorAll("button").forEach(b => b.dataset.jobId = row.id);
+      controls.style.marginTop = "8px";
+      card.appendChild(controls);
+
+      trackerList.appendChild(card);
+    }
+
+    trackerBox.classList.remove("hidden");
+  }
+
+  refreshTrackerBtn.onclick = loadTracker;
 
   // ---------- refresh, initial load, logout ----------
   refresh.onclick = async () => {
     await loadShortlist();
     await loadMaterials();
+    await loadTracker();
   };
 
   await loadShortlist();
   await loadMaterials();
+  await loadTracker();
 
   logout.onclick = async () => {
     await supabase.auth.signOut();
