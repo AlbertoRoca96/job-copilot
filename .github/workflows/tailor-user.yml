@@ -87,10 +87,10 @@ jobs:
             --arg run  "${GH_RUN_ID}" \
             --arg started "$STARTED_AT" \
             '{user_id:$uid,
-              request_id:$rid,                     # keep as string (UUID)
+              request_id:$rid,
               workflow:$wf,
               github_repo:$repo,
-              github_run_id: ($run|tonumber),      # numeric
+              github_run_id: ($run|tonumber),
               status:"running",
               started_at:$started}')
           curl -sS -m 60 -X POST \
@@ -98,6 +98,7 @@ jobs:
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "Content-Type: application/json" \
+            -H "Prefer: return=representation" \
             --data "$RUN_PAYLOAD" \
             | jq -r '.[0].id // empty' > run_id.txt || true
           echo "RUN_ID=$(cat run_id.txt)" >> $GITHUB_ENV
