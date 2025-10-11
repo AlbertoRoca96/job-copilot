@@ -13,6 +13,7 @@
     .pill { display:inline-block; padding:2px 8px; margin:2px; border:1px solid #e0e0e0; border-radius:999px; font-size:12px; background:#f6f6f6; }
     .ctl { margin:6px 8px 0 0; min-width:260px; }
     textarea { width:100%; min-height:160px; padding:8px; border:1px solid #e0e0e0; border-radius:8px; font: 13px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; background:#fff; }
+    input[type="url"], input[type="text"], input[type="number"] { padding:8px; border:1px solid #e0e0e0; border-radius:8px; }
     .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
     .pane { background:#fff; border:1px solid #eee; border-radius:10px; padding:10px; }
     .pane h3 { margin: 6px 0; }
@@ -30,9 +31,8 @@
   <main class="wrap">
     <h1>Power Edit (resume)</h1>
     <p class="muted">
-      Mirrors the Profile flow for resumes: paste a JD and get
-      <em>compound/complex</em> bullet rewrites with natural JD keyword weaving.
-      No “insert suggestions”.
+      Upload your .docx or paste resume text, then paste a JD <em>or fetch by URL</em>.
+      You’ll get live score + compound/complex rewrites with natural JD keyword weaving.
     </p>
 
     <div class="row" style="margin-bottom:8px">
@@ -52,13 +52,25 @@
           <div class="small muted">If you upload a .docx we’ll extract plaintext to start; you can edit freely. Export will preserve the original .docx’s list/paragraph styles.</div>
           <textarea id="resumeText" placeholder="Paste your resume plaintext here…"></textarea>
         </div>
+
         <div class="pane">
-          <h3>Job Description (paste here)</h3>
-          <div class="row">
+          <h3>Job Description</h3>
+          <div class="row" style="align-items:flex-end">
+            <div style="flex:1 1 320px">
+              <label class="small muted" for="jdUrl">JD URL (Greenhouse/Lever/Ashby/Workday/etc.)</label><br/>
+              <input id="jdUrl" class="ctl" type="url" placeholder="https://boards.greenhouse.io/.../jobs/12345" style="min-width:340px" />
+            </div>
+            <button id="fetchJD" class="btn">Fetch</button>
+            <span id="fetchMsg" class="muted small" aria-live="polite"></span>
+          </div>
+
+          <div class="row" style="margin-top:6px">
             <input id="jobTitle" class="ctl" type="text" placeholder="e.g., Software Engineer I (Full-Stack)" />
             <input id="jobCompany" class="ctl" type="text" placeholder="e.g., RoadRunner" />
           </div>
+
           <textarea id="jobDesc" placeholder="Paste the JD here…"></textarea>
+
           <div class="row" style="margin-top:6px">
             <label>Max words per bullet</label>
             <input id="maxWords" class="ctl" type="number" min="12" max="60" value="28" style="max-width:110px" />
@@ -89,15 +101,13 @@
 
   <!-- Mammoth (kept for import fallback) -->
   <script defer src="https://unpkg.com/mammoth@1.6.0/mammoth.browser.min.js"></script>
-
   <!-- JSZip to patch original DOCX -->
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-
   <!-- docx: fallback export only -->
   <script defer src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
 
   <!-- Local scripts -->
   <script defer src="js/scoring.js?v=2025-10-07-2"></script>
-  <script defer src="js/power-edit.js?v=2025-10-09-5"></script>
+  <script defer src="js/power-edit.js?v=2025-10-11-jdfetch"></script>
 </body>
 </html>
