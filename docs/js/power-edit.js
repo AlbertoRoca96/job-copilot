@@ -1,4 +1,4 @@
-// Power Edit client.
+// Power Edit client (with JD-URL fetch).
 // Format-preserving DOCX export (v5):
 // - Education + References are HARD-LOCKED.
 // - Only write inside existing <w:t> nodes (never delete runs).
@@ -19,21 +19,24 @@
 
   // ---------- DOM ----------
   const $ = (id) => document.getElementById(id);
-  const chooseFile = $("chooseFile");
-  const fileInput = $("fileInput");
-  const resumeText = $("resumeText");
-  const jobDesc = $("jobDesc");
-  const jobTitle = $("jobTitle");
-  const jobCompany = $("jobCompany");
-  const autoTailor = $("autoTailor");
-  const tailorMsg = $("tailorMsg");
-  const changesBox = $("changes");
+  const chooseFile   = $("chooseFile");
+  const fileInput    = $("fileInput");
+  const resumeText   = $("resumeText");
+  const jobDesc      = $("jobDesc");
+  const jobTitle     = $("jobTitle");
+  const jobCompany   = $("jobCompany");
+  const jdUrl        = $("jdUrl");
+  const fetchJD      = $("fetchJD");
+  const fetchMsg     = $("fetchMsg");
+  const autoTailor   = $("autoTailor");
+  const tailorMsg    = $("tailorMsg");
+  const changesBox   = $("changes");
   const afterPreview = $("afterPreview");
-  const exportDocx = $("exportDocx");
-  const printPdf = $("printPdf");
-  const scoreVal = $("scoreVal");
-  const signinState = $("signinState");
-  const fmtState = $("fmtState");
+  const exportDocx   = $("exportDocx");
+  const printPdf     = $("printPdf");
+  const scoreVal     = $("scoreVal");
+  const signinState  = $("signinState");
+  const fmtState     = $("fmtState");
 
   // ---------- state ----------
   let originalDocxBuffer = null;
@@ -127,7 +130,6 @@
   // ---------- DOCX utils ----------
   const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
   const XML_NS = "http://www.w3.org/XML/1998/namespace";
-
   const isBulletLikeText = (s="") => /^[\s\u00A0•◦▪▫■□●○·\-–—]+$/u.test(String(s).replace(/\s+/g," "));
 
   function nodeHasAncestorTagNS(node, localName, ns) {
@@ -322,7 +324,39 @@
   jobDesc.addEventListener("input", refreshScore);
   resumeText.addEventListener("input", refreshScore);
 
-  // ---------- server call ----------
+  // ---------- JD URL fetch ----------
+  function looksLikeHttpUrl(u) {
+    try { const p = new URL(String(u)); return p.protocol === "http:" || p.protocol === "https:"; }
+    catch { return false; }
+  }
+
+  fetchJD.onclick = async () => {
+    const url = (jdUrl.value || "").trim();
+    fetchMsg.textContent = "";
+    if (!looksLikeHttpUrl(url)) { fetchMsg.textContent = "Enter a valid http(s) URL."; return; }
+
+    fetchMsg.textContent = "Fetching…";
+    try {
+      // Call Edge Function (server-side fetch avoids CORS)
+      const { data, error } = await supabase.functions.invoke("jd-fetch", { body: { url } });
+      if (error) { fetchMsg.textContent = "Server error: " + (error.message || "invoke failed"); return; }
+
+      const title   = String(data?.title || "").trim();
+      const company = String(data?.company || "").trim();
+      const jdText  = String(data?.jd_text || data?.text || "").trim();
+
+      if (title)   jobTitle.value   = title;
+      if (company) jobCompany.value = company;
+      if (jdText)  jobDesc.value    = jdText;
+
+      fetchMsg.textContent = jdText ? "Loaded." : "Fetched (no JD text found).";
+      refreshScore();
+    } catch (e) {
+      fetchMsg.textContent = "Error: " + String(e?.message || e);
+    }
+  };
+
+  // ---------- server call (rewrites) ----------
   autoTailor.onclick = async () => {
     tailorMsg.textContent = ""; changesBox.innerHTML = ""; afterPreview.textContent = "(working…)";
     refreshScore(); await refreshAuthPill();
