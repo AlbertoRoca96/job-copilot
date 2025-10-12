@@ -1,4 +1,4 @@
-// Power Edit client (with JD-URL fetch).
+// Power Edit client (JD-URL fetch + Rich Editor + formatted DOCX preview).
 // Format-preserving DOCX export (v5):
 // - Education + References are HARD-LOCKED.
 // - Only write inside existing <w:t> nodes (never delete runs).
@@ -37,10 +37,12 @@
   const scoreVal     = $("scoreVal");
   const signinState  = $("signinState");
   const fmtState     = $("fmtState");
+  const docxPreview  = $("docxPreview");
 
   // ---------- state ----------
   let originalDocxBuffer = null;
   let lastRewrites = [];
+  let editor = null;
 
   // ---------- helpers ----------
   const esc = (s) => String(s || "").replace(/[&<>]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c]));
@@ -86,6 +88,49 @@
       if (data?.session) { signinState.textContent = "Signed in (server boost)"; signinState.style.background = "#e8fff1"; }
       else { signinState.textContent = "Anonymous (rate-limited)"; signinState.style.background = "#fff7e6"; }
     } catch { signinState.textContent = "Anonymous (rate-limited)"; signinState.style.background = "#fff7e6"; }
+  }
+
+  // ---------- TinyMCE ----------
+  async function ensureEditor() {
+    if (editor) return editor;
+    if (!window.tinymce) return null;
+    const eds = await window.tinymce.init({
+      selector: '#afterEditor',
+      menubar: false,
+      plugins: 'lists link',
+      toolbar: 'undo redo | styles | bold italic underline | bullist numlist outdent indent | link | removeformat',
+      height: 420,
+      branding: false,
+      content_style: 'body{font:13px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding:10px;}'
+    });
+    editor = eds?.[0] || null;
+    return editor;
+  }
+
+  function textToEditorHtml(txt="") {
+    const lines = String(txt).replace(/\r/g,"").split("\n");
+    let html = "", inList = false;
+    const bullet = /^([•\-\u2013\u2014\*]|\d+[.)])\s+(.*)$/;
+    for (const raw of lines) {
+      const l = raw.trim();
+      if (!l) { if (inList) { html += "</ul>"; inList=false; } html += "<p><br></p>"; continue; }
+      const m = l.match(bullet);
+      if (m) {
+        if (!inList) { html += "<ul>"; inList = true; }
+        html += `<li>${esc(m[2])}</li>`;
+      } else {
+        if (inList) { html += "</ul>"; inList=false; }
+        html += `<p>${esc(l)}</p>`;
+      }
+    }
+    if (inList) html += "</ul>";
+    return html || "<p><br></p>";
+  }
+
+  function editorTextOrAfter() {
+    const ed = window.tinymce?.get('afterEditor');
+    const txt = ed ? ed.getContent({ format: 'text' }).trim() : "";
+    return txt || (afterPreview.textContent || resumeText.value || "");
   }
 
   // ---------- textarea bullets (section-aware) ----------
@@ -181,28 +226,27 @@
     return [t];
   }
 
-  // NEW: pour new text across existing non-hyperlink text nodes while preserving prefix punctuation
+  // Pour new text across existing non-hyperlink text nodes while preserving prefix punctuation
   function replaceParagraphTextInRuns(xmlDoc, pMeta, newText) {
     const pNode = pMeta.node;
     let tNodes = Array.from(pNode.getElementsByTagNameNS(W_NS,"t"));
     if (!tNodes.length) tNodes = ensureTextRun(xmlDoc, pMeta);
 
-    // Preserve the bullet/number run (if any) by skipping first <w:t> that is just a symbol/space.
+    // Preserve the bullet/number run (if any) by skipping the first <w:t> that is just a symbol/space.
     let startIdx = 0;
     if (tNodes.length) {
       const firstText = tNodes[0].textContent || "";
       if (isBulletLikeText(firstText)) startIdx = 1;
     }
 
-    // Build list of editable tNodes BEFORE the first hyperlink t
+    // Editable nodes before the first hyperlink
     const editable = [];
     for (let i = startIdx; i < tNodes.length; i++) {
       const t = tNodes[i];
-      if (nodeHasAncestorTagNS(t, "hyperlink", W_NS)) break; // stop at first hyperlink
+      if (nodeHasAncestorTagNS(t, "hyperlink", W_NS)) break;
       editable.push(t);
     }
     if (!editable.length) {
-      // Create a fresh text node after bullet/number if needed
       const r = xmlDoc.createElementNS(W_NS,"w:r");
       const srcRun = pMeta.firstRunWithText || pMeta.firstRun;
       if (srcRun) { const rPr = srcRun.getElementsByTagNameNS(W_NS,"rPr")[0]; if (rPr) r.appendChild(rPr.cloneNode(true)); }
@@ -213,7 +257,6 @@
       editable.push(tNodes[startIdx]);
     }
 
-    // Preserve any punctuation/space prefix at the start of the first editable node (e.g., "— ")
     const firstEditableText = editable[0].textContent || "";
     const prefixMatch = firstEditableText.match(/^([\s\u00A0\-\u2013\u2014•◦▪▫·]+)(.*)$/u);
     const prefix = prefixMatch ? prefixMatch[1] : "";
@@ -234,7 +277,6 @@
       editable[i].textContent = slice;
       cursor += share;
     }
-    // Leave any remaining (non-editable) tNodes untouched, including hyperlinks and formatting runs.
   }
 
   async function buildDocxWithRewrites(buffer, rewrites) {
@@ -294,6 +336,15 @@
     const f = fileInput.files?.[0]; if (!f) return;
     try {
       const buf = await f.arrayBuffer(); originalDocxBuffer = buf; setFmtState(true);
+
+      // Render a read-only formatted view of the DOCX
+      try {
+        if (window.docx && docxPreview) {
+          docxPreview.innerHTML = "";
+          await window.docx.renderAsync(buf, docxPreview, undefined, { ignoreWidth: false, breakPages: true });
+        }
+      } catch {}
+
       const zip = await window.JSZip.loadAsync(buf);
       const xmlStr = await zip.file("word/document.xml").async("string");
       const xmlDoc = new DOMParser().parseFromString(xmlStr, "application/xml");
@@ -314,6 +365,8 @@
         setFmtState(true); refreshScore();
       } catch (e2) { setFmtState(false); alert("Failed to read .docx: " + (e?.message || e)); }
     }
+
+    await ensureEditor();
   };
 
   // ---------- scoring ----------
@@ -337,7 +390,6 @@
 
     fetchMsg.textContent = "Fetching…";
     try {
-      // Call Edge Function (server-side fetch avoids CORS)
       const { data, error } = await supabase.functions.invoke("jd-fetch", { body: { url } });
       if (error) { fetchMsg.textContent = "Server error: " + (error.message || "invoke failed"); return; }
 
@@ -384,7 +436,12 @@
       if (!lastRewrites.length) { tailorMsg.textContent = "No eligible rewrite suggestions returned."; afterPreview.textContent = resumeText.value || "(no input)"; return; }
 
       changesBox.innerHTML = lastRewrites.map(renderChangeCard).join("");
-      afterPreview.textContent = rebuildAfterPreview(resumeText.value, lastRewrites);
+      const afterText = rebuildAfterPreview(resumeText.value, lastRewrites);
+      afterPreview.textContent = afterText;
+
+      // Push into the rich editor
+      await ensureEditor();
+      if (editor) editor.setContent(textToEditorHtml(afterText));
 
       const gated = data?.stats?.gated ?? 0, took = data?.stats?.took_ms ?? 0;
       tailorMsg.textContent = `Rewrites: ${lastRewrites.length} (gated ${gated}, ${took} ms)`;
@@ -396,27 +453,32 @@
 
   // ---------- export ----------
   exportDocx.onclick = async () => {
-    if (originalDocxBuffer) {
+    // If we have the original DOCX and server rewrites, use the format-preserving path.
+    if (originalDocxBuffer && lastRewrites?.length) {
       try {
         const blob = await buildDocxWithRewrites(originalDocxBuffer, lastRewrites);
         const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "Resume-tailored.docx"; a.click(); URL.revokeObjectURL(a.href);
         return;
       } catch (e) { console.warn("Format-preserving export failed; falling back:", e); }
     }
+
+    // Fallback: export current edited text as simple paragraphs
     const { Document, Packer, Paragraph, TextRun } = window.docx || {};
     if (!Document) { alert("docx library not loaded."); return; }
-    const lines = (afterPreview.textContent || resumeText.value || "").split(/\n/);
+    const finalText = editorTextOrAfter();
+    const lines = (finalText || "").split(/\n/);
     const doc = new Document({ sections:[{ properties:{}, children: lines.map(l => new Paragraph({ children:[new TextRun(l)] })) }] });
     const blob = await Packer.toBlob(doc);
-    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "Resume-tailored.docx"; a.click(); URL.revokeObjectURL(a.href);
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "Resume-edited.docx"; a.click(); URL.revokeObjectURL(a.href);
   };
 
   // ---------- print ----------
   printPdf.onclick = () => {
     const w = window.open("", "_blank"); if (!w) return;
-    w.document.write(`<pre style="white-space:pre-wrap;font:13px ui-monospace">${esc(afterPreview.textContent || resumeText.value || "")}</pre>`);
+    w.document.write(`<pre style="white-space:pre-wrap;font:13px ui-monospace">${esc(editorTextOrAfter())}</pre>`);
     w.document.close(); w.focus(); w.print();
   };
 
+  await ensureEditor();
   await refreshAuthPill(); setFmtState(false); refreshScore();
 })();
