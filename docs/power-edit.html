@@ -23,8 +23,13 @@
     .change-card { border:1px solid #eee; border-radius:8px; padding:10px; margin-bottom:10px; background:#fafafa; }
     .change-title { font-weight:600; margin-bottom:6px; }
     .change-reason { color:#555; font-size:12px; margin-top:6px; }
-    .change-insert { display:inline-block; padding:2px 6px; font-size:12px; border:1px solid #ddd; border-radius:999px; background:#e6ffed; margin:6px 0; }
     .scorebox { font-size:13px; background:#fff; border:1px solid #eee; border-radius:8px; padding:6px 8px; }
+
+    /* Formatted DOCX viewer */
+    .docx-view { background:#fff; border:1px solid #eee; border-radius:10px; padding:10px; max-height:560px; overflow:auto; }
+
+    /* Editor note */
+    .editor-note { margin-top:6px; color:#666; font-size:12px; }
   </style>
 </head>
 <body>
@@ -82,6 +87,18 @@
     </section>
 
     <section class="card" style="margin-top:12px">
+      <h2 style="margin:6px 0">Formatted Resume (read-only, original DOCX styles)</h2>
+      <div id="docxPreview" class="docx-view">(upload a .docx to see the formatted view)</div>
+      <div class="small muted">Rendered locally via <code>docx-preview</code>.</div>
+    </section>
+
+    <section class="card" style="margin-top:12px">
+      <h2 style="margin:6px 0">Rich Editor (After)</h2>
+      <textarea id="afterEditor"></textarea>
+      <div class="editor-note">Touch up the “After” content here. Style-preserving export still applies to auto-tailored bullets; freeform edits export through the simple fallback DOCX/PDF.</div>
+    </section>
+
+    <section class="card" style="margin-top:12px">
       <h2 style="margin:6px 0">Change Log</h2>
       <div id="changes"></div>
     </section>
@@ -106,8 +123,13 @@
   <!-- docx: fallback export only -->
   <script defer src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
 
+  <!-- New: TinyMCE WYSIWYG (OSS build) -->
+  <script defer src="https://cdn.jsdelivr.net/npm/tinymce@6.8.3/tinymce.min.js" referrerpolicy="origin"></script>
+  <!-- New: docx-preview (client-side .docx renderer) -->
+  <script defer src="https://cdn.jsdelivr.net/npm/docx-preview@0.3.4/dist/docx-preview.min.js"></script>
+
   <!-- Local scripts -->
   <script defer src="js/scoring.js?v=2025-10-07-2"></script>
-  <script defer src="js/power-edit.js?v=2025-10-11-jdfetch"></script>
+  <script defer src="js/power-edit.js?v=2025-10-12-editor"></script>
 </body>
 </html>
