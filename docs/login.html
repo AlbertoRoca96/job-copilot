@@ -24,6 +24,7 @@
 <body>
   <div class="card">
     <h1 class="center">Sign in</h1>
+    <p class="center" style="margin:-4px 0 10px 0"><a href="feedback.html">Give Feedback</a></p>
 
     <!-- Standard auth -->
     <label>Email</label>
@@ -69,7 +70,6 @@
 
       const goHome = () => setTimeout(() => (window.location.href = './'), 250);
 
-      // ---------- Helpers to complete Supabase redirect sessions ----------
       function parseHashKV() {
         const h = (location.hash || '').replace(/^#/, '');
         const out = {};
@@ -82,7 +82,6 @@
       }
 
       async function finishRedirect() {
-        // New-style links use ?code=... (PKCE)
         const params = new URLSearchParams(location.search);
         const code = params.get('code');
 
@@ -92,7 +91,6 @@
           return;
         }
 
-        // Older links (or SSO) may put tokens in hash
         const hash = parseHashKV();
         if (hash.access_token && hash.refresh_token) {
           await supabase.auth.setSession({ access_token: hash.access_token, refresh_token: hash.refresh_token });
@@ -102,8 +100,6 @@
 
       await finishRedirect();
 
-      // Show reset UI if we arrived from a recovery link:
-      // 1) Supabase emits PASSWORD_RECOVERY on the auth state change
       supabase.auth.onAuthStateChange((event) => {
         if (event === 'PASSWORD_RECOVERY') {
           resetBox.classList.remove('hidden');
@@ -111,22 +107,19 @@
         }
       });
 
-      // 2) Also detect via URL hash parameter "type=recovery" (Supabase appends this sometimes)
       const hashKV = parseHashKV();
       if ((hashKV.type || '').toLowerCase() === 'recovery') {
         resetBox.classList.remove('hidden');
         msg.textContent = 'Enter a new password to finish resetting your account.';
-        history.replaceState({}, '', location.pathname); // clean URL
+        history.replaceState({}, '', location.pathname);
       }
 
-      // 3) Or simply show if we have a fresh session already (commonly true after clicking the reset link)
       const { data: { session } } = await supabase.auth.getSession();
       if (session && resetBox.classList.contains('hidden') && (hashKV.access_token || new URLSearchParams(location.search).get('code'))) {
         resetBox.classList.remove('hidden');
         msg.textContent = 'Enter a new password to finish resetting your account.';
       }
 
-      // ---------- Standard auth buttons ----------
       document.getElementById('signin').onclick = async () => {
         const email = emailEl.value.trim(), password = passEl.value;
         if (!email || !password) { msg.textContent = 'Provide email & password.'; return; }
@@ -165,7 +158,6 @@
         msg.textContent = error ? ('Error: ' + error.message) : 'Password reset link sent.';
       };
 
-      // ---------- Complete reset: set the new password ----------
       document.getElementById('setPw').onclick = async () => {
         const p1 = newPw.value || '';
         const p2 = newPw2.value || '';
@@ -176,12 +168,15 @@
         if (!error) goHome();
       };
 
-      // If user is already signed in and *not* doing recovery, send them home.
       if (session && resetBox.classList.contains('hidden')) {
         msg.textContent = 'You are signed in. Redirecting…';
         goHome();
       }
     });
   </script>
+
+  <!-- Feedback widget -->
+  <script defer src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script defer src="js/feedback.js?v=2025-10-12"></script>
 </body>
 </html>
