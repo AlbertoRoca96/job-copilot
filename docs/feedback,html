@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>job-copilot — Feedback</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    .wrap { max-width: 860px; margin: 32px auto; padding: 0 12px; }
+    .card { border:1px solid #e5e5e5; border-radius:12px; padding:16px; background:#fff; }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    label { font-weight:600; display:block; margin:8px 0 6px; }
+    input[type="text"], input[type="email"], select, textarea { width:100%; padding:10px; border:1px solid #e0e0e0; border-radius:8px; }
+    .btn { padding:8px 12px; border:1px solid #ccc; background:#111; color:#fff; border-radius:8px; cursor:pointer; }
+    .muted { color:#666; }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>Feedback</h1>
+    <p class="muted">Found a bug? Have an idea or question? Tell us here. Please avoid including sensitive information.</p>
+
+    <section class="card" data-no-screenshot>
+      <label for="fbType">Type</label>
+      <select id="fbType">
+        <option value="bug">Bug</option>
+        <option value="suggestion">Suggestion</option>
+        <option value="question">Question</option>
+        <option value="praise">Praise</option>
+      </select>
+
+      <label for="fbSubject">Subject (optional)</label>
+      <input id="fbSubject" type="text" placeholder="Short summary" />
+
+      <label for="fbMessage">Message</label>
+      <textarea id="fbMessage" rows="8" placeholder="Describe the issue or idea…"></textarea>
+
+      <label for="fbEmail">Email (optional, for follow-up)</label>
+      <input id="fbEmail" type="email" placeholder="you@example.com" />
+
+      <div class="row">
+        <label class="muted"><input type="checkbox" id="shot" checked> Include screenshot</label>
+        <label class="muted"><input type="checkbox" id="logs" checked> Include console errors</label>
+        <label class="muted"><input type="checkbox" id="sev"> Mark as high severity</label>
+      </div>
+
+      <label for="fbSteps">Steps to reproduce (optional)</label>
+      <textarea id="fbSteps" rows="4" placeholder="1) ... 2) ... 3) ..."></textarea>
+
+      <div class="row" style="margin-top:10px">
+        <button id="send" class="btn">Send</button>
+        <div id="status" class="muted" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <p style="margin-top:16px"><a href="./">← Back to start</a></p>
+  </main>
+
+  <!-- Supabase config -->
+  <script>
+    window.SUPABASE_URL = "https://imozfqawxpsasjdmgdkh.supabase.co";
+    window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc";
+  </script>
+  <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+
+  <script>
+    // Simple page version (shares server with widget)
+    window.addEventListener('load', async () => {
+      const supabase = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+      const el = id => document.getElementById(id);
+      const status = el('status');
+
+      async function screenshot() {
+        try {
+          const canvas = await html2canvas(document.body, { ignoreElements: n => n.closest?.('[data-no-screenshot]') });
+          return canvas.toDataURL('image/png', 0.92);
+        } catch { return null; }
+      }
+
+      el('send').onclick = async () => {
+        const payload = {
+          type: el('fbType').value,
+          subject: el('fbSubject').value.trim() || undefined,
+          message: el('fbMessage').value.trim(),
+          email: el('fbEmail').value.trim() || undefined,
+          page: document.querySelector('h1')?.textContent?.trim(),
+          url: location.href,
+          user_agent: navigator.userAgent,
+          severity: el('sev').checked ? 'high' : undefined,
+          steps: el('fbSteps').value.trim() || undefined,
+          console: el('logs').checked ? [] : undefined, // page version omits console by default
+          screenshot_data_url: el('shot').checked ? (await screenshot()) : null,
+        };
+        if (!payload.message) { status.textContent = "Please enter a message."; return; }
+        status.textContent = "Sending…";
+        try {
+          const { data, error } = await supabase.functions.invoke('feedback-submit', { body: payload });
+          status.textContent = error ? ('Error: ' + (error.message || 'failed')) : ('Thanks! Feedback ID: ' + (data?.id || 'sent'));
+        } catch (e) {
+          status.textContent = 'Error: ' + (e?.message || e);
+        }
+      };
+    });
+  </script>
+</body>
+</html>
