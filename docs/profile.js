@@ -1,6 +1,4 @@
-// docs/profile.js — auth + profile + shortlist + drafting + JD-aware preview cards + Applications Tracker
-// Collapsible sections (details/summary). JD excerpt: scrollable + focusable.
-// Adds: "Run overlay" with spinner, live ETA text, and polling for shortlist readiness.
+// docs/profile.js — overlay persists until job_requests finishes; hide shows FAB; resume after reload.
 
 (async function () {
   await new Promise((r) => window.addEventListener("load", r));
@@ -69,6 +67,7 @@
   const runOverlay = $("runOverlay");
   const overlayHide = $("overlayHide");
   const overlayRefresh = $("overlayRefresh");
+  const runFab = $("runFab");
   const etaEl = $("eta");
 
   // drafts
@@ -76,7 +75,7 @@
   const draftMsg = $("draftMsg");
   const topNInput = $("topN");
 
-  // changes modal
+  // change modal
   const changeModal = $("change-modal");
   const changeBody = changeModal?.querySelector(".modal-body");
   const changeClose = changeModal?.querySelector(".close");
@@ -117,13 +116,12 @@
   who.textContent = `Signed in as ${user.email || user.id}`;
   profBox?.classList.remove("hidden");
   onboard?.classList.remove("hidden");
-
-  // Reveal auth-gated sections
-  signinOnly?.classList.add("hidden");
   $("powerEditCard")?.classList.remove("hidden");
+  signinOnly?.classList.add("hidden");
 
   // ---------- load profile ----------
-  const { data: prof, error: profErr } = await supabase.from("profiles").select("*").eq("id", user.id).single();
+  const { data: prof, error: profErr } =
+    await supabase.from("profiles").select("*").eq("id", user.id).single();
 
   if (!profErr && prof) {
     $("full_name").textContent = prof?.full_name || "—";
@@ -166,32 +164,97 @@
     upMsg.textContent = "Uploaded.";
   };
 
-  // ---------- Run overlay helpers ----------
+  // ---------- Run overlay state & watchers ----------
+  const LS_ACTIVE_REQ = "jc.active_request_id";
+  const LS_OVERLAY_HIDDEN = "jc.overlay_hidden";
+
   let etaTimer = null;
-  let pollTimer = null;
+  let pollTimer = null;        // storage polling
+  let reqPollTimer = null;     // DB polling
+  let realtimeChannel = null;
+  let runStartedAt = 0;        // ms epoch
+
+  function showFab(show) {
+    if (!runFab) return;
+    if (show) runFab.classList.add("open");
+    else runFab.classList.remove("open");
+  }
+
   function openRunOverlay() {
     runOverlay?.classList.add("open");
-    const started = Date.now();
-    // Update ETA line every second (polite live region)
+    localStorage.setItem(LS_OVERLAY_HIDDEN, "0");
+    showFab(false);
+
+    runStartedAt = Date.now();
     clearInterval(etaTimer);
     etaTimer = setInterval(() => {
-      const elapsed = Math.floor((Date.now() - started) / 1000);
-      const m = String(Math.floor(elapsed / 60)).padStart(1, "0");
+      const elapsed = Math.floor((Date.now() - runStartedAt) / 1000);
+      const m = String(Math.floor(elapsed / 60));
       const s = String(elapsed % 60).padStart(2, "0");
-      // Tell users typical window and elapsed time
       if (etaEl) etaEl.textContent = `Elapsed ${m}:${s}. Typical runtime is 3–8 minutes. We’ll auto-refresh when results are ready.`;
     }, 1000);
   }
-  function closeRunOverlay() {
+
+  function hideOverlayTemporarily() {
     runOverlay?.classList.remove("open");
-    clearInterval(etaTimer); etaTimer = null;
-    clearInterval(pollTimer); pollTimer = null;
+    localStorage.setItem(LS_OVERLAY_HIDDEN, "1");
+    showFab(!!localStorage.getItem(LS_ACTIVE_REQ));
   }
 
-  overlayHide?.addEventListener("click", () => closeRunOverlay());
+  function stopAllWatchers() {
+    clearInterval(etaTimer); etaTimer = null;
+    clearInterval(pollTimer); pollTimer = null;
+    clearInterval(reqPollTimer); reqPollTimer = null;
+    if (realtimeChannel) { supabase.removeChannel(realtimeChannel); realtimeChannel = null; }
+  }
+
+  function closeRunOverlayForGood() {
+    runOverlay?.classList.remove("open");
+    localStorage.removeItem(LS_ACTIVE_REQ);
+    localStorage.setItem(LS_OVERLAY_HIDDEN, "0");
+    showFab(false);
+    stopAllWatchers();
+  }
+
+  overlayHide?.addEventListener("click", () => hideOverlayTemporarily());
+  runFab?.addEventListener("click", () => openRunOverlay());
   overlayRefresh?.addEventListener("click", async () => { await loadShortlist(); });
 
-  // Poll storage for shortlist readiness (scores.json exists + non-empty)
+  // --- Watch job_requests row until status in {done,error}
+  async function watchRequestUntilDone(requestId) {
+    if (!requestId) return;
+
+    // Realtime if enabled for the table (recommended). :contentReference[oaicite:2]{index=2}
+    try {
+      realtimeChannel = supabase.channel(`rq-${requestId}`)
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'job_requests',
+          filter: `id=eq.${requestId}`
+        }, async (payload) => {
+          const st = payload.new?.status || payload.old?.status;
+          if (st === 'done' || st === 'error') {
+            // let storage poller confirm new artifact too, but we're done either way
+            await finalizeRun(st);
+          }
+        })
+        .subscribe();
+    } catch { /* ignore, fallback to polling */ }
+
+    // Also fallback poll every 10s (works without Realtime)
+    clearInterval(reqPollTimer);
+    reqPollTimer = setInterval(async () => {
+      const { data, error } = await supabase.from('job_requests')
+        .select('status,message').eq('id', requestId).maybeSingle();
+      if (error) return;
+      if (data?.status === 'done' || data?.status === 'error') {
+        await finalizeRun(data.status);
+      }
+    }, 10000);
+  }
+
+  // --- Poll Storage for a *fresh* scores.json to avoid closing on old files
   async function startShortlistPolling() {
     clearInterval(pollTimer);
     pollTimer = setInterval(async () => {
@@ -203,23 +266,41 @@
         if (!url) return;
         const res = await fetch(url, { cache: "no-cache" });
         if (!res.ok) return;
+
+        // close only when the artifact is new (freshness guard)
+        const lastMod = res.headers.get('last-modified');
+        const lm = lastMod ? Date.parse(lastMod) : 0;
+        if (lm && lm + 30_000 < runStartedAt) return;
+
         const arr = await res.json().catch(() => []);
         if (Array.isArray(arr) && arr.length) {
-          // Found it!
-          closeRunOverlay();
-          await loadShortlist();
-          // Open the shortlist panel and scroll it into view
-          if (shortlist && !shortlist.open) shortlist.open = true;
-          shortlist?.scrollIntoView({ behavior: "smooth", block: "start" });
+          await finalizeRun('done');
         }
       } catch { /* noop */ }
-    }, 12000); // every 12s
+    }, 12000);
   }
 
-  // ---------- run crawl & rank ----------
-  runBtn.onclick = async () => {
+  async function finalizeRun(status) {
+    stopAllWatchers();
+    await loadShortlist();
+    await loadMaterials();
+    // keep FAB hidden; clean active request id and overlay
+    closeRunOverlayForGood();
+
+    if (status === 'error') {
+      runMsg.textContent = 'Run finished with an error — check logs.';
+    } else {
+      runMsg.textContent = 'Shortlist ready.';
+      // open shortlist and scroll to it
+      if (shortlist && !shortlist.open) shortlist.open = true;
+      shortlist?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+
+  // ---------- run shortlist ----------
+  async function queueShortlistRun() {
     const session = await getSession();
-    if (!session) return alert("Sign in first.");
+    if (!session) { alert("Sign in first."); return; }
     runMsg.textContent = "Saving & queuing…";
 
     // Save targets
@@ -232,7 +313,7 @@
       runMsg.textContent = "Save failed: " + String(e.message || e); return;
     }
 
-    // Queue shortlist job
+    // Queue shortlist job (edge function "request-run")
     try {
       const recencyDays = Math.max(0, parseInt(recencyInput.value || "0", 10) || 0);
       const remoteOnly = !!remoteOnlyCb.checked;
@@ -243,14 +324,24 @@
       });
       if (error) { runMsg.textContent = `Error: ${error.message || "invoke failed"}`; return; }
 
-      // UX: open overlay and begin polling until scores.json is ready
-      runMsg.textContent = `Queued: ${data?.request_id || "ok"} — building your shortlist (3–8 minutes)…`;
+      const reqId = data?.request_id || null;
+      if (reqId) {
+        localStorage.setItem(LS_ACTIVE_REQ, reqId);
+        runMsg.textContent = `Queued: ${reqId} — building your shortlist (3–8 minutes)…`;
+      } else {
+        runMsg.textContent = `Queued — building your shortlist (3–8 minutes)…`;
+      }
+
+      // UX: show overlay (+ start watchers)
       openRunOverlay();
       startShortlistPolling();
+      watchRequestUntilDone(reqId);
     } catch (e) {
       runMsg.textContent = "Error: " + String(e);
     }
-  };
+  }
+
+  runBtn.onclick = queueShortlistRun;
 
   // ---------- queue drafting ----------
   runDrafts.onclick = async () => {
@@ -455,7 +546,6 @@
         const grid = document.createElement("div");
         grid.className = "grid2";
 
-        // JD excerpt: scrollable + focusable region
         const left = document.createElement("div");
         left.className = "pane";
         left.innerHTML =
@@ -554,22 +644,11 @@
     }
 
     for (const row of data) {
-      const card = document.createElement("div");
-      card.className = "card";
-
-      const head = document.createElement("div");
-      head.className = "card-head";
-
-      const titleEl = document.createElement("div");
-      titleEl.className = "title";
-      titleEl.innerHTML = `${esc(row.company || "")} — ${esc(row.title || "")}`;
-      head.appendChild(titleEl);
-
-      const badge = document.createElement("span");
-      badge.className = "pill";
-      badge.textContent = row.latest_status || "saved";
-      head.appendChild(badge);
-
+      const card = document.createElement("div"); card.className = "card";
+      const head = document.createElement("div"); head.className = "card-head";
+      const titleEl = document.createElement("div"); titleEl.className = "title";
+      titleEl.innerHTML = `${esc(row.company || "")} — ${esc(row.title || "")}`; head.appendChild(titleEl);
+      const badge = document.createElement("span"); badge.className = "pill"; badge.textContent = row.latest_status || "saved"; head.appendChild(badge);
       card.appendChild(head);
 
       const meta = document.createElement("div");
@@ -593,7 +672,7 @@
 
   refreshTrackerBtn.onclick = loadTracker;
 
-  // ---------- refresh, initial load, logout ----------
+  // ---------- refresh, resume, logout ----------
   refresh.onclick = async () => {
     await loadShortlist();
     await loadMaterials();
@@ -603,6 +682,16 @@
   await loadShortlist();
   await loadMaterials();
   await loadTracker();
+
+  // Resume overlay if we still have an active request id
+  (function resumeIfActive() {
+    const reqId = localStorage.getItem(LS_ACTIVE_REQ);
+    if (!reqId) return;
+    const hidden = localStorage.getItem(LS_OVERLAY_HIDDEN) === "1";
+    if (!hidden) openRunOverlay(); else showFab(true);
+    startShortlistPolling();
+    watchRequestUntilDone(reqId);
+  })();
 
   logout.onclick = async () => {
     await supabase.auth.signOut();
