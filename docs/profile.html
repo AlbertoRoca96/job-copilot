@@ -5,6 +5,60 @@
   <title>job-copilot — Profile</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="style.css" />
+
+  <!-- Local, page-specific polish -->
+  <style>
+    /* Collapsible cards (native details/summary) */
+    details.card {
+      border: 1px solid #e5e5e5; border-radius: 12px; background: #fcfcfc; padding: 0;
+    }
+    details.card > summary {
+      list-style: none; cursor: pointer; user-select: none;
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 14px 16px; border-radius: 12px;
+    }
+    details.card > summary::-webkit-details-marker { display: none; }
+    details.card > summary .sum-left { display: flex; align-items: center; gap: 10px; }
+    .count {
+      display:inline-flex; align-items:center; justify-content:center;
+      min-width: 22px; height: 22px; padding: 0 6px;
+      border-radius: 999px; font-size: 12px; font-weight: 600;
+      color: #224; background: #eef2ff; border: 1px solid #dbe3ff;
+    }
+    .hint { color:#666; font-size:12px; }
+    details.card[open] > summary { background: #fff; border-bottom: 1px solid #eee; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+    details.card .card-body { padding: 12px 16px 16px 16px; }
+
+    /* JD excerpt: readable + scrollable + keyboard focusable */
+    .jd {
+      white-space: pre-wrap; font-size: 14px; line-height: 1.5;
+      max-height: 320px; overflow: auto; padding: 10px;
+      border: 1px solid #eee; border-radius: 8px; background: #fff;
+      scrollbar-gutter: stable; /* avoid layout shift when scrollbar appears */
+    }
+    .jd:focus { outline: 2px solid #c7d2fe; outline-offset: 2px; }
+
+    /* Utility spacing used in this page */
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 12px; }
+    .section   { margin: 20px 0 40px; }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .btn { padding:6px 10px; border:1px solid #ccc; background:#fff; border-radius:8px; cursor:pointer; text-decoration:none; display:inline-block; }
+    .btn.primary { background:#2d6cdf; color:#fff; border-color:#2d6cdf; }
+    .pill { display:inline-block; padding:2px 8px; margin:2px; border:1px solid #e0e0e0; border-radius:999px; font-size:12px; background:#f6f6f6; }
+    .card { border:1px solid #e5e5e5; border-radius:12px; padding:16px; background:#fcfcfc; }
+    .mt-2 { margin-top: 8px; } .mt-3 { margin-top: 12px; } .mt-4 { margin-top: 16px; }
+    .muted { color:#666; }
+
+    /* Preview cards grid (unchanged behavior, slight spacing polish) */
+    .cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
+
+    /* Modal shell (unchanged) */
+    .modal { position:fixed; inset:0; background:rgba(0,0,0,.35); display:none; align-items:center; justify-content:center; z-index:1000; }
+    .modal.open { display:flex; }
+    .modal-content { width:min(980px, 92vw); max-height:86vh; overflow:auto; background:#fff; border-radius:12px; box-shadow:0 8px 30px rgba(0,0,0,.2); }
+    .modal-header { display:flex; justify-content:space-between; align-items:center; padding:12px 14px; border-bottom:1px solid #eee; position:sticky; top:0; background:#fff; }
+    .modal-body { padding:14px; }
+  </style>
 </head>
 
 <body>
@@ -37,7 +91,7 @@
         <a class="pill" href="./">← Back</a>
       </div>
 
-      <dl style="display:grid; grid-template-columns: 180px 1fr; gap: 6px 14px; margin: var(--space-3) 0 0 0">
+      <dl style="display:grid; grid-template-columns: 180px 1fr; gap: 6px 14px; margin: 12px 0 0 0">
         <dt>Full name</dt><dd id="full_name">—</dd>
         <dt>Email</dt><dd id="email">—</dd>
         <dt>Phone</dt><dd id="phone">—</dd>
@@ -94,7 +148,7 @@
       </ol>
     </section>
 
-    <!-- Power Edit (kept as its own card; Match Report removed) -->
+    <!-- Power Edit -->
     <section class="card mt-4" id="powerEditCard">
       <div class="row" style="justify-content:space-between">
         <div>
@@ -110,29 +164,43 @@
       </div>
     </section>
 
-    <!-- Applications tracker -->
-    <section id="tracker" class="card hidden mt-4">
-      <div class="row" style="justify-content:space-between">
-        <h2 style="margin:0">Applications tracker</h2>
-        <div class="row">
+    <!-- Applications tracker (collapsible) -->
+    <details id="tracker" class="card hidden mt-4">
+      <summary>
+        <div class="sum-left">
+          <h2 style="margin:0">Applications tracker</h2>
+          <span id="trackerCount" class="count">0</span>
+        </div>
+        <span class="hint">click to expand</span>
+      </summary>
+      <div class="card-body">
+        <div class="row" style="justify-content:flex-end; margin-bottom:8px">
           <button id="refreshTracker" class="btn">Refresh</button>
         </div>
+        <div id="trackerList"></div>
       </div>
-      <div id="trackerList"></div>
-    </section>
+    </details>
 
-    <!-- Shortlist -->
-    <section id="shortlist" class="card hidden mt-4">
-      <h2>Your shortlist</h2>
-      <div class="row" style="margin:6px 0">
-        <button id="refresh" class="btn">Refresh</button>
+    <!-- Shortlist (collapsible) -->
+    <details id="shortlist" class="card hidden mt-4">
+      <summary>
+        <div class="sum-left">
+          <h2 style="margin:0">Your shortlist</h2>
+          <span id="shortlistCount" class="count">0</span>
+        </div>
+        <span class="hint">click to expand</span>
+      </summary>
+      <div class="card-body">
+        <div class="row" style="margin:6px 0">
+          <button id="refresh" class="btn">Refresh</button>
+        </div>
+        <table id="jobs" class="hidden">
+          <thead><tr><th>Score</th><th>Title</th><th>Company</th><th>Location</th><th>Posted</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div id="noData" class="muted">No shortlist yet.</div>
       </div>
-      <table id="jobs" class="hidden">
-        <thead><tr><th>Score</th><th>Title</th><th>Company</th><th>Location</th><th>Posted</th></tr></thead>
-        <tbody></tbody>
-      </table>
-      <div id="noData" class="muted">No shortlist yet.</div>
-    </section>
+    </details>
 
     <!-- Generated materials -->
     <section id="materials" class="card hidden mt-4">
@@ -157,12 +225,12 @@
 
   <!-- Supabase config for profile.js -->
   <script>
-    window.SUPABASE_URL = "https://imozfqawxpsasjdmgdkh.supabase.co";
+    window.SUPABASE_URL  = "https://imozfqawxpsasjdmgdkh.supabase.co";
     window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc";
   </script>
   <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
   <!-- IMPORTANT: absolute path for GitHub Pages project sites -->
-  <script defer src="/job-copilot/profile.js?v=2025-10-11-tracker"></script>
+  <script defer src="/job-copilot/profile.js?v=2025-10-18-collapsible"></script>
 
   <!-- Feedback widget -->
   <script defer src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
