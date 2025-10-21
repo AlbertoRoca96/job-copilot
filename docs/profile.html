@@ -6,9 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="style.css" />
 
-  <!-- Page-specific polish -->
   <style>
-    /* Collapsible cards (native details/summary) */
+    /* --- page polish (unchanged bits trimmed) --- */
     details.card { border:1px solid #e5e5e5; border-radius:12px; background:#fcfcfc; padding:0; }
     details.card > summary{
       list-style:none; cursor:pointer; user-select:none;
@@ -17,36 +16,22 @@
     }
     details.card > summary::-webkit-details-marker{ display:none; }
     details.card > summary .sum-left{ display:flex; align-items:center; gap:10px; }
-    .count{
-      display:inline-flex; align-items:center; justify-content:center;
-      min-width:22px; height:22px; padding:0 6px;
-      border-radius:999px; font-size:12px; font-weight:600;
-      color:#224; background:#eef2ff; border:1px solid #dbe3ff;
-    }
+    .count{ display:inline-flex; align-items:center; justify-content:center; min-width:22px; height:22px; padding:0 6px;
+      border-radius:999px; font-size:12px; font-weight:600; color:#224; background:#eef2ff; border:1px solid #dbe3ff; }
     .hint{ color:#666; font-size:12px; }
     details.card[open] > summary{ background:#fff; border-bottom:1px solid #eee; border-bottom-left-radius:0; border-bottom-right-radius:0; }
     details.card .card-body{ padding:12px 16px 16px 16px; }
 
-    /* JD excerpt: readable + scrollable + keyboard focusable */
-    .jd{
-      white-space:pre-wrap; font-size:14px; line-height:1.5;
-      max-height:320px; overflow:auto; padding:10px;
-      border:1px solid #eee; border-radius:8px; background:#fff;
-      scrollbar-gutter:stable;
-    }
+    .jd{ white-space:pre-wrap; font-size:14px; line-height:1.5; max-height:320px; overflow:auto; padding:10px;
+      border:1px solid #eee; border-radius:8px; background:#fff; scrollbar-gutter:stable; }
     .jd:focus{ outline:2px solid #c7d2fe; outline-offset:2px; }
 
-    /* Simple spinner + indeterminate bar for the run overlay */
+    /* --- Run overlay --- */
     .overlay{ position:fixed; inset:0; background:rgba(0,0,0,.35); display:none; align-items:center; justify-content:center; z-index:1001; }
     .overlay.open{ display:flex; }
-    .overlay-card{
-      width:min(580px, 92vw); background:#fff; border-radius:14px; border:1px solid #e5e5e5;
-      box-shadow:0 18px 60px rgba(0,0,0,.18); padding:18px;
-    }
-    .spinner{
-      width:34px; height:34px; border:3px solid #e5e7eb; border-top-color:#4f46e5;
-      border-radius:50%; animation:spin 1s linear infinite; margin-right:8px;
-    }
+    .overlay-card{ width:min(580px, 92vw); background:#fff; border-radius:14px; border:1px solid #e5e5e5;
+      box-shadow:0 18px 60px rgba(0,0,0,.18); padding:18px; }
+    .spinner{ width:34px; height:34px; border:3px solid #e5e7eb; border-top-color:#4f46e5; border-radius:50%; animation:spin 1s linear infinite; margin-right:8px; }
     @keyframes spin{ to{ transform:rotate(360deg) } }
     .progress{ width:100%; height:8px; background:#f1f5f9; border-radius:999px; overflow:hidden; }
     .progress > .bar{ height:100%; width:30%; background:linear-gradient(90deg,#4f46e5,#4338ca); animation:indet 1.4s linear infinite; }
@@ -56,7 +41,16 @@
       100%{ transform:translateX(100%); width:30%; }
     }
 
-    /* Small utilities used locally */
+    /* Floating FAB to reopen overlay */
+    .fab{
+      position:fixed; right:16px; bottom:16px; z-index:1002;
+      padding:10px 14px; border:1px solid #c7d2fe; background:#eef2ff; color:#1f2a6b;
+      border-radius:999px; cursor:pointer; display:none;
+      box-shadow:0 6px 18px rgba(0,0,0,.12);
+    }
+    .fab.open{ display:inline-block; }
+
+    /* small utilities */
     .container{ max-width:1100px; margin:0 auto; padding:0 12px; }
     .section{ margin:20px 0 40px; }
     .row{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
@@ -68,7 +62,7 @@
     .muted{ color:#666; }
     .cards{ display:grid; gap:12px; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
 
-    /* Modal (diff) shell (unchanged) */
+    /* Modal (diff) */
     .modal{ position:fixed; inset:0; background:rgba(0,0,0,.35); display:none; align-items:center; justify-content:center; z-index:1000; }
     .modal.open{ display:flex; }
     .modal-content{ width:min(980px,92vw); max-height:86vh; overflow:auto; background:#fff; border-radius:12px; box-shadow:0 8px 30px rgba(0,0,0,.2); }
@@ -164,7 +158,7 @@
       </ol>
     </section>
 
-    <!-- Power Edit -->
+    <!-- Power Edit card -->
     <section class="card mt-4" id="powerEditCard">
       <div class="row" style="justify-content:space-between">
         <div>
@@ -180,7 +174,7 @@
       </div>
     </section>
 
-    <!-- Applications tracker (collapsible) -->
+    <!-- Applications tracker -->
     <details id="tracker" class="card hidden mt-4">
       <summary>
         <div class="sum-left">
@@ -197,7 +191,7 @@
       </div>
     </details>
 
-    <!-- Shortlist (collapsible) -->
+    <!-- Shortlist -->
     <details id="shortlist" class="card hidden mt-4">
       <summary>
         <div class="sum-left">
@@ -212,8 +206,7 @@
         </div>
         <table id="jobs" class="hidden">
           <thead><tr><th>Score</th><th>Title</th><th>Company</th><th>Location</th><th>Posted</th></tr></thead>
-          <tbody></tbody>
-        </table>
+        <tbody></tbody></table>
         <div id="noData" class="muted">No shortlist yet.</div>
       </div>
     </details>
@@ -222,13 +215,12 @@
     <section id="materials" class="card hidden mt-4">
       <h2>Your generated materials</h2>
       <p class="muted">Created by “Draft covers & tailored resumes”.</p>
-
       <h3 style="margin-top:8px">JD-aware previews</h3>
       <div id="cards" class="cards"></div>
     </section>
   </main>
 
-  <!-- Run overlay (indeterminate) -->
+  <!-- Run overlay -->
   <div id="runOverlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="runTitle" aria-describedby="runDesc">
     <div class="overlay-card">
       <div class="row" style="margin-bottom:10px">
@@ -246,6 +238,9 @@
       <div id="eta" class="muted" style="margin-top:8px" aria-live="polite"></div>
     </div>
   </div>
+
+  <!-- FAB to reopen overlay -->
+  <button id="runFab" class="fab" aria-live="polite" title="Show progress">Show progress</button>
 
   <!-- Change Log Modal -->
   <div id="change-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="changeTitle">
@@ -265,9 +260,8 @@
   </script>
   <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
   <!-- IMPORTANT: absolute path for GitHub Pages project sites -->
-  <script defer src="/job-copilot/profile.js?v=2025-10-20-eta"></script>
+  <script defer src="/job-copilot/profile.js?v=2025-10-21-overlay"></script>
 
-  <!-- Feedback widget -->
   <script defer src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script defer src="js/feedback.js?v=2025-10-12"></script>
 </body>
