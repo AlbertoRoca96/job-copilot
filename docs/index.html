@@ -7,36 +7,54 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <main class="wrap">
+    <header class="nav" aria-label="Primary">
+      <div class="brand">
+        <div class="logo" aria-hidden="true"></div>
+        job-copilot
+      </div>
+      <div class="links">
+        <a href="profile.html">Profile</a>
+        <a href="power-edit.html">Power&nbsp;Edit</a>
+        <a href="feedback.html" class="pill">Feedback</a>
+      </div>
+    </header>
 
-  <!-- Topbar -->
-  <div class="topbar">
-    <div class="container nav">
-      <div class="brand"><a href="./">job-copilot</a></div>
-      <div class="spacer"></div>
-      <nav class="nav-links">
-        <a class="btn" href="profile.html">Profile</a>
-        <a class="btn" href="power-edit.html">Power Edit</a>
-        <a class="btn" href="login.html">Sign in</a>
-        <a class="btn btn-ghost" href="feedback.html">Feedback</a>
-      </nav>
-    </div>
-  </div>
-
-  <main class="container stack-24">
     <section class="hero">
-      <h1 class="h1">Your AI copilot for better job applications</h1>
-      <p class="lead">Upload your resume and paste any job description. Get an instant score, gap analysis, and
-        JD-aware rewrites that preserve your document’s original styles—ready to export.</p>
-      <div class="actions">
-        <a class="btn btn-primary" href="profile.html">Go to Profile</a>
-        <a class="btn" href="power-edit.html">Open Power Edit</a>
-        <a class="btn btn-ghost" href="feedback.html">Give Feedback</a>
+      <h1>Tailor your resume to every job — instantly</h1>
+      <p>
+        Upload your .docx, paste a JD, and watch your match score, gap analysis,
+        and suggested inserts update in real-time. Export keeps your original DOCX formatting.
+      </p>
+      <div class="hero-ctas">
+        <a class="btn primary" href="power-edit.html">Open Power Edit</a>
+        <a class="btn ghost" href="profile.html">Go to Profile</a>
+        <span class="score-badge" title="Example score badge">Score · 89%</span>
       </div>
     </section>
 
-    <section class="card">
-      <div class="h2">Tip</div>
-      <p class="hint">Sign in on the Profile page to see your private shortlist and generated materials.</p>
+    <section class="section grid-3">
+      <div class="card">
+        <h3>ATS-aware</h3>
+        <p class="muted">Keep lists, sections, and layout clean while exporting with original DOCX paragraph styles.</p>
+      </div>
+      <div class="card">
+        <h3>Live match & gaps</h3>
+        <p class="muted">Paste a JD or fetch by URL to get instant scoring plus concrete inserts to close gaps.</p>
+      </div>
+      <div class="card">
+        <h3>One-click drafts</h3>
+        <p class="muted">Draft role-specific cover letters and polished resumes for your top targets.</p>
+      </div>
+    </section>
+
+    <section class="section card">
+      <p class="muted" style="margin:0">Tip: Sign in on the Profile page to see your private shortlist and generated materials.</p>
+      <div class="sep"></div>
+      <div class="center">
+        <a class="btn primary" href="profile.html">Go to Profile</a>
+        <a class="btn" href="feedback.html">Give Feedback</a>
+      </div>
     </section>
   </main>
 
