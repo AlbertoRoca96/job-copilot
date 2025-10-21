@@ -1,6 +1,6 @@
 // docs/profile.js — auth + profile + shortlist + drafting + JD-aware preview cards + Applications Tracker
-// Collapsible sections: Applications tracker & Your shortlist (details/summary). JD excerpt: scrollable + focusable.
-// Uses supabase.functions.invoke(...) for request-run / request-draft.
+// Collapsible sections (details/summary). JD excerpt: scrollable + focusable.
+// Adds: "Run overlay" with spinner, live ETA text, and polling for shortlist readiness.
 
 (async function () {
   await new Promise((r) => window.addEventListener("load", r));
@@ -16,9 +16,7 @@
     await new Promise((resolve, reject) => {
       const s = document.createElement("script");
       s.src = "https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js";
-      s.defer = true;
-      s.onload = resolve;
-      s.onerror = reject;
+      s.defer = true; s.onload = resolve; s.onerror = reject;
       document.head.appendChild(s);
     });
     return window.supabase;
@@ -67,6 +65,12 @@
   const runMsg = $("runMsg");
   const refresh = $("refresh");
 
+  // run overlay
+  const runOverlay = $("runOverlay");
+  const overlayHide = $("overlayHide");
+  const overlayRefresh = $("overlayRefresh");
+  const etaEl = $("eta");
+
   // drafts
   const runDrafts = $("runDrafts");
   const draftMsg = $("draftMsg");
@@ -77,28 +81,24 @@
   const changeBody = changeModal?.querySelector(".modal-body");
   const changeClose = changeModal?.querySelector(".close");
   if (changeClose) changeClose.onclick = () => changeModal.classList.remove("open");
-  if (changeModal)
-    changeModal.addEventListener("click", (e) => {
-      if (e.target === changeModal) changeModal.classList.remove("open");
-    });
+  if (changeModal) changeModal.addEventListener("click", (e) => { if (e.target === changeModal) changeModal.classList.remove("open"); });
 
   // ---------- helpers ----------
   const getUser = () => supabase.auth.getUser().then((r) => r.data.user || null);
   const getSession = () => supabase.auth.getSession().then((r) => r.data.session || null);
 
   const pills = (arr) =>
-    Array.isArray(arr) && arr.length
-      ? arr.map((x) => `<span class="pill">${String(x)}</span>`).join(" ")
-      : "—";
+    Array.isArray(arr) && arr.length ? arr.map((x) => `<span class="pill">${String(x)}</span>`).join(" ") : "—";
 
-  const esc = (s) =>
-    String(s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  const esc = (s) => String(s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
   const truncate = (s, n) => (s && s.length > n ? s.slice(0, n) + "…" : s || "");
 
   const sign = async (bucket, key, expires = 60) => {
     const { data, error } = await supabase.storage.from(bucket).createSignedUrl(key, expires);
     return error ? null : data?.signedUrl || null;
   };
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   async function fetchJSON(url) {
     const r = await fetch(url, { cache: "no-store" });
@@ -113,21 +113,17 @@
 
   // ---------- auth gate ----------
   const user = await getUser();
-  if (!user) {
-    signinOnly?.classList.remove("hidden");
-    return;
-  }
+  if (!user) { signinOnly?.classList.remove("hidden"); return; }
   who.textContent = `Signed in as ${user.email || user.id}`;
   profBox?.classList.remove("hidden");
   onboard?.classList.remove("hidden");
 
   // Reveal auth-gated sections
   signinOnly?.classList.add("hidden");
-  document.getElementById("powerEditCard")?.classList.remove("hidden");
+  $("powerEditCard")?.classList.remove("hidden");
 
   // ---------- load profile ----------
-  const { data: prof, error: profErr } = await supabase
-    .from("profiles").select("*").eq("id", user.id).single();
+  const { data: prof, error: profErr } = await supabase.from("profiles").select("*").eq("id", user.id).single();
 
   if (!profErr && prof) {
     $("full_name").textContent = prof?.full_name || "—";
@@ -136,7 +132,6 @@
     $("skills").innerHTML = pills(prof?.skills || []);
     $("titles").innerHTML = pills(prof?.target_titles || []);
     $("locs").innerHTML = pills(prof?.locations || []);
-
     const pol = prof?.search_policy || {};
     $("policy").textContent = [
       `recency_days=${pol.recency_days ?? 0}`,
@@ -147,7 +142,7 @@
 
     // fill form
     titlesInput.value = (prof?.target_titles || []).join(", ");
-    locsInput.value   = (prof?.locations || []).join(", ");
+    locsInput.value = (prof?.locations || []).join(", ");
     recencyInput.value = String(pol?.recency_days ?? 0);
     remoteOnlyCb.checked = !!pol?.remote_only;
     requirePostCb.checked = !!pol?.require_posted_date;
@@ -168,9 +163,58 @@
 
     const { error: metaErr } = await supabase.from("resumes").insert({ user_id: user.id, bucket: "resumes", path });
     if (metaErr) { upMsg.textContent = "Upload metadata error: " + metaErr.message; return; }
-
     upMsg.textContent = "Uploaded.";
   };
+
+  // ---------- Run overlay helpers ----------
+  let etaTimer = null;
+  let pollTimer = null;
+  function openRunOverlay() {
+    runOverlay?.classList.add("open");
+    const started = Date.now();
+    // Update ETA line every second (polite live region)
+    clearInterval(etaTimer);
+    etaTimer = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - started) / 1000);
+      const m = String(Math.floor(elapsed / 60)).padStart(1, "0");
+      const s = String(elapsed % 60).padStart(2, "0");
+      // Tell users typical window and elapsed time
+      if (etaEl) etaEl.textContent = `Elapsed ${m}:${s}. Typical runtime is 3–8 minutes. We’ll auto-refresh when results are ready.`;
+    }, 1000);
+  }
+  function closeRunOverlay() {
+    runOverlay?.classList.remove("open");
+    clearInterval(etaTimer); etaTimer = null;
+    clearInterval(pollTimer); pollTimer = null;
+  }
+
+  overlayHide?.addEventListener("click", () => closeRunOverlay());
+  overlayRefresh?.addEventListener("click", async () => { await loadShortlist(); });
+
+  // Poll storage for shortlist readiness (scores.json exists + non-empty)
+  async function startShortlistPolling() {
+    clearInterval(pollTimer);
+    pollTimer = setInterval(async () => {
+      try {
+        const u = await getUser();
+        if (!u) return;
+        const key = `${u.id}/scores.json`;
+        const url = await sign("outputs", key, 30);
+        if (!url) return;
+        const res = await fetch(url, { cache: "no-cache" });
+        if (!res.ok) return;
+        const arr = await res.json().catch(() => []);
+        if (Array.isArray(arr) && arr.length) {
+          // Found it!
+          closeRunOverlay();
+          await loadShortlist();
+          // Open the shortlist panel and scroll it into view
+          if (shortlist && !shortlist.open) shortlist.open = true;
+          shortlist?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      } catch { /* noop */ }
+    }, 12000); // every 12s
+  }
 
   // ---------- run crawl & rank ----------
   runBtn.onclick = async () => {
@@ -185,8 +229,7 @@
       const { error } = await supabase.from("profiles").update({ target_titles: titles, locations: locs }).eq("id", user.id);
       if (error) throw error;
     } catch (e) {
-      runMsg.textContent = "Save failed: " + String(e.message || e);
-      return;
+      runMsg.textContent = "Save failed: " + String(e.message || e); return;
     }
 
     // Queue shortlist job
@@ -199,8 +242,11 @@
         body: { note: "user run from profile", search_policy: { recency_days: recencyDays, require_posted_date: requirePosted, remote_only: remoteOnly } }
       });
       if (error) { runMsg.textContent = `Error: ${error.message || "invoke failed"}`; return; }
-      runMsg.textContent = `Queued: ${data?.request_id || "ok"}`;
-      setTimeout(() => { loadShortlist(); }, 3000);
+
+      // UX: open overlay and begin polling until scores.json is ready
+      runMsg.textContent = `Queued: ${data?.request_id || "ok"} — building your shortlist (3–8 minutes)…`;
+      openRunOverlay();
+      startShortlistPolling();
     } catch (e) {
       runMsg.textContent = "Error: " + String(e);
     }
@@ -243,7 +289,7 @@
     try {
       const res = await fetch(url, { cache: "no-cache" });
       if (res.ok) arr = await res.json();
-    } catch {}
+    } catch { /* ignore */ }
 
     if (!Array.isArray(arr) || arr.length === 0) {
       shortlist?.classList.remove("hidden");
@@ -265,19 +311,14 @@
       const tdTitle = document.createElement("td");
       const a = document.createElement("a");
       a.href = j.url || j.link || j.jd_url || "#";
-      a.target = "_blank";
-      a.rel = "noopener";
-      a.textContent = j.title || "(no title)";
-      tdTitle.appendChild(a);
-      tr.appendChild(tdTitle);
+      a.target = "_blank"; a.rel = "noopener"; a.textContent = j.title || "(no title)";
+      tdTitle.appendChild(a); tr.appendChild(tdTitle);
 
       const tdCompany = document.createElement("td");
-      tdCompany.textContent = j.company || "";
-      tr.appendChild(tdCompany);
+      tdCompany.textContent = j.company || ""; tr.appendChild(tdCompany);
 
       const tdLoc = document.createElement("td");
-      tdLoc.textContent = (j.location || "").trim();
-      tr.appendChild(tdLoc);
+      tdLoc.textContent = (j.location || "").trim(); tr.appendChild(tdLoc);
 
       const tdPosted = document.createElement("td");
       tdPosted.textContent = j.posted_at ? String(j.posted_at).slice(0, 10) : "—";
@@ -301,10 +342,7 @@
     const anchor = String(it.anchor || "");
     const reason = String(it.reason || "");
 
-    const afterHTML = esc(after).replace(
-      esc(added),
-      `<span class="change-insert">${esc(added)}</span>`
-    );
+    const afterHTML = esc(after).replace(esc(added), `<span class="change-insert">${esc(added)}</span>`);
 
     return `
       <div class="change-card">
@@ -361,7 +399,7 @@
     try {
       const res = await fetch(ixUrl, { cache: "no-cache" });
       if (res.ok) index = await res.json();
-    } catch {}
+    } catch { /* ignore */ }
 
     const clean = (arr) => (Array.isArray(arr) ? arr.filter(Boolean) : []);
     const changes = clean(index.changes);
@@ -372,7 +410,6 @@
     for (const fname of changes) {
       try {
         const slug = fname.replace(/\.json$/, "");
-
         const changeUrl = await sign("outputs", `${u.id}/changes/${fname}`, 60);
         if (!changeUrl) continue;
 
@@ -389,10 +426,7 @@
         const resumeUrl = resumeRel ? await sign("outputs", `${u.id}/${resumeRel}`, 60) : null;
         const jdUrl     = await sign("outputs", `${u.id}/${jdTextRel}`, 60);
 
-        const [coverMd, jdTxt] = await Promise.all([
-          coverUrl ? fetchText(coverUrl) : "",
-          jdUrl ? fetchText(jdUrl) : "",
-        ]);
+        const [coverMd, jdTxt] = await Promise.all([ coverUrl ? fetchText(coverUrl) : "", jdUrl ? fetchText(jdUrl) : "" ]);
 
         const themes = (change.cover_meta?.company_themes || []).slice(0, 6);
 
@@ -408,26 +442,20 @@
 
         if (resumeUrl) {
           const a = document.createElement("a");
-          a.className = "btn";
-          a.href = resumeUrl;
-          a.target = "_blank";
-          a.rel = "noopener";
-          a.textContent = "Resume (.docx)";
+          a.className = "btn"; a.href = resumeUrl; a.target = "_blank"; a.rel = "noopener"; a.textContent = "Resume (.docx)";
           head.appendChild(a);
         }
 
         const viewChanges = document.createElement("button");
-        viewChanges.className = "btn";
-        viewChanges.textContent = "View Change Log";
+        viewChanges.className = "btn"; viewChanges.textContent = "View Change Log";
         viewChanges.onclick = () => openChangeModal(changeUrl);
         head.appendChild(viewChanges);
-
         card.appendChild(head);
 
         const grid = document.createElement("div");
         grid.className = "grid2";
 
-        // JD excerpt: make region scrollable & keyboard focusable
+        // JD excerpt: scrollable + focusable region
         const left = document.createElement("div");
         left.className = "pane";
         left.innerHTML =
@@ -440,22 +468,14 @@
         if (themes.length) {
           const ul = document.createElement("ul");
           ul.className = "bullets";
-          themes.forEach((t) => {
-            const li = document.createElement("li");
-            li.textContent = t;
-            ul.appendChild(li);
-          });
+          themes.forEach((t) => { const li = document.createElement("li"); li.textContent = t; ul.appendChild(li); });
           right.appendChild(ul);
         } else {
           const none = document.createElement("div");
-          none.className = "muted";
-          none.textContent = "No themes detected.";
-          right.appendChild(none);
+          none.className = "muted"; none.textContent = "No themes detected."; right.appendChild(none);
         }
 
-        grid.appendChild(left);
-        grid.appendChild(right);
-        card.appendChild(grid);
+        grid.appendChild(left); grid.appendChild(right); card.appendChild(grid);
 
         const details = document.createElement("details");
         details.className = "cover";
@@ -464,19 +484,13 @@
         details.appendChild(summary);
 
         const pre = document.createElement("pre");
-        pre.className = "mono";
-        pre.textContent = coverMd || "(cover not found)";
+        pre.className = "mono"; pre.textContent = coverMd || "(cover not found)";
         details.appendChild(pre);
 
         if (coverUrl) {
           const open = document.createElement("a");
-          open.className = "btn";
-          open.href = coverUrl;
-          open.target = "_blank";
-          open.rel = "noopener";
-          open.textContent = "Open cover";
-          details.appendChild(document.createTextNode(" "));
-          details.appendChild(open);
+          open.className = "btn"; open.href = coverUrl; open.target = "_blank"; open.rel = "noopener"; open.textContent = "Open cover";
+          details.appendChild(document.createTextNode(" ")); details.appendChild(open);
         }
 
         card.appendChild(details);
@@ -489,7 +503,6 @@
     cardsEl.innerHTML = "";
     if (cards.length) cards.forEach((c) => cardsEl.appendChild(c));
     else cardsEl.innerHTML = `<div class="muted">No drafts yet.</div>`;
-
     materials?.classList.remove("hidden");
   }
 
@@ -499,9 +512,7 @@
     const div = document.createElement("div");
     for (const s of STATUS_ORDER) {
       const b = document.createElement("button");
-      b.className = "btn";
-      b.disabled = s === current;
-      b.textContent = s;
+      b.className = "btn"; b.disabled = s === current; b.textContent = s;
       b.onclick = async () => {
         try {
           const { error } = await supabase.from("applications").insert([
