@@ -121,7 +121,7 @@
 
   // Reveal cards that are auth-gated
   signinOnly?.classList.add("hidden");
-  document.getElementById("matchCard")?.classList.remove("hidden");
+  // (matchCard removed)
   document.getElementById("powerEditCard")?.classList.remove("hidden");
 
   // ---------- load profile ----------
