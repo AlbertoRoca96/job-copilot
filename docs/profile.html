@@ -5,154 +5,123 @@
   <title>job-copilot — Profile</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="style.css" />
-
-  <style>
-    .wrap { max-width: 1100px; margin: 20px auto; padding: 0 12px; }
-    .card { border:1px solid #e5e5e5; border-radius:12px; padding:16px; background:#fcfcfc; }
-    .muted { color:#666; } .hidden { display:none; }
-    .pill { display:inline-block; padding:2px 8px; margin:2px; border:1px solid #e0e0e0; border-radius:999px; font-size:12px; background:#f6f6f6; }
-    dt { font-weight:600; } dd { margin:0 0 10px 0; }
-    .btn { padding:6px 10px; border:1px solid #ccc; background:#fff; border-radius:8px; cursor:pointer; text-decoration:none; display:inline-block; }
-    table { width:100%; border-collapse:collapse; }
-    th, td { border-bottom:1px solid #eee; padding:6px 8px; text-align:left; }
-    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-    .ctl { margin:6px 8px 0 0; min-width:280px; }
-
-    /* Preview cards */
-    .cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
-    .card .card-head { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:10px; }
-    .card .title { font-weight:600; font-size:15px; }
-    .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
-    .pane { background:#fff; border:1px solid #eee; border-radius:10px; padding:10px; }
-    .pane .small { font-size:12px; }
-
-    /* JD excerpt: compact + scrollable */
-    .jd { white-space: pre-wrap; font-size: 13px; line-height: 1.35; max-height: 220px; overflow: auto; padding: 8px; border: 1px solid #eee; border-radius: 8px; background: #fff; }
-
-    .bullets { margin:6px 0 0 18px; }
-    .mono { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; background:#fff; border:1px dashed #eee; padding:10px; border-radius:8px; }
-    details.cover summary { cursor: pointer; margin-top: 8px; }
-
-    /* Changes modal */
-    .modal { position:fixed; inset:0; background:rgba(0,0,0,.35); display:none; align-items:center; justify-content:center; z-index:1000; }
-    .modal.open { display:flex; }
-    .modal-content { width:min(980px, 92vw); max-height:86vh; overflow:auto; background:#fff; border-radius:12px; box-shadow:0 8px 30px rgba(0,0,0,.2); }
-    .modal-header { display:flex; justify-content:space-between; align-items:center; padding:12px 14px; border-bottom:1px solid #eee; position:sticky; top:0; background:#fff; }
-    .modal-body { padding:14px; }
-
-    .change-card { border:1px solid #eee; border-radius:8px; padding:10px; margin-bottom:10px; background:#fafafa; }
-    .change-title { font-weight:600; margin-bottom:6px; }
-    .change-insert { display:inline-block; padding:2px 6px; font-size:12px; border:1px solid #ddd; border-radius:999px; background:#e6ffed; margin:6px 0; }
-    .change-reason { color:#555; font-size:12px; margin-top:6px; }
-    .change-card pre { white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; background:#fff; border:1px dashed #eee; padding:8px; border-radius:6px; }
-  </style>
 </head>
-
 <body>
-  <main class="wrap">
-    <h1>Your profile</h1>
-    <p class="muted">Parsed from your latest resume + saved targets. This page updates after each run.</p>
-    <p class="row"><a class="btn" href="feedback.html">Give Feedback</a></p>
 
-    <p id="signinOnly"><a href="login.html">Sign in</a> to view your profile.</p>
+  <!-- Topbar -->
+  <div class="topbar">
+    <div class="container nav">
+      <div class="brand"><a href="./">job-copilot</a></div>
+      <div class="spacer"></div>
+      <nav class="nav-links">
+        <a class="btn" href="power-edit.html" target="_blank" rel="noopener">Power Edit</a>
+        <a class="btn" href="login.html">Sign in</a>
+        <a class="btn btn-ghost" href="feedback.html">Feedback</a>
+      </nav>
+    </div>
+  </div>
+
+  <main class="container stack-24">
+    <header class="stack-16">
+      <h1 class="h1">Your profile</h1>
+      <p class="muted">Parsed from your latest resume + saved targets. This page updates after each run.</p>
+      <p class="row"><a class="btn btn-ghost" href="feedback.html">Give Feedback</a></p>
+      <p id="signinOnly"><a href="login.html">Sign in</a> to view your profile.</p>
+    </header>
 
     <!-- Profile info -->
     <section id="profile" class="card hidden" aria-live="polite">
-      <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
-        <span id="who"></span>
+      <div class="card-header">
+        <div id="who"></div>
         <a class="pill" href="./">← Back</a>
       </div>
 
-      <dl>
+      <dl style="display:grid; grid-template-columns: 1fr 1fr; gap:8px">
         <dt>Full name</dt><dd id="full_name">—</dd>
         <dt>Email</dt><dd id="email">—</dd>
         <dt>Phone</dt><dd id="phone">—</dd>
-        <dt>Skills</dt><dd id="skills">—</dd>
-        <dt>Desired titles</dt><dd id="titles">—</dd>
-        <dt>Locations</dt><dd id="locs">—</dd>
+        <dt>Skills</dt><dd id="skills" class="chips">—</dd>
+        <dt>Desired titles</dt><dd id="titles" class="chips">—</dd>
+        <dt>Locations</dt><dd id="locs" class="chips">—</dd>
         <dt>Search policy</dt><dd id="policy" class="muted">—</dd>
         <dt>Updated</dt><dd id="updated">—</dd>
       </dl>
     </section>
 
     <!-- Controls -->
-    <section id="onboard" class="card hidden" style="margin-top:16px">
-      <div class="row">
-        <strong>Update & run</strong>
+    <section id="onboard" class="card hidden section">
+      <div class="card-header">
+        <strong class="card-title">Update & run</strong>
         <button id="logout" class="btn">Sign out</button>
       </div>
 
-      <ol style="margin-top:8px">
-        <li style="margin:10px 0">
+      <ol class="stack-16" style="margin:0; padding-left:18px">
+        <li>
           <strong>Upload your resume (.docx)</strong><br/>
-          <input type="file" id="resume" accept=".docx" />
-          <button id="uploadResume" class="btn">Upload</button>
-          <span id="upMsg" class="muted"></span>
-        </li>
-
-        <li style="margin:10px 0">
-          <strong>Targets (saved to your profile)</strong><br/>
-          <label>Desired titles <small>(comma-separated)</small></label><br/>
-          <input id="desiredTitles" class="ctl" type="text" placeholder="Editor, Editorial Assistant" />
-          <label>Locations <small>(comma-separated)</small></label><br/>
-          <input id="desiredLocs" class="ctl" type="text" placeholder="Remote, Virginia, East Coast" />
-          <div class="row" style="margin-top:6px">
-            <label>Recency days</label>
-            <input id="recencyDays" class="ctl" type="number" min="0" value="0" style="max-width:120px" />
-            <label><input id="remoteOnly" type="checkbox" /> Remote-only</label>
-            <label><input id="requirePosted" type="checkbox" /> Require posted date</label>
+          <div class="row">
+            <input type="file" id="resume" accept=".docx" />
+            <button id="uploadResume" class="btn">Upload</button>
+            <span id="upMsg" class="muted"></span>
           </div>
         </li>
 
-        <li style="margin:10px 0">
-          <strong>Run crawl & rank</strong><br/>
-          <button id="runTailor" class="btn">Run my shortlist</button>
-          <span id="runMsg" class="muted"></span>
+        <li>
+          <strong>Targets (saved to your profile)</strong>
+          <div class="grid" style="grid-template-columns: 1fr 1fr; gap:10px">
+            <div>
+              <label for="desiredTitles">Desired titles <small class="muted">(comma-separated)</small></label>
+              <input id="desiredTitles" class="ctl" type="text" placeholder="Editor, Editorial Assistant" />
+            </div>
+            <div>
+              <label for="desiredLocs">Locations <small class="muted">(comma-separated)</small></label>
+              <input id="desiredLocs" class="ctl" type="text" placeholder="Remote, Virginia, East Coast" />
+            </div>
+          </div>
+          <div class="row" style="margin-top:6px">
+            <label for="recencyDays">Recency days</label>
+            <input id="recencyDays" class="ctl" type="number" min="0" value="0" style="max-width:120px" />
+            <label class="row" style="gap:6px"><input id="remoteOnly" type="checkbox" /> Remote-only</label>
+            <label class="row" style="gap:6px"><input id="requirePosted" type="checkbox" /> Require posted date</label>
+          </div>
         </li>
 
-        <li style="margin:10px 0">
-          <strong>Draft covers & tailored resumes</strong><br/>
-          <label>Top roles to draft</label>
-          <input id="topN" class="ctl" type="number" min="1" max="20" value="5" style="max-width:120px" />
-          <button id="runDrafts" class="btn">Draft my materials</button>
-          <span id="draftMsg" class="muted"></span>
+        <li>
+          <strong>Run crawl & rank</strong><br/>
+          <div class="row">
+            <button id="runTailor" class="btn btn-primary">Run my shortlist</button>
+            <span id="runMsg" class="muted"></span>
+          </div>
+        </li>
+
+        <li>
+          <strong>Draft covers & tailored resumes</strong>
+          <div class="row">
+            <label for="topN">Top roles to draft</label>
+            <input id="topN" class="ctl" type="number" min="1" max="20" value="5" style="max-width:120px" />
+            <button id="runDrafts" class="btn">Draft my materials</button>
+            <span id="draftMsg" class="muted"></span>
+          </div>
         </li>
       </ol>
     </section>
 
-    <!-- NEW: Match Report card -->
-    <section class="card hidden" id="matchCard" style="margin-top:16px">
-      <div class="row" style="justify-content:space-between">
+    <!-- Power Edit card (primary path) -->
+    <section class="card hidden section" id="powerEditCard">
+      <div class="card-header">
         <div>
-          <h2 style="margin:0 0 6px 0;">Match Report (live)</h2>
-          <p class="muted" style="margin:0">Paste any job description and see instant score & gap analysis. Opens in a new tab.</p>
+          <div class="card-title">Power Edit (resume)</div>
+          <div class="muted">Upload your .docx and paste a job description to get live score, gaps, coverage, and suggested inserts. Opens in a new tab.</div>
         </div>
         <div>
-          <a class="btn" href="match.html" target="_blank" rel="noopener" aria-label="Open Match Report in a new tab">Open Match Report</a>
-        </div>
-      </div>
-    </section>
-
-    <!-- NEW: Power Edit card -->
-    <section class="card hidden" id="powerEditCard" style="margin-top:16px">
-      <div class="row" style="justify-content:space-between">
-        <div>
-          <h2 style="margin:0 0 6px 0;">Power Edit (resume)</h2>
-          <p class="muted" style="margin:0">
-            Upload your .docx and paste a job description to get live score, gaps, coverage, and suggested inserts.
-            Opens in a new tab.
-          </p>
-        </div>
-        <div>
-          <a class="btn" href="power-edit.html" target="_blank" rel="noopener" aria-label="Open Power Edit in a new tab">Open Power Edit</a>
+          <a class="btn btn-primary" href="power-edit.html" target="_blank" rel="noopener" aria-label="Open Power Edit in a new tab">Open Power Edit</a>
         </div>
       </div>
     </section>
 
-    <!-- NEW: Applications tracker (cards + promote buttons) -->
-    <section id="tracker" class="card hidden" style="margin-top:16px">
-      <div class="row" style="justify-content:space-between">
-        <h2 style="margin:0">Applications tracker</h2>
+    <!-- Applications tracker -->
+    <section id="tracker" class="card hidden section">
+      <div class="card-header">
+        <div class="card-title">Applications tracker</div>
         <div class="row">
           <button id="refreshTracker" class="btn">Refresh</button>
         </div>
@@ -161,12 +130,15 @@
     </section>
 
     <!-- Shortlist -->
-    <section id="shortlist" class="card hidden" style="margin-top:16px">
-      <h2>Your shortlist</h2>
-      <div class="row" style="margin:6px 0">
-        <button id="refresh" class="btn">Refresh</button>
+    <section id="shortlist" class="card hidden section">
+      <div class="card-header">
+        <div class="card-title">Your shortlist</div>
+        <div class="row">
+          <button id="refresh" class="btn">Refresh</button>
+        </div>
       </div>
-      <table id="jobs" class="hidden">
+
+      <table id="jobs" class="table hidden">
         <thead><tr><th>Score</th><th>Title</th><th>Company</th><th>Location</th><th>Posted</th></tr></thead>
         <tbody></tbody>
       </table>
@@ -174,19 +146,19 @@
     </section>
 
     <!-- Generated materials -->
-    <section id="materials" class="card hidden" style="margin-top:16px">
-      <h2>Your generated materials</h2>
+    <section id="materials" class="card hidden section">
+      <div class="card-title">Your generated materials</div>
       <p class="muted">Created by “Draft covers & tailored resumes”.</p>
 
-      <h3 style="margin-top:8px">JD-aware previews</h3>
-      <div id="cards" class="cards"></div>
+      <h3 style="margin:8px 0 6px 0">JD-aware previews</h3>
+      <div id="cards" class="grid" style="grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap:12px"></div>
     </section>
   </main>
 
   <!-- Changes modal -->
-  <div id="change-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="changeTitle">
-    <div class="modal-content">
-      <div class="modal-header">
+  <div id="change-modal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="changeTitle" style="position:fixed; inset:0; background:rgba(0,0,0,.35); display:flex; align-items:center; justify-content:center; z-index:1000;">
+    <div class="card" style="width:min(980px,92vw); max-height:86vh; overflow:auto;">
+      <div class="card-header">
         <strong id="changeTitle">Resume change</strong>
         <button class="close btn" aria-label="Close">Close</button>
       </div>
@@ -203,11 +175,10 @@
   <!-- IMPORTANT: absolute path for GitHub Pages project sites -->
   <script defer src="/job-copilot/profile.js?v=2025-10-11-tracker"></script>
   <script>
-    // Defensive reveal in case of async timing; profile.js does the real gating
+    // Reveal only Power Edit (Match Report removed)
     window.addEventListener('load', () => {
       const signedIn = document.getElementById('signinOnly')?.classList.contains('hidden');
       if (signedIn) {
-        document.getElementById('matchCard')?.classList.remove('hidden');
         document.getElementById('powerEditCard')?.classList.remove('hidden');
       }
     });
