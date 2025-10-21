@@ -1,9 +1,8 @@
 // docs/profile.js — auth + profile + shortlist + drafting + JD-aware preview cards + Applications Tracker
+// Collapsible sections: Applications tracker & Your shortlist (details/summary). JD excerpt: scrollable + focusable.
 // Uses supabase.functions.invoke(...) for request-run / request-draft.
-// Adds: Tracker view via v_tracker_cards and status promotion by inserting into public.applications.
 
 (async function () {
-  // Wait for DOM
   await new Promise((r) => window.addEventListener("load", r));
 
   // ---------- Supabase bootstrap ----------
@@ -37,11 +36,14 @@
   const trackerBox = $("tracker");
   const trackerList = $("trackerList");
   const refreshTrackerBtn = $("refreshTracker");
+  const trackerCount = $("trackerCount");
 
   // Shortlist + materials
   const shortlist = $("shortlist");
   const jobsTable = $("jobs");
   const jobsBody = jobsTable?.querySelector("tbody");
+  const shortlistCount = $("shortlistCount");
+
   const materials = $("materials");
   const cardsEl = $("cards");
 
@@ -119,9 +121,8 @@
   profBox?.classList.remove("hidden");
   onboard?.classList.remove("hidden");
 
-  // Reveal cards that are auth-gated
+  // Reveal auth-gated sections
   signinOnly?.classList.add("hidden");
-  // (matchCard removed)
   document.getElementById("powerEditCard")?.classList.remove("hidden");
 
   // ---------- load profile ----------
@@ -146,7 +147,7 @@
 
     // fill form
     titlesInput.value = (prof?.target_titles || []).join(", ");
-    locsInput.value = (prof?.locations || []).join(", ");
+    locsInput.value   = (prof?.locations || []).join(", ");
     recencyInput.value = String(pol?.recency_days ?? 0);
     remoteOnlyCb.checked = !!pol?.remote_only;
     requirePostCb.checked = !!pol?.require_posted_date;
@@ -163,17 +164,10 @@
 
     const path = `${user.id}/current.docx`;
     const { error: upErr } = await supabase.storage.from("resumes").upload(path, file, { upsert: true });
-    if (upErr) {
-      upMsg.textContent = "Upload error: " + upErr.message;
-      return;
-    }
+    if (upErr) { upMsg.textContent = "Upload error: " + upErr.message; return; }
 
-    const { error: metaErr } = await supabase
-      .from("resumes").insert({ user_id: user.id, bucket: "resumes", path });
-    if (metaErr) {
-      upMsg.textContent = "Upload metadata error: " + metaErr.message;
-      return;
-    }
+    const { error: metaErr } = await supabase.from("resumes").insert({ user_id: user.id, bucket: "resumes", path });
+    if (metaErr) { upMsg.textContent = "Upload metadata error: " + metaErr.message; return; }
 
     upMsg.textContent = "Uploaded.";
   };
@@ -187,37 +181,24 @@
     // Save targets
     try {
       const titles = (titlesInput.value || "").split(",").map((s) => s.trim()).filter(Boolean);
-      const locs = (locsInput.value || "").split(",").map((s) => s.trim()).filter(Boolean);
-      const { error } = await supabase
-        .from("profiles")
-        .update({ target_titles: titles, locations: locs })
-        .eq("id", user.id);
+      const locs   = (locsInput.value   || "").split(",").map((s) => s.trim()).filter(Boolean);
+      const { error } = await supabase.from("profiles").update({ target_titles: titles, locations: locs }).eq("id", user.id);
       if (error) throw error;
     } catch (e) {
       runMsg.textContent = "Save failed: " + String(e.message || e);
       return;
     }
 
-    // Queue shortlist job (Edge Function)
+    // Queue shortlist job
     try {
       const recencyDays = Math.max(0, parseInt(recencyInput.value || "0", 10) || 0);
       const remoteOnly = !!remoteOnlyCb.checked;
       const requirePosted = !!requirePostCb.checked;
 
       const { data, error } = await supabase.functions.invoke("request-run", {
-        body: {
-          note: "user run from profile",
-          search_policy: {
-            recency_days: recencyDays,
-            require_posted_date: requirePosted,
-            remote_only: remoteOnly,
-          },
-        },
+        body: { note: "user run from profile", search_policy: { recency_days: recencyDays, require_posted_date: requirePosted, remote_only: remoteOnly } }
       });
-      if (error) {
-        runMsg.textContent = `Error: ${error.message || "invoke failed"}`;
-        return;
-      }
+      if (error) { runMsg.textContent = `Error: ${error.message || "invoke failed"}`; return; }
       runMsg.textContent = `Queued: ${data?.request_id || "ok"}`;
       setTimeout(() => { loadShortlist(); }, 3000);
     } catch (e) {
@@ -233,13 +214,8 @@
 
     const top = Math.max(1, Math.min(20, parseInt(topNInput.value || "5", 10) || 5));
     try {
-      const { data, error } = await supabase.functions.invoke("request-draft", {
-        body: { top },
-      });
-      if (error) {
-        draftMsg.textContent = `Error: ${error.message || "invoke failed"}`;
-        return;
-      }
+      const { data, error } = await supabase.functions.invoke("request-draft", { body: { top } });
+      if (error) { draftMsg.textContent = `Error: ${error.message || "invoke failed"}`; return; }
       draftMsg.textContent = `Drafts queued: ${data?.request_id || "ok"} (top=${data?.top || top})`;
       setTimeout(() => { loadMaterials(); }, 3000);
     } catch (e) {
@@ -259,6 +235,7 @@
       shortlist?.classList.remove("hidden");
       jobsTable?.classList.add("hidden");
       $("noData")?.classList.remove("hidden");
+      if (shortlistCount) shortlistCount.textContent = "0";
       return;
     }
 
@@ -272,6 +249,7 @@
       shortlist?.classList.remove("hidden");
       jobsTable?.classList.add("hidden");
       $("noData")?.classList.remove("hidden");
+      if (shortlistCount) shortlistCount.textContent = "0";
       return;
     }
 
@@ -308,17 +286,18 @@
       jobsBody?.appendChild(tr);
     }
 
+    if (shortlistCount) shortlistCount.textContent = String(arr.length);
     shortlist?.classList.remove("hidden");
     jobsTable?.classList.remove("hidden");
     $("noData")?.classList.add("hidden");
   }
 
-  // ---------- change-log modal (unchanged) ----------
+  // ---------- change-log modal ----------
   function renderChangeCard(it) {
     const before = String(it.original_paragraph_text || "");
-    const after = String(it.modified_paragraph_text || "");
-    const added = String(it.inserted_sentence || "");
-    const sec = String(it.anchor_section || "");
+    const after  = String(it.modified_paragraph_text || "");
+    const added  = String(it.inserted_sentence || "");
+    const sec    = String(it.anchor_section || "");
     const anchor = String(it.anchor || "");
     const reason = String(it.reason || "");
 
@@ -402,13 +381,13 @@
         const company = change.company || "(company)";
         const title = change.title || "(title)";
 
-        const coverRel = change.paths?.cover_md || `outbox/${slug}.md`;
+        const coverRel  = change.paths?.cover_md || `outbox/${slug}.md`;
         const resumeRel = change.paths?.resume_docx || null;
         const jdTextRel = change.paths?.jd_text || `changes/${slug}.jd.txt`;
 
-        const coverUrl = await sign("outputs", `${u.id}/${coverRel}`, 60);
+        const coverUrl  = await sign("outputs", `${u.id}/${coverRel}`, 60);
         const resumeUrl = resumeRel ? await sign("outputs", `${u.id}/${resumeRel}`, 60) : null;
-        const jdUrl = await sign("outputs", `${u.id}/${jdTextRel}`, 60);
+        const jdUrl     = await sign("outputs", `${u.id}/${jdTextRel}`, 60);
 
         const [coverMd, jdTxt] = await Promise.all([
           coverUrl ? fetchText(coverUrl) : "",
@@ -448,9 +427,12 @@
         const grid = document.createElement("div");
         grid.className = "grid2";
 
+        // JD excerpt: make region scrollable & keyboard focusable
         const left = document.createElement("div");
         left.className = "pane";
-        left.innerHTML = `<h3>JD excerpt</h3><div class="muted small">pulled from the posting</div><div class="jd">${esc(jdTxt || "")}</div>`;
+        left.innerHTML =
+          `<h3>JD excerpt</h3><div class="muted small">pulled from the posting</div>` +
+          `<div class="jd" tabindex="0" role="region" aria-label="Job description excerpt (scrollable)">${esc(jdTxt || "")}</div>`;
 
         const right = document.createElement("div");
         right.className = "pane";
@@ -550,11 +532,13 @@
     if (error) {
       trackerBox.classList.remove("hidden");
       trackerList.innerHTML = `<div class="muted">Tracker load error: ${esc(error.message)}</div>`;
+      if (trackerCount) trackerCount.textContent = "0";
       return;
     }
     if (!data || !data.length) {
       trackerBox.classList.remove("hidden");
       trackerList.innerHTML = `<div class="muted">No tracked applications yet.</div>`;
+      if (trackerCount) trackerCount.textContent = "0";
       return;
     }
 
@@ -585,7 +569,6 @@
       card.appendChild(meta);
 
       const controls = statusButtons(row.latest_status || "saved");
-      // attach job id for inserts
       controls.querySelectorAll("button").forEach(b => b.dataset.jobId = row.id);
       controls.style.marginTop = "8px";
       card.appendChild(controls);
@@ -593,6 +576,7 @@
       trackerList.appendChild(card);
     }
 
+    if (trackerCount) trackerCount.textContent = String(data.length);
     trackerBox.classList.remove("hidden");
   }
 
