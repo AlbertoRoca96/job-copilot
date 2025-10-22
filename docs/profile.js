@@ -1,9 +1,10 @@
-// docs/profile.js — overlay persists until job_requests finishes; hide shows FAB; resume after reload.
+// docs/profile.js — auth + profile + shortlist + drafting + tracker
+// Overlay now persists while hidden, and resumes across reloads until the run completes.
 
 (async function () {
   await new Promise((r) => window.addEventListener("load", r));
 
-  // ---------- Supabase bootstrap ----------
+  // ------------ Supabase ------------
   const SUPABASE_URL = window.SUPABASE_URL || "https://imozfqawxpsasjdmgdkh.supabase.co";
   const SUPABASE_ANON_KEY =
     window.SUPABASE_ANON_KEY ||
@@ -22,19 +23,19 @@
   const sbLib = await ensureSupabase();
   const supabase = sbLib.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-  // ---------- DOM ----------
+  // ------------ DOM ------------
   const $ = (id) => document.getElementById(id);
   const signinOnly = $("signinOnly");
   const profBox = $("profile");
   const onboard = $("onboard");
 
-  // Tracker
+  // tracker
   const trackerBox = $("tracker");
   const trackerList = $("trackerList");
   const refreshTrackerBtn = $("refreshTracker");
   const trackerCount = $("trackerCount");
 
-  // Shortlist + materials
+  // shortlist + materials
   const shortlist = $("shortlist");
   const jobsTable = $("jobs");
   const jobsBody = jobsTable?.querySelector("tbody");
@@ -46,7 +47,7 @@
   const who = $("who");
   const logout = $("logout");
 
-  // upload controls
+  // upload
   const resumeInput = $("resume");
   const uploadBtn = $("uploadResume");
   const upMsg = $("upMsg");
@@ -58,17 +59,16 @@
   const remoteOnlyCb = $("remoteOnly");
   const requirePostCb = $("requirePosted");
 
-  // runs
+  // run & overlay
   const runBtn = $("runTailor");
   const runMsg = $("runMsg");
   const refresh = $("refresh");
 
-  // run overlay
   const runOverlay = $("runOverlay");
   const overlayHide = $("overlayHide");
   const overlayRefresh = $("overlayRefresh");
-  const runFab = $("runFab");
   const etaEl = $("eta");
+  const progressFab = $("progressFab"); // new
 
   // drafts
   const runDrafts = $("runDrafts");
@@ -82,7 +82,7 @@
   if (changeClose) changeClose.onclick = () => changeModal.classList.remove("open");
   if (changeModal) changeModal.addEventListener("click", (e) => { if (e.target === changeModal) changeModal.classList.remove("open"); });
 
-  // ---------- helpers ----------
+  // ------------ helpers ------------
   const getUser = () => supabase.auth.getUser().then((r) => r.data.user || null);
   const getSession = () => supabase.auth.getSession().then((r) => r.data.session || null);
 
@@ -90,65 +90,52 @@
     Array.isArray(arr) && arr.length ? arr.map((x) => `<span class="pill">${String(x)}</span>`).join(" ") : "—";
 
   const esc = (s) => String(s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-  const truncate = (s, n) => (s && s.length > n ? s.slice(0, n) + "…" : s || "");
-
   const sign = async (bucket, key, expires = 60) => {
     const { data, error } = await supabase.storage.from(bucket).createSignedUrl(key, expires);
     return error ? null : data?.signedUrl || null;
   };
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function fetchText(url) { const r = await fetch(url, { cache: "no-store" }); return r.ok ? r.text() : ""; }
 
-  async function fetchJSON(url) {
-    const r = await fetch(url, { cache: "no-store" });
-    if (!r.ok) throw new Error(`${url} ${r.status}`);
-    return r.json();
-  }
-  async function fetchText(url) {
-    const r = await fetch(url, { cache: "no-store" });
-    if (!r.ok) return "";
-    return r.text();
-  }
-
-  // ---------- auth gate ----------
+  // ------------ auth gate ------------
   const user = await getUser();
   if (!user) { signinOnly?.classList.remove("hidden"); return; }
   who.textContent = `Signed in as ${user.email || user.id}`;
+  signinOnly?.classList.add("hidden");
   profBox?.classList.remove("hidden");
   onboard?.classList.remove("hidden");
   $("powerEditCard")?.classList.remove("hidden");
-  signinOnly?.classList.add("hidden");
 
-  // ---------- load profile ----------
-  const { data: prof, error: profErr } =
-    await supabase.from("profiles").select("*").eq("id", user.id).single();
+  // ------------ load profile ------------
+  {
+    const { data: prof, error: profErr } = await supabase.from("profiles").select("*").eq("id", user.id).single();
+    if (!profErr && prof) {
+      $("full_name").textContent = prof?.full_name || "—";
+      $("email").textContent = prof?.email || "—";
+      $("phone").textContent = prof?.phone || "—";
+      $("skills").innerHTML = pills(prof?.skills || []);
+      $("titles").innerHTML = pills(prof?.target_titles || []);
+      $("locs").innerHTML = pills(prof?.locations || []);
+      const pol = prof?.search_policy || {};
+      $("policy").textContent = [
+        `recency_days=${pol.recency_days ?? 0}`,
+        `require_posted_date=${!!pol.require_posted_date}`,
+        `remote_only=${!!pol.remote_only}`,
+      ].join(", ");
+      $("updated").textContent = (prof?.updated_at || prof?.created_at || "—").toString();
 
-  if (!profErr && prof) {
-    $("full_name").textContent = prof?.full_name || "—";
-    $("email").textContent = prof?.email || "—";
-    $("phone").textContent = prof?.phone || "—";
-    $("skills").innerHTML = pills(prof?.skills || []);
-    $("titles").innerHTML = pills(prof?.target_titles || []);
-    $("locs").innerHTML = pills(prof?.locations || []);
-    const pol = prof?.search_policy || {};
-    $("policy").textContent = [
-      `recency_days=${pol.recency_days ?? 0}`,
-      `require_posted_date=${!!pol.require_posted_date}`,
-      `remote_only=${!!pol.remote_only}`,
-    ].join(", ");
-    $("updated").textContent = (prof?.updated_at || prof?.created_at || "—").toString();
-
-    // fill form
-    titlesInput.value = (prof?.target_titles || []).join(", ");
-    locsInput.value = (prof?.locations || []).join(", ");
-    recencyInput.value = String(pol?.recency_days ?? 0);
-    remoteOnlyCb.checked = !!pol?.remote_only;
-    requirePostCb.checked = !!pol?.require_posted_date;
-  } else {
-    $("full_name").textContent = `Error: ${profErr?.message || "profile not found"}`;
+      titlesInput.value = (prof?.target_titles || []).join(", ");
+      locsInput.value = (prof?.locations || []).join(", ");
+      recencyInput.value = String(pol?.recency_days ?? 0);
+      remoteOnlyCb.checked = !!pol?.remote_only;
+      requirePostCb.checked = !!pol?.require_posted_date;
+    } else {
+      $("full_name").textContent = `Error: ${profErr?.message || "profile not found"}`;
+    }
   }
 
-  // ---------- upload resume ----------
+  // ------------ resume upload ------------
   uploadBtn.onclick = async () => {
     const session = await getSession();
     if (!session) return alert("Sign in first.");
@@ -164,98 +151,52 @@
     upMsg.textContent = "Uploaded.";
   };
 
-  // ---------- Run overlay state & watchers ----------
-  const LS_ACTIVE_REQ = "jc.active_request_id";
-  const LS_OVERLAY_HIDDEN = "jc.overlay_hidden";
+  // ================= OVERLAY & WATCHERS =================
+
+  // localStorage keys to persist the run across reloads
+  const LS_REQ = "jc.active_request";
+  const LS_HIDE = "jc.overlay_hidden";
 
   let etaTimer = null;
-  let pollTimer = null;        // storage polling
-  let reqPollTimer = null;     // DB polling
-  let realtimeChannel = null;
-  let runStartedAt = 0;        // ms epoch
-
-  function showFab(show) {
-    if (!runFab) return;
-    if (show) runFab.classList.add("open");
-    else runFab.classList.remove("open");
-  }
+  let pollTimer = null;
 
   function openRunOverlay() {
     runOverlay?.classList.add("open");
-    localStorage.setItem(LS_OVERLAY_HIDDEN, "0");
-    showFab(false);
+    progressFab?.classList.add("hidden");
 
-    runStartedAt = Date.now();
+    const started = Date.now();
     clearInterval(etaTimer);
     etaTimer = setInterval(() => {
-      const elapsed = Math.floor((Date.now() - runStartedAt) / 1000);
+      const elapsed = Math.floor((Date.now() - started) / 1000);
       const m = String(Math.floor(elapsed / 60));
       const s = String(elapsed % 60).padStart(2, "0");
       if (etaEl) etaEl.textContent = `Elapsed ${m}:${s}. Typical runtime is 3–8 minutes. We’ll auto-refresh when results are ready.`;
     }, 1000);
   }
 
-  function hideOverlayTemporarily() {
+  // Hide *without* stopping timers/polling
+  function hideOverlayOnly() {
     runOverlay?.classList.remove("open");
-    localStorage.setItem(LS_OVERLAY_HIDDEN, "1");
-    showFab(!!localStorage.getItem(LS_ACTIVE_REQ));
+    progressFab?.classList.remove("hidden");
+    localStorage.setItem(LS_HIDE, "1");
   }
 
-  function stopAllWatchers() {
+  // Stop everything when job is really done
+  function finishOverlay() {
+    runOverlay?.classList.remove("open");
+    progressFab?.classList.add("hidden");
     clearInterval(etaTimer); etaTimer = null;
     clearInterval(pollTimer); pollTimer = null;
-    clearInterval(reqPollTimer); reqPollTimer = null;
-    if (realtimeChannel) { supabase.removeChannel(realtimeChannel); realtimeChannel = null; }
+    localStorage.removeItem(LS_REQ);
+    localStorage.removeItem(LS_HIDE);
   }
 
-  function closeRunOverlayForGood() {
-    runOverlay?.classList.remove("open");
-    localStorage.removeItem(LS_ACTIVE_REQ);
-    localStorage.setItem(LS_OVERLAY_HIDDEN, "0");
-    showFab(false);
-    stopAllWatchers();
-  }
-
-  overlayHide?.addEventListener("click", () => hideOverlayTemporarily());
-  runFab?.addEventListener("click", () => openRunOverlay());
+  overlayHide?.addEventListener("click", () => hideOverlayOnly());
   overlayRefresh?.addEventListener("click", async () => { await loadShortlist(); });
+  progressFab?.addEventListener("click", () => { localStorage.removeItem(LS_HIDE); openRunOverlay(); });
 
-  // --- Watch job_requests row until status in {done,error}
-  async function watchRequestUntilDone(requestId) {
-    if (!requestId) return;
-
-    // Realtime if enabled for the table (recommended). :contentReference[oaicite:2]{index=2}
-    try {
-      realtimeChannel = supabase.channel(`rq-${requestId}`)
-        .on('postgres_changes', {
-          event: '*',
-          schema: 'public',
-          table: 'job_requests',
-          filter: `id=eq.${requestId}`
-        }, async (payload) => {
-          const st = payload.new?.status || payload.old?.status;
-          if (st === 'done' || st === 'error') {
-            // let storage poller confirm new artifact too, but we're done either way
-            await finalizeRun(st);
-          }
-        })
-        .subscribe();
-    } catch { /* ignore, fallback to polling */ }
-
-    // Also fallback poll every 10s (works without Realtime)
-    clearInterval(reqPollTimer);
-    reqPollTimer = setInterval(async () => {
-      const { data, error } = await supabase.from('job_requests')
-        .select('status,message').eq('id', requestId).maybeSingle();
-      if (error) return;
-      if (data?.status === 'done' || data?.status === 'error') {
-        await finalizeRun(data.status);
-      }
-    }, 10000);
-  }
-
-  // --- Poll Storage for a *fresh* scores.json to avoid closing on old files
-  async function startShortlistPolling() {
+  // Storage polling for outputs/<uid>/scores.json
+  async function pollForScoresJson() {
     clearInterval(pollTimer);
     pollTimer = setInterval(async () => {
       try {
@@ -266,44 +207,75 @@
         if (!url) return;
         const res = await fetch(url, { cache: "no-cache" });
         if (!res.ok) return;
-
-        // close only when the artifact is new (freshness guard)
-        const lastMod = res.headers.get('last-modified');
-        const lm = lastMod ? Date.parse(lastMod) : 0;
-        if (lm && lm + 30_000 < runStartedAt) return;
-
         const arr = await res.json().catch(() => []);
         if (Array.isArray(arr) && arr.length) {
-          await finalizeRun('done');
+          finishOverlay();
+          await loadShortlist();
+          if (shortlist && !shortlist.open) shortlist.open = true;
+          shortlist?.scrollIntoView({ behavior: "smooth", block: "start" });
         }
       } catch { /* noop */ }
     }, 12000);
   }
 
-  async function finalizeRun(status) {
-    stopAllWatchers();
-    await loadShortlist();
-    await loadMaterials();
-    // keep FAB hidden; clean active request id and overlay
-    closeRunOverlayForGood();
+  // Watch the job_requests row (best) and fall back to storage polling if RLS blocks it
+  async function watchJobRequest(requestId) {
+    // show overlay unless user previously hid it
+    if (!localStorage.getItem(LS_HIDE)) openRunOverlay(); else progressFab?.classList.remove("hidden");
 
-    if (status === 'error') {
-      runMsg.textContent = 'Run finished with an error — check logs.';
-    } else {
-      runMsg.textContent = 'Shortlist ready.';
-      // open shortlist and scroll to it
-      if (shortlist && !shortlist.open) shortlist.open = true;
-      shortlist?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
+    // try polling the job_requests row every ~10s; if blocked, fall back
+    let triedFallback = false;
+
+    clearInterval(pollTimer);
+    pollTimer = setInterval(async () => {
+      try {
+        const { data: jr, error } = await supabase
+          .from("job_requests")
+          .select("status")
+          .eq("id", requestId)
+          .maybeSingle(); // ok if 0 rows
+
+        if (error) throw error;
+
+        const status = jr?.status || null;
+        if (!status) {
+          // Not visible or gone: use storage-based readiness check
+          if (!triedFallback) { triedFallback = true; pollForScoresJson(); }
+          return;
+        }
+
+        if (status === "done") {
+          finishOverlay();
+          await loadShortlist();
+          if (shortlist && !shortlist.open) shortlist.open = true;
+          shortlist?.scrollIntoView({ behavior: "smooth", block: "start" });
+        } else if (status === "error") {
+          finishOverlay();
+          runMsg.textContent = "Job failed — check logs.";
+        }
+        // queued / running → keep waiting
+      } catch {
+        if (!triedFallback) { triedFallback = true; pollForScoresJson(); }
+      }
+    }, 10000);
   }
 
-  // ---------- run shortlist ----------
-  async function queueShortlistRun() {
+  // Resume a pending run on load
+  async function resumePendingWatcher() {
+    const rid = localStorage.getItem(LS_REQ);
+    if (!rid) return;
+    // if user hadn't explicitly hidden, show overlay immediately
+    if (!localStorage.getItem(LS_HIDE)) openRunOverlay(); else progressFab?.classList.remove("hidden");
+    watchJobRequest(rid);
+  }
+
+  // ------------ Run crawl & rank ------------
+  runBtn.onclick = async () => {
     const session = await getSession();
-    if (!session) { alert("Sign in first."); return; }
+    if (!session) return alert("Sign in first.");
     runMsg.textContent = "Saving & queuing…";
 
-    // Save targets
+    // Save targets first
     try {
       const titles = (titlesInput.value || "").split(",").map((s) => s.trim()).filter(Boolean);
       const locs   = (locsInput.value   || "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -313,37 +285,40 @@
       runMsg.textContent = "Save failed: " + String(e.message || e); return;
     }
 
-    // Queue shortlist job (edge function "request-run")
+    // Queue shortlist job
     try {
-      const recencyDays = Math.max(0, parseInt(recencyInput.value || "0", 10) || 0);
-      const remoteOnly = !!remoteOnlyCb.checked;
-      const requirePosted = !!requirePostCb.checked;
+      const recency_days   = Math.max(0, parseInt(recencyInput.value || "0", 10) || 0);
+      const remote_only    = !!remoteOnlyCb.checked;
+      const require_posted = !!requirePostCb.checked;
 
       const { data, error } = await supabase.functions.invoke("request-run", {
-        body: { note: "user run from profile", search_policy: { recency_days: recencyDays, require_posted_date: requirePosted, remote_only: remoteOnly } }
+        body: { note: "user run from profile",
+                search_policy: { recency_days, require_posted_date: require_posted, remote_only } }
       });
       if (error) { runMsg.textContent = `Error: ${error.message || "invoke failed"}`; return; }
 
-      const reqId = data?.request_id || null;
-      if (reqId) {
-        localStorage.setItem(LS_ACTIVE_REQ, reqId);
-        runMsg.textContent = `Queued: ${reqId} — building your shortlist (3–8 minutes)…`;
-      } else {
-        runMsg.textContent = `Queued — building your shortlist (3–8 minutes)…`;
-      }
+      const requestId = data?.request_id || null;
 
-      // UX: show overlay (+ start watchers)
-      openRunOverlay();
-      startShortlistPolling();
-      watchRequestUntilDone(reqId);
+      runMsg.textContent = `Queued: ${requestId || "ok"} — building your shortlist (3–8 minutes)…`;
+
+      // Persist + show overlay + start watcher(s)
+      if (requestId) {
+        localStorage.setItem(LS_REQ, requestId);
+        localStorage.removeItem(LS_HIDE);
+        openRunOverlay();
+        await sleep(50);
+        watchJobRequest(requestId);
+      } else {
+        // Fallback if function didn’t return id: just poll for scores.json
+        openRunOverlay();
+        pollForScoresJson();
+      }
     } catch (e) {
       runMsg.textContent = "Error: " + String(e);
     }
-  }
+  };
 
-  runBtn.onclick = queueShortlistRun;
-
-  // ---------- queue drafting ----------
+  // ------------ Drafting queue ------------
   runDrafts.onclick = async () => {
     const session = await getSession();
     if (!session) return alert("Sign in first.");
@@ -360,7 +335,7 @@
     }
   };
 
-  // ---------- shortlist loader ----------
+  // ------------ Shortlist loader ------------
   async function loadShortlist() {
     const u = await getUser();
     if (!u) return;
@@ -424,7 +399,7 @@
     $("noData")?.classList.add("hidden");
   }
 
-  // ---------- change-log modal ----------
+  // ------------ Change log modal ------------
   function renderChangeCard(it) {
     const before = String(it.original_paragraph_text || "");
     const after  = String(it.modified_paragraph_text || "");
@@ -432,9 +407,7 @@
     const sec    = String(it.anchor_section || "");
     const anchor = String(it.anchor || "");
     const reason = String(it.reason || "");
-
     const afterHTML = esc(after).replace(esc(added), `<span class="change-insert">${esc(added)}</span>`);
-
     return `
       <div class="change-card">
         <div class="change-title">
@@ -460,9 +433,7 @@
       const res = await fetch(jsonUrl, { cache: "no-cache" });
       if (!res.ok) throw new Error(`Fetch ${res.status}`);
       const obj = await res.json();
-
       const changes = Array.isArray(obj) ? obj : Array.isArray(obj?.changes) ? obj.changes : [];
-
       changeBody.innerHTML = changes.length
         ? changes.map(renderChangeCard).join("")
         : `<div class="muted">No granular changes recorded for this document.</div>`;
@@ -472,7 +443,7 @@
     changeModal.classList.add("open");
   }
 
-  // ---------- materials loader (cards only) ----------
+  // ------------ Materials loader (cards only) ------------
   async function loadMaterials() {
     const u = await getUser();
     if (!u) return;
@@ -504,7 +475,7 @@
         const changeUrl = await sign("outputs", `${u.id}/changes/${fname}`, 60);
         if (!changeUrl) continue;
 
-        const change = await fetchJSON(changeUrl);
+        const change = await (await fetch(changeUrl, { cache: "no-store" })).json().catch(() => ({}));
 
         const company = change.company || "(company)";
         const title = change.title || "(title)";
@@ -518,7 +489,6 @@
         const jdUrl     = await sign("outputs", `${u.id}/${jdTextRel}`, 60);
 
         const [coverMd, jdTxt] = await Promise.all([ coverUrl ? fetchText(coverUrl) : "", jdUrl ? fetchText(jdUrl) : "" ]);
-
         const themes = (change.cover_meta?.company_themes || []).slice(0, 6);
 
         const card = document.createElement("div");
@@ -596,7 +566,7 @@
     materials?.classList.remove("hidden");
   }
 
-  // ---------- Applications Tracker ----------
+  // ------------ Tracker ------------
   const STATUS_ORDER = ["saved", "applied", "interview", "offer", "rejected"];
   function statusButtons(current) {
     const div = document.createElement("div");
@@ -610,9 +580,7 @@
           ]);
           if (error) throw error;
           await loadTracker();
-        } catch (e) {
-          alert("Update failed: " + (e?.message || e));
-        }
+        } catch (e) { alert("Update failed: " + (e?.message || e)); }
       };
       div.appendChild(b);
     }
@@ -644,11 +612,22 @@
     }
 
     for (const row of data) {
-      const card = document.createElement("div"); card.className = "card";
-      const head = document.createElement("div"); head.className = "card-head";
-      const titleEl = document.createElement("div"); titleEl.className = "title";
-      titleEl.innerHTML = `${esc(row.company || "")} — ${esc(row.title || "")}`; head.appendChild(titleEl);
-      const badge = document.createElement("span"); badge.className = "pill"; badge.textContent = row.latest_status || "saved"; head.appendChild(badge);
+      const card = document.createElement("div");
+      card.className = "card";
+
+      const head = document.createElement("div");
+      head.className = "card-head";
+
+      const titleEl = document.createElement("div");
+      titleEl.className = "title";
+      titleEl.innerHTML = `${esc(row.company || "")} — ${esc(row.title || "")}`;
+      head.appendChild(titleEl);
+
+      const badge = document.createElement("span");
+      badge.className = "pill";
+      badge.textContent = row.latest_status || "saved";
+      head.appendChild(badge);
+
       card.appendChild(head);
 
       const meta = document.createElement("div");
@@ -672,7 +651,7 @@
 
   refreshTrackerBtn.onclick = loadTracker;
 
-  // ---------- refresh, resume, logout ----------
+  // ------------ refresh/init/logout ------------
   refresh.onclick = async () => {
     await loadShortlist();
     await loadMaterials();
@@ -683,15 +662,8 @@
   await loadMaterials();
   await loadTracker();
 
-  // Resume overlay if we still have an active request id
-  (function resumeIfActive() {
-    const reqId = localStorage.getItem(LS_ACTIVE_REQ);
-    if (!reqId) return;
-    const hidden = localStorage.getItem(LS_OVERLAY_HIDDEN) === "1";
-    if (!hidden) openRunOverlay(); else showFab(true);
-    startShortlistPolling();
-    watchRequestUntilDone(reqId);
-  })();
+  // If a run is in-flight, resume its watcher
+  await resumePendingWatcher();
 
   logout.onclick = async () => {
     await supabase.auth.signOut();
