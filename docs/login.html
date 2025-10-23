@@ -1,57 +1,46 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <title>job-copilot — Sign in</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light">
   <link rel="stylesheet" href="style.css" />
   <script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js" defer></script>
-  <style>
-    .card { max-width: 380px; margin: 10vh auto; border:1px solid #e5e5e5; border-radius:12px; padding:20px; background:#fff; box-shadow:0 6px 18px rgba(0,0,0,.06); }
-    h1 { margin: 0 0 12px; font-size: 22px; }
-    label { display:block; margin:8px 0 4px; font-weight:600; }
-    input[type="email"], input[type="password"], input[type="text"] { width:100%; padding:10px; border:1px solid #d9d9d9; border-radius:8px; }
-    .btn { width:100%; padding:10px 12px; border-radius:8px; border:1px solid #c7c7c7; background:#f8f8f8; cursor:pointer; font-weight:600; }
-    .btn.primary { background:#2d6cdf; color:#fff; border-color:#2d6cdf; }
-    .btn.row { display:block; margin-top:10px; }
-    .muted { color:#666; font-size:.9rem; }
-    .rowlink { text-align:center; margin-top:10px; }
-    .center { text-align:center; }
-    .sep { height:1px; background:#eee; margin:14px 0; }
-    .hidden { display:none; }
-  </style>
 </head>
 <body>
-  <div class="card">
-    <h1 class="center">Sign in</h1>
-    <p class="center" style="margin:-4px 0 10px 0"><a href="feedback.html">Give Feedback</a></p>
+  <a href="#main" class="skip-link">Skip to main content</a>
 
-    <!-- Standard auth -->
-    <label>Email</label>
-    <input id="email" type="email" placeholder="you@example.com" autocomplete="email" />
+  <main id="main">
+    <div class="card" role="form" aria-labelledby="title" style="max-width:380px; margin:10vh auto;">
+      <h1 id="title" class="center" style="margin:0 0 12px 0; font-size:22px;">Sign in</h1>
+      <p class="center" style="margin:-4px 0 10px 0"><a href="feedback.html">Give Feedback</a></p>
 
-    <label style="margin-top:8px">Password</label>
-    <input id="password" type="password" placeholder="••••••••" autocomplete="current-password" />
+      <label for="email">Email</label>
+      <input id="email" type="email" placeholder="you@example.com" autocomplete="email" required aria-required="true" />
 
-    <button id="signin" class="btn primary row">Sign in</button>
-    <button id="signup" class="btn row">Create account</button>
-    <button id="magic"  class="btn row">Send magic link</button>
-    <button id="forgot" class="btn row">Forgot password</button>
+      <label for="password" style="margin-top:8px">Password</label>
+      <input id="password" type="password" placeholder="••••••••" autocomplete="current-password" required aria-required="true" />
 
-    <div class="sep"></div>
+      <button id="signin" class="btn primary" type="button" style="width:100%; margin-top:10px">Sign in</button>
+      <button id="signup" class="btn" type="button" style="width:100%; margin-top:10px">Create account</button>
+      <button id="magic"  class="btn" type="button" style="width:100%; margin-top:10px">Send magic link</button>
+      <button id="forgot" class="btn" type="button" style="width:100%; margin-top:10px">Forgot password</button>
 
-    <!-- Password reset (shown after recovery link) -->
-    <div id="resetBox" class="hidden" aria-live="polite">
-      <label>New password</label>
-      <input id="newPw" type="password" placeholder="At least 8 characters" autocomplete="new-password" />
-      <label style="margin-top:8px">Confirm new password</label>
-      <input id="newPw2" type="password" placeholder="Repeat password" autocomplete="new-password" />
-      <button id="setPw" class="btn primary row">Set new password</button>
+      <div class="sep" aria-hidden="true" style="height:1px; background:#eee; margin:14px 0;"></div>
+
+      <div id="resetBox" class="hidden" aria-live="polite">
+        <label for="newPw">New password</label>
+        <input id="newPw" type="password" placeholder="At least 8 characters" autocomplete="new-password" />
+        <label for="newPw2" style="margin-top:8px">Confirm new password</label>
+        <input id="newPw2" type="password" placeholder="Repeat password" autocomplete="new-password" />
+        <button id="setPw" class="btn primary" type="button" style="width:100%; margin-top:10px">Set new password</button>
+      </div>
+
+      <div id="msg" class="status center" role="status" aria-live="polite" style="margin-top:10px;"></div>
+      <div class="rowlink" style="text-align:center; margin-top:10px;"><a href="./" aria-label="Back to start">← Back to start</a></div>
     </div>
-
-    <div id="msg" class="muted center" style="margin-top:10px;"></div>
-    <div class="rowlink"><a href="./">← Back to start</a></div>
-  </div>
+  </main>
 
   <script>
     window.addEventListener('load', async () => {
@@ -59,123 +48,78 @@
         'https://imozfqawxpsasjdmgdkh.supabase.co',
         'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc'
       );
-
       const msg = document.getElementById('msg');
       const emailEl = document.getElementById('email');
       const passEl  = document.getElementById('password');
-
       const resetBox = document.getElementById('resetBox');
       const newPw  = document.getElementById('newPw');
       const newPw2 = document.getElementById('newPw2');
 
-      const goHome = () => setTimeout(() => (window.location.href = './'), 250);
-
-      function parseHashKV() {
-        const h = (location.hash || '').replace(/^#/, '');
-        const out = {};
-        if (!h) return out;
-        h.split('&').forEach(kv => {
-          const [k,v] = kv.split('=');
-          if (k) out[decodeURIComponent(k)] = decodeURIComponent(v || '');
-        });
-        return out;
-      }
+      function say(s){ msg.textContent = s; }
+      function sayErr(s){ msg.innerHTML = '<span class="error" role="alert">'+ s +'</span>'; }
 
       async function finishRedirect() {
         const params = new URLSearchParams(location.search);
         const code = params.get('code');
-
-        if (code) {
-          await supabase.auth.exchangeCodeForSession(code);
-          history.replaceState({}, '', location.pathname);
-          return;
-        }
-
-        const hash = parseHashKV();
-        if (hash.access_token && hash.refresh_token) {
-          await supabase.auth.setSession({ access_token: hash.access_token, refresh_token: hash.refresh_token });
-          history.replaceState({}, '', location.pathname);
-        }
+        if (code) { await supabase.auth.exchangeCodeForSession(code); history.replaceState({}, '', location.pathname); return; }
+        const hash = Object.fromEntries((location.hash||'').replace(/^#/, '').split('&').filter(Boolean).map(p=>p.split('=').map(decodeURIComponent)));
+        if (hash.access_token && hash.refresh_token) { await supabase.auth.setSession({access_token:hash.access_token, refresh_token:hash.refresh_token}); history.replaceState({}, '', location.pathname); }
       }
-
       await finishRedirect();
 
       supabase.auth.onAuthStateChange((event) => {
         if (event === 'PASSWORD_RECOVERY') {
           resetBox.classList.remove('hidden');
-          msg.textContent = 'Enter a new password to finish resetting your account.';
+          say('Enter a new password to finish resetting your account.');
         }
       });
 
-      const hashKV = parseHashKV();
-      if ((hashKV.type || '').toLowerCase() === 'recovery') {
-        resetBox.classList.remove('hidden');
-        msg.textContent = 'Enter a new password to finish resetting your account.';
-        history.replaceState({}, '', location.pathname);
-      }
-
       const { data: { session } } = await supabase.auth.getSession();
-      if (session && resetBox.classList.contains('hidden') && (hashKV.access_token || new URLSearchParams(location.search).get('code'))) {
+      if (session && resetBox.classList.contains('hidden') && (new URLSearchParams(location.search).get('code') || location.hash.includes('access_token'))) {
         resetBox.classList.remove('hidden');
-        msg.textContent = 'Enter a new password to finish resetting your account.';
+        say('Enter a new password to finish resetting your account.');
       }
 
       document.getElementById('signin').onclick = async () => {
         const email = emailEl.value.trim(), password = passEl.value;
-        if (!email || !password) { msg.textContent = 'Provide email & password.'; return; }
+        if (!email || !password) { sayErr('Provide email & password.'); return; }
         const { error } = await supabase.auth.signInWithPassword({ email, password });
-        msg.textContent = error ? ('Error: ' + error.message) : 'Signed in!';
-        if (!error) goHome();
+        if (error) sayErr('Error: ' + error.message); else { say('Signed in! Redirecting…'); setTimeout(()=>location.href='./', 250); }
       };
 
       document.getElementById('signup').onclick = async () => {
         const email = emailEl.value.trim(), password = passEl.value;
-        if (!email || !password) { msg.textContent = 'Provide email & password.'; return; }
-        const { error } = await supabase.auth.signUp({
-          email, password,
-          options: { emailRedirectTo: 'https://albertoroca96.github.io/job-copilot/login.html' }
-        });
-        msg.textContent = error ? ('Error: ' + error.message) : 'Check your email to confirm.';
+        if (!email || !password) { sayErr('Provide email & password.'); return; }
+        const { error } = await supabase.auth.signUp({ email, password, options:{ emailRedirectTo: 'https://albertoroca96.github.io/job-copilot/login.html' } });
+        if (error) sayErr('Error: ' + error.message); else say('Check your email to confirm.');
       };
 
       document.getElementById('magic').onclick = async () => {
         const email = emailEl.value.trim();
-        if (!email) { msg.textContent = 'Enter your email.'; return; }
-        const { error } = await supabase.auth.signInWithOtp({
-          email,
-          options: { emailRedirectTo: 'https://albertoroca96.github.io/job-copilot/login.html' }
-        });
-        msg.textContent = error ? ('Error: ' + error.message) : 'Magic link sent — check your inbox.';
+        if (!email) { sayErr('Enter your email.'); return; }
+        const { error } = await supabase.auth.signInWithOtp({ email, options:{ emailRedirectTo:'https://albertoroca96.github.io/job-copilot/login.html' } });
+        if (error) sayErr('Error: ' + error.message); else say('Magic link sent — check your inbox.');
       };
 
       document.getElementById('forgot').onclick = async () => {
         const email = emailEl.value.trim();
-        if (!email) { msg.textContent = 'Enter your email.'; return; }
-        const { error } = await supabase.auth.resetPasswordForEmail(
-          email,
-          { redirectTo: 'https://albertoroca96.github.io/job-copilot/login.html' }
-        );
-        msg.textContent = error ? ('Error: ' + error.message) : 'Password reset link sent.';
+        if (!email) { sayErr('Enter your email.'); return; }
+        const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: 'https://albertoroca96.github.io/job-copilot/login.html' });
+        if (error) sayErr('Error: ' + error.message); else say('Password reset link sent.');
       };
 
       document.getElementById('setPw').onclick = async () => {
-        const p1 = newPw.value || '';
-        const p2 = newPw2.value || '';
-        if (p1.length < 8) { msg.textContent = 'Password must be at least 8 characters.'; return; }
-        if (p1 !== p2)   { msg.textContent = 'Passwords do not match.'; return; }
+        const p1 = newPw.value || '', p2 = newPw2.value || '';
+        if (p1.length < 8) { sayErr('Password must be at least 8 characters.'); return; }
+        if (p1 !== p2)   { sayErr('Passwords do not match.'); return; }
         const { error } = await supabase.auth.updateUser({ password: p1 });
-        msg.textContent = error ? ('Error: ' + error.message) : 'Password updated. Redirecting…';
-        if (!error) goHome();
+        if (error) sayErr('Error: ' + error.message); else { say('Password updated. Redirecting…'); setTimeout(()=>location.href='./', 250); }
       };
 
-      if (session && resetBox.classList.contains('hidden')) {
-        msg.textContent = 'You are signed in. Redirecting…';
-        goHome();
-      }
+      if (session && resetBox.classList.contains('hidden')) { say('You are signed in. Redirecting…'); setTimeout(()=>location.href='./', 250); }
     });
   </script>
 
-  <!-- Feedback widget -->
   <script defer src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script defer src="js/feedback.js?v=2025-10-12"></script>
 </body>
