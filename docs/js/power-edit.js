@@ -337,6 +337,9 @@
     try {
       const buf = await f.arrayBuffer(); originalDocxBuffer = buf; setFmtState(true);
 
+      // Broadcast original DOCX to the After (DOCX) helper so it can render without re-downloading
+      window.dispatchEvent(new CustomEvent("pe:docx-loaded", { detail:{ ab: buf, name: f.name } }));
+
       // Render a read-only formatted view of the DOCX
       try {
         if (window.docx && docxPreview) {
@@ -448,6 +451,64 @@
     } catch (e) {
       tailorMsg.textContent = "Error: " + String(e?.message || e);
       afterPreview.textContent = "(error)"; lastRewrites = [];
+      return;
+    }
+
+    // ---- NEW: Kick off server-side DOCX-styled "After" generation that writes a change JSON ----
+    // We keep your existing UX, but also trigger a background function that persists a
+    // change file to outputs/<uid>/changes/*.json. When it lands, after-docx.js will
+    // auto-refresh via events/polling.
+    try {
+      // Signal kickoff (starts short polling on the viewer)
+      window.dispatchEvent(new CustomEvent("jc:autoTailor:kickoff"));
+
+      // Try to persist a server-side change log using current resume in storage.
+      const { data: udata } = await supabase.auth.getUser();
+      const uid = udata?.user?.id || null;
+      let resumeSignedUrl = null;
+      if (uid) {
+        const sig = await supabase.storage.from("resumes").createSignedUrl(`${uid}/current.docx`, 60);
+        resumeSignedUrl = sig?.data?.signedUrl || null;
+      }
+
+      // Prefer a dedicated function if present; fall back to the generic drafting endpoint.
+      // Expectation: backend writes drafts_index.json and a new changes/<slug>.json, and
+      // (optionally) returns { change_file: "xxxx.json" }.
+      let resp = await supabase.functions.invoke("power-edit-tailor", {
+        body: {
+          job_title: jobTitle.value || "",
+          job_company: jobCompany.value || "",
+          jd_text: jobDesc.value || "",
+          resume_signed_url: resumeSignedUrl,
+          resume_key: uid ? `${uid}/current.docx` : null
+        }
+      });
+
+      if (resp.error) {
+        // Fallback: ask the generic pipeline to draft for this one JD/resume pair.
+        resp = await supabase.functions.invoke("request-draft", {
+          body: {
+            top: 1,
+            context: {
+              job_title: jobTitle.value || "",
+              job_company: jobCompany.value || "",
+              jd_text: jobDesc.value || "",
+              resume_key: uid ? `${uid}/current.docx` : null
+            }
+          }
+        });
+      }
+
+      if (!resp.error) {
+        const changeFile = resp.data?.change_file || resp.data?.changes?.[0] || null;
+        if (changeFile) {
+          // Tell the viewer exactly which file to render (instant refresh).
+          window.dispatchEvent(new CustomEvent("jc:autoTailor:done", { detail:{ change: changeFile } }));
+        }
+      }
+      // If neither endpoint returns a filename, the polling started at kickoff will still catch it.
+    } catch {
+      // Silent best-effort; the main UX above already completed.
     }
   };
 
