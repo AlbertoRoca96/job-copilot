@@ -14,6 +14,7 @@
     <h1 id="page-title">Feedback</h1>
     <p class="muted">Found a bug? Have an idea or question? Please avoid including sensitive information.</p>
 
+    <!-- Keep this attribute so screenshots exclude the form UI by default -->
     <form class="card" data-no-screenshot novalidate aria-describedby="form-help">
       <p id="form-help" class="help">All fields are optional except “Message”.</p>
 
@@ -63,13 +64,28 @@
   <script defer src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 
   <script>
-    // Page version of feedback widget (with a11y)
+    // Page version of feedback widget (a11y + improved logging + screenshot exclusions)
     window.addEventListener('load', async () => {
       const supabase = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
       const $ = id => document.getElementById(id);
       const status = $('status');
 
       function setBusy(b){ status.setAttribute('aria-busy', b ? 'true':'false'); }
+
+      // Collect console errors/warnings + window errors (kept in-memory; sampled on submit)
+      const LOGS = [];
+      (function setupLogCapture(){
+        const push = (level, msg, extra={}) => {
+          try { LOGS.push({ t: Date.now(), level, msg: String(msg).slice(0, 2000), ...extra }); }
+          catch {}
+        };
+        const origError = console.error.bind(console);
+        const origWarn  = console.warn.bind(console);
+        console.error = (...args) => { push('error', args.map(a=>String(a)).join(' ')); origError(...args); };
+        console.warn  = (...args) => { push('warn',  args.map(a=>String(a)).join(' ')); origWarn(...args); };
+        window.addEventListener('error', (e) => push('error', e.message, {source:e.filename, line:e.lineno, col:e.colno}));
+        window.addEventListener('unhandledrejection', (e) => push('error', 'unhandledrejection: ' + String(e.reason || '')));
+      })();
 
       async function screenshot() {
         try {
@@ -97,7 +113,7 @@
             user_agent: navigator.userAgent,
             severity: $('sev').checked ? 'high' : undefined,
             steps: $('fbSteps').value.trim() || undefined,
-            console: $('logs').checked ? [] : undefined,
+            console: $('logs').checked ? LOGS.slice(-50) : undefined,
             screenshot_data_url: $('shot').checked ? (await screenshot()) : null,
           };
           const { data, error } = await supabase.functions.invoke('feedback-submit', { body: payload });
@@ -108,5 +124,8 @@
       });
     });
   </script>
+
+  <!-- Voice assistant (site-wide) -->
+  <script defer src="js/voice-assistant.js?v=2025-10-24"></script>
 </body>
 </html>
