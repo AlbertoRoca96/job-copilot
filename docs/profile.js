@@ -1,5 +1,8 @@
-// docs/profile.js — auth + profile + shortlist + drafting + tracker
-// Overlay now persists while hidden, and resumes across reloads until the run completes.
+// docs/profile.js — WCAG 2.2-ready overlay & UI
+// - Keeps run state while hidden (localStorage)
+// - Restores overlay across reloads
+// - Focus-traps the overlay; ESC hides overlay (does not cancel run)
+// - Fixes previous HTML string/template literal issues
 
 (async function () {
   await new Promise((r) => window.addEventListener("load", r));
@@ -28,14 +31,16 @@
   const signinOnly = $("signinOnly");
   const profBox = $("profile");
   const onboard = $("onboard");
+  const who = $("who");
+  const logout = $("logout");
 
-  // tracker
+  // Tracker
   const trackerBox = $("tracker");
   const trackerList = $("trackerList");
   const refreshTrackerBtn = $("refreshTracker");
   const trackerCount = $("trackerCount");
 
-  // shortlist + materials
+  // Shortlist + materials
   const shortlist = $("shortlist");
   const jobsTable = $("jobs");
   const jobsBody = jobsTable?.querySelector("tbody");
@@ -44,22 +49,18 @@
   const materials = $("materials");
   const cardsEl = $("cards");
 
-  const who = $("who");
-  const logout = $("logout");
-
-  // upload
+  // Upload / targets
   const resumeInput = $("resume");
   const uploadBtn = $("uploadResume");
   const upMsg = $("upMsg");
 
-  // targets
   const titlesInput = $("desiredTitles");
   const locsInput = $("desiredLocs");
   const recencyInput = $("recencyDays");
   const remoteOnlyCb = $("remoteOnly");
   const requirePostCb = $("requirePosted");
 
-  // run & overlay
+  // Run & overlay
   const runBtn = $("runTailor");
   const runMsg = $("runMsg");
   const refresh = $("refresh");
@@ -68,14 +69,14 @@
   const overlayHide = $("overlayHide");
   const overlayRefresh = $("overlayRefresh");
   const etaEl = $("eta");
-  const progressFab = $("progressFab"); // new
+  const progressFab = $("progressFab");
 
-  // drafts
+  // Drafts
   const runDrafts = $("runDrafts");
   const draftMsg = $("draftMsg");
   const topNInput = $("topN");
 
-  // change modal
+  // Change modal
   const changeModal = $("change-modal");
   const changeBody = changeModal?.querySelector(".modal-body");
   const changeClose = changeModal?.querySelector(".close");
@@ -151,18 +152,52 @@
     upMsg.textContent = "Uploaded.";
   };
 
-  // ================= OVERLAY & WATCHERS =================
+  // ================= OVERLAY & WATCHERS (with focus trap) =================
 
-  // localStorage keys to persist the run across reloads
   const LS_REQ = "jc.active_request";
   const LS_HIDE = "jc.overlay_hidden";
 
   let etaTimer = null;
   let pollTimer = null;
 
+  // Focus trap
+  let prevFocus = null;
+  function focusable(el) {
+    return el ? Array.from(el.querySelectorAll(
+      'a[href],area[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),button:not([disabled]),[tabindex]:not([tabindex="-1"])'
+    )).filter(n => n.offsetParent !== null) : [];
+  }
+  function trap(el) {
+    const nodes = focusable(el);
+    if (!nodes.length) return;
+    const first = nodes[0], last = nodes[nodes.length-1];
+    function onKey(e){
+      if (e.key === 'Escape'){ hideOverlayOnly(); }
+      if (e.key !== 'Tab') return;
+      if (e.shiftKey && document.activeElement === first){ e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last){ e.preventDefault(); first.focus(); }
+    }
+    el._trapHandler = onKey;
+    el.addEventListener('keydown', onKey);
+    first.focus();
+  }
+  function untrap(el){
+    if (!el?._trapHandler) return;
+    el.removeEventListener('keydown', el._trapHandler);
+    delete el._trapHandler;
+  }
+  function setMainInert(on){
+    const m = document.querySelector('main'); if (!m) return;
+    if (on) m.setAttribute('inert',''); else m.removeAttribute('inert');
+  }
+
   function openRunOverlay() {
+    prevFocus = document.activeElement;
     runOverlay?.classList.add("open");
     progressFab?.classList.add("hidden");
+    runBtn?.setAttribute('aria-expanded','true');
+    setMainInert(true);
+    trap(runOverlay);
 
     const started = Date.now();
     clearInterval(etaTimer);
@@ -174,16 +209,24 @@
     }, 1000);
   }
 
+  function closeOverlayUIOnly() {
+    runOverlay?.classList.remove("open");
+    runBtn?.setAttribute('aria-expanded','false');
+    untrap(runOverlay);
+    setMainInert(false);
+    if (prevFocus && typeof prevFocus.focus === 'function') prevFocus.focus();
+  }
+
   // Hide *without* stopping timers/polling
   function hideOverlayOnly() {
-    runOverlay?.classList.remove("open");
+    closeOverlayUIOnly();
     progressFab?.classList.remove("hidden");
     localStorage.setItem(LS_HIDE, "1");
   }
 
-  // Stop everything when job is really done
+  // Stop everything when job is done
   function finishOverlay() {
-    runOverlay?.classList.remove("open");
+    closeOverlayUIOnly();
     progressFab?.classList.add("hidden");
     clearInterval(etaTimer); etaTimer = null;
     clearInterval(pollTimer); pollTimer = null;
@@ -194,6 +237,9 @@
   overlayHide?.addEventListener("click", () => hideOverlayOnly());
   overlayRefresh?.addEventListener("click", async () => { await loadShortlist(); });
   progressFab?.addEventListener("click", () => { localStorage.removeItem(LS_HIDE); openRunOverlay(); });
+
+  // Also allow ESC to hide overlay (not cancel run)
+  runOverlay?.addEventListener('keydown', (e)=>{ if (e.key === 'Escape') hideOverlayOnly(); });
 
   // Storage polling for outputs/<uid>/scores.json
   async function pollForScoresJson() {
@@ -218,14 +264,11 @@
     }, 12000);
   }
 
-  // Watch the job_requests row (best) and fall back to storage polling if RLS blocks it
+  // Watch the job_requests row (best) and fall back to storage polling
   async function watchJobRequest(requestId) {
-    // show overlay unless user previously hid it
     if (!localStorage.getItem(LS_HIDE)) openRunOverlay(); else progressFab?.classList.remove("hidden");
 
-    // try polling the job_requests row every ~10s; if blocked, fall back
     let triedFallback = false;
-
     clearInterval(pollTimer);
     pollTimer = setInterval(async () => {
       try {
@@ -233,16 +276,12 @@
           .from("job_requests")
           .select("status")
           .eq("id", requestId)
-          .maybeSingle(); // ok if 0 rows
+          .maybeSingle();
 
         if (error) throw error;
 
         const status = jr?.status || null;
-        if (!status) {
-          // Not visible or gone: use storage-based readiness check
-          if (!triedFallback) { triedFallback = true; pollForScoresJson(); }
-          return;
-        }
+        if (!status) { if (!triedFallback) { triedFallback = true; pollForScoresJson(); } return; }
 
         if (status === "done") {
           finishOverlay();
@@ -253,7 +292,6 @@
           finishOverlay();
           runMsg.textContent = "Job failed — check logs.";
         }
-        // queued / running → keep waiting
       } catch {
         if (!triedFallback) { triedFallback = true; pollForScoresJson(); }
       }
@@ -264,7 +302,6 @@
   async function resumePendingWatcher() {
     const rid = localStorage.getItem(LS_REQ);
     if (!rid) return;
-    // if user hadn't explicitly hidden, show overlay immediately
     if (!localStorage.getItem(LS_HIDE)) openRunOverlay(); else progressFab?.classList.remove("hidden");
     watchJobRequest(rid);
   }
@@ -298,7 +335,6 @@
       if (error) { runMsg.textContent = `Error: ${error.message || "invoke failed"}`; return; }
 
       const requestId = data?.request_id || null;
-
       runMsg.textContent = `Queued: ${requestId || "ok"} — building your shortlist (3–8 minutes)…`;
 
       // Persist + show overlay + start watcher(s)
@@ -309,7 +345,6 @@
         await sleep(50);
         watchJobRequest(requestId);
       } else {
-        // Fallback if function didn’t return id: just poll for scores.json
         openRunOverlay();
         pollForScoresJson();
       }
@@ -409,20 +444,20 @@
     const reason = String(it.reason || "");
     const afterHTML = esc(after).replace(esc(added), `<span class="change-insert">${esc(added)}</span>`);
     return `
-      <div class="change-card">
+      <div class="card" style="margin-bottom:10px">
         <div class="change-title">
           <span class="pill">${esc(sec)}</span>
           ${anchor ? `<span class="pill" style="margin-left:6px">${esc(anchor)}</span>` : ""}
         </div>
         <div>
           <div class="muted" style="margin-bottom:4px">Before</div>
-          <pre>${esc(before)}</pre>
+          <pre class="mono">${esc(before)}</pre>
         </div>
         <div style="margin-top:8px">
           <div class="muted" style="margin-bottom:4px">After</div>
-          <pre>${afterHTML}</pre>
+          <pre class="mono">${afterHTML}</pre>
         </div>
-        ${reason ? `<div class="change-reason">${esc(reason)}</div>` : ""}
+        ${reason ? `<div class="muted small" style="margin-top:6px">${esc(reason)}</div>` : ""}
       </div>
     `;
   }
@@ -572,12 +607,13 @@
     const div = document.createElement("div");
     for (const s of STATUS_ORDER) {
       const b = document.createElement("button");
-      b.className = "btn"; b.disabled = s === current; b.textContent = s;
+      b.className = "btn"; b.disabled = s === current; b.textContent = s; b.type = "button";
       b.onclick = async () => {
         try {
-          const { error } = await supabase.from("applications").insert([
-            { user_id: (await getUser())?.id, job_id: b.dataset.jobId, status: s }
-          ]);
+          const { data: u } = await supabase.auth.getUser();
+          const uid = u?.user?.id;
+          if (!uid) { alert("Not signed in."); return; }
+          const { error } = await supabase.from("applications").insert([{ user_id: uid, job_id: b.dataset.jobId, status: s }]);
           if (error) throw error;
           await loadTracker();
         } catch (e) { alert("Update failed: " + (e?.message || e)); }
@@ -661,8 +697,6 @@
   await loadShortlist();
   await loadMaterials();
   await loadTracker();
-
-  // If a run is in-flight, resume its watcher
   await resumePendingWatcher();
 
   logout.onclick = async () => {
