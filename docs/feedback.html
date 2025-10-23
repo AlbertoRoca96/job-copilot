@@ -4,25 +4,21 @@
   <meta charset="utf-8" />
   <title>job-copilot — Feedback</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light">
   <link rel="stylesheet" href="style.css" />
-  <style>
-    .wrap { max-width: 860px; margin: 32px auto; padding: 0 12px; }
-    .card { border:1px solid #e5e5e5; border-radius:12px; padding:16px; background:#fff; }
-    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-    label { font-weight:600; display:block; margin:8px 0 6px; }
-    input[type="text"], input[type="email"], select, textarea { width:100%; padding:10px; border:1px solid #e0e0e0; border-radius:8px; }
-    .btn { padding:8px 12px; border:1px solid #ccc; background:#111; color:#fff; border-radius:8px; cursor:pointer; }
-    .muted { color:#666; }
-  </style>
 </head>
 <body>
-  <main class="wrap">
-    <h1>Feedback</h1>
-    <p class="muted">Found a bug? Have an idea or question? Tell us here. Please avoid including sensitive information.</p>
+  <a href="#main" class="skip-link">Skip to main content</a>
 
-    <section class="card" data-no-screenshot>
+  <main id="main" class="wrap" role="main" aria-labelledby="page-title">
+    <h1 id="page-title">Feedback</h1>
+    <p class="muted">Found a bug? Have an idea or question? Please avoid including sensitive information.</p>
+
+    <form class="card" data-no-screenshot novalidate aria-describedby="form-help">
+      <p id="form-help" class="help">All fields are optional except “Message”.</p>
+
       <label for="fbType">Type</label>
-      <select id="fbType">
+      <select id="fbType" name="type">
         <option value="bug">Bug</option>
         <option value="suggestion">Suggestion</option>
         <option value="question">Question</option>
@@ -30,30 +26,32 @@
       </select>
 
       <label for="fbSubject">Subject (optional)</label>
-      <input id="fbSubject" type="text" placeholder="Short summary" />
+      <input id="fbSubject" name="subject" type="text" placeholder="Short summary" />
 
-      <label for="fbMessage">Message</label>
-      <textarea id="fbMessage" rows="8" placeholder="Describe the issue or idea…"></textarea>
+      <label for="fbMessage">Message <span class="sr-only">(required)</span></label>
+      <textarea id="fbMessage" name="message" rows="8" placeholder="Describe the issue or idea…" aria-required="true"></textarea>
 
       <label for="fbEmail">Email (optional, for follow-up)</label>
-      <input id="fbEmail" type="email" placeholder="you@example.com" />
+      <input id="fbEmail" name="email" type="email" placeholder="you@example.com" autocomplete="email" />
 
-      <div class="row">
-        <label class="muted"><input type="checkbox" id="shot" checked> Include screenshot</label>
+      <fieldset>
+        <legend>Extras</legend>
+        <label class="muted"><input type="checkbox" id="shot" checked aria-describedby="shot-h"> Include screenshot</label>
+        <div id="shot-h" class="sr-only">Includes a screenshot of the current page except elements marked “no screenshot”.</div>
         <label class="muted"><input type="checkbox" id="logs" checked> Include console errors</label>
         <label class="muted"><input type="checkbox" id="sev"> Mark as high severity</label>
-      </div>
+      </fieldset>
 
       <label for="fbSteps">Steps to reproduce (optional)</label>
-      <textarea id="fbSteps" rows="4" placeholder="1) ... 2) ... 3) ..."></textarea>
+      <textarea id="fbSteps" name="steps" rows="4" placeholder="1) ... 2) ... 3) ..."></textarea>
 
       <div class="row" style="margin-top:10px">
-        <button id="send" class="btn">Send</button>
-        <div id="status" class="muted" aria-live="polite"></div>
+        <button id="send" class="btn primary" type="button">Send</button>
+        <div id="status" class="status" role="status" aria-live="polite"></div>
       </div>
-    </section>
+    </form>
 
-    <p style="margin-top:16px"><a href="./">← Back to start</a></p>
+    <p style="margin-top:16px"><a href="./" aria-label="Back to start">← Back to start</a></p>
   </main>
 
   <!-- Supabase config -->
@@ -65,11 +63,13 @@
   <script defer src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 
   <script>
-    // Simple page version (shares server with widget)
+    // Page version of feedback widget (with a11y)
     window.addEventListener('load', async () => {
       const supabase = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
-      const el = id => document.getElementById(id);
-      const status = el('status');
+      const $ = id => document.getElementById(id);
+      const status = $('status');
+
+      function setBusy(b){ status.setAttribute('aria-busy', b ? 'true':'false'); }
 
       async function screenshot() {
         try {
@@ -78,29 +78,34 @@
         } catch { return null; }
       }
 
-      el('send').onclick = async () => {
-        const payload = {
-          type: el('fbType').value,
-          subject: el('fbSubject').value.trim() || undefined,
-          message: el('fbMessage').value.trim(),
-          email: el('fbEmail').value.trim() || undefined,
-          page: document.querySelector('h1')?.textContent?.trim(),
-          url: location.href,
-          user_agent: navigator.userAgent,
-          severity: el('sev').checked ? 'high' : undefined,
-          steps: el('fbSteps').value.trim() || undefined,
-          console: el('logs').checked ? [] : undefined, // page version omits console by default
-          screenshot_data_url: el('shot').checked ? (await screenshot()) : null,
-        };
-        if (!payload.message) { status.textContent = "Please enter a message."; return; }
-        status.textContent = "Sending…";
+      $('send').addEventListener('click', async () => {
+        const message = $('fbMessage').value.trim();
+        if (!message) {
+          status.innerHTML = '<span class="error" role="alert">Please enter a message.</span>';
+          return;
+        }
+        setBusy(true);
+        status.textContent = 'Sending…';
         try {
+          const payload = {
+            type: $('fbType').value,
+            subject: $('fbSubject').value.trim() || undefined,
+            message,
+            email: $('fbEmail').value.trim() || undefined,
+            page: document.querySelector('h1')?.textContent?.trim(),
+            url: location.href,
+            user_agent: navigator.userAgent,
+            severity: $('sev').checked ? 'high' : undefined,
+            steps: $('fbSteps').value.trim() || undefined,
+            console: $('logs').checked ? [] : undefined,
+            screenshot_data_url: $('shot').checked ? (await screenshot()) : null,
+          };
           const { data, error } = await supabase.functions.invoke('feedback-submit', { body: payload });
           status.textContent = error ? ('Error: ' + (error.message || 'failed')) : ('Thanks! Feedback ID: ' + (data?.id || 'sent'));
         } catch (e) {
-          status.textContent = 'Error: ' + (e?.message || e);
-        }
-      };
+          status.innerHTML = '<span class="error" role="alert">Error: '+ (e?.message || e) +'</span>';
+        } finally { setBusy(false); }
+      });
     });
   </script>
 </body>
