@@ -1,18 +1,5 @@
 // js/voice-assistant.js — Realtime voice wired to OpenAI via Supabase Edge
-// - Click "Listen" to start Realtime (mic -> model, model -> audio track).
-// - "Stop" tears down the PeerConnection.
-// - Typed messages always call the /assistant tool-using agent; if Realtime is ON,
-//   the agent's text reply is spoken back via the Realtime datachannel.
-//
-// Requires:
-//  - window.SUPABASE_URL, window.SUPABASE_ANON_KEY (already in your pages)
-//  - supabase.js loaded
-//  - Supabase Edge functions:
-//      * assistant (tool-using agent: web search, crawl, repo tree, etc.)
-//      * realtime-session (returns { ephemeral_key, session_url })
-//
-// This file is resilient: if your page doesn't have the expected elements,
-// it renders a tiny widget so you can still test everything.
+// Adds: page snapshot -> server; and client-side executor for ui_navigate actions.
 
 (function () {
   // ---------- Supabase ----------
@@ -74,14 +61,38 @@
     } catch { return "there"; }
   }
 
+  // ---------- Page snapshot ----------
+  function textOf(el) {
+    return (el.innerText || el.textContent || "").trim().replace(/\s+/g, " ");
+  }
+  function collectPageSnapshot() {
+    const links = Array.from(document.querySelectorAll("a"))
+      .slice(0, 80)
+      .map(a => ({ text: textOf(a), href: a.getAttribute("href") || "" }))
+      .filter(x => x.text);
+    const buttons = Array.from(document.querySelectorAll("button"))
+      .slice(0, 60)
+      .map(b => ({ text: textOf(b) }))
+      .filter(x => x.text);
+    const headings = Array.from(document.querySelectorAll("h1,h2,h3"))
+      .slice(0, 30)
+      .map(h => textOf(h))
+      .filter(Boolean);
+    return {
+      url: location.href,
+      title: document.title,
+      links, buttons, headings
+    };
+  }
+
   // ---------- Edge calls ----------
   async function callAssistant(payload){
-    const { data, error } = await supabase.functions.invoke("assistant", { body: payload });
+    const enriched = { ...payload, page: collectPageSnapshot() };
+    const { data, error } = await supabase.functions.invoke("assistant", { body: enriched });
     if (error) throw new Error(error.message || "assistant failed");
     return data;
   }
   async function getRealtimeSession(options = {}){
-    // { ephemeral_key, session_url }
     const { data, error } = await supabase.functions.invoke("realtime-session", { body: options });
     if (error) throw new Error(error.message || "realtime-session failed");
     if (!data?.ephemeral_key || !data?.session_url) throw new Error("Invalid realtime-session response");
@@ -114,69 +125,153 @@
         }
       }
       pc.addEventListener("icegatheringstatechange", check);
-      setTimeout(resolve, 1500); // safety timeout
+      setTimeout(resolve, 1500);
     });
   }
 
+  // ---------- Execute actions returned by the agent ----------
+  const ROUTES = {
+    home:       "/job-copilot/",
+    profile:    "/job-copilot/profile",     // adjust if your site uses a different path
+    power_edit: "/job-copilot/#power-edit",
+    feedback:   "/job-copilot/#feedback",
+  };
+
+  function findByLabel(label) {
+    const needle = (label || "").toLowerCase();
+    const els = [
+      ...document.querySelectorAll("a,button,[role='button']")
+    ];
+    // Prefer elements whose text starts with the label
+    let best = null;
+    for (const el of els) {
+      const t = (el.innerText || el.textContent || "").trim().replace(/\s+/g, " ").toLowerCase();
+      if (!t) continue;
+      if (t === needle) return el;
+      if (t.startsWith(needle)) best = best || el;
+      else if (t.includes(needle) && !best) best = el;
+    }
+    return best;
+  }
+
+  function speakLine(s) {
+    if (realtimeOn && dc && dc.readyState === "open" && s) {
+      dc.send(JSON.stringify({
+        type: "conversation.item.create",
+        item: { type: "message", role: "user", content: [{ type: "input_text", text: s }] }
+      }));
+      dc.send(JSON.stringify({ type: "response.create" }));
+    }
+  }
+
+  function executeActions(actions) {
+    if (!Array.isArray(actions) || !actions.length) return;
+
+    for (const a of actions) {
+      try {
+        switch (a.type) {
+          case "navigate": {
+            const url = a.page && ROUTES[a.page] ? ROUTES[a.page] : null;
+            if (url) { location.href = url; speakLine(`Navigating to ${a.page?.replace("_"," ")}`); }
+            else if (a.target_label) {
+              const el = findByLabel(a.target_label);
+              if (el && el.tagName.toLowerCase() === "a") { (el).click(); speakLine(`Opening ${a.target_label}`); }
+            }
+            break;
+          }
+          case "click": {
+            const el = findByLabel(a.target_label);
+            if (el) { el.click(); speakLine(`Clicked ${a.target_label}`); }
+            break;
+          }
+          case "focus": {
+            const el = findByLabel(a.target_label);
+            if (el) { el.focus(); speakLine(`Focused ${a.target_label}`); }
+            break;
+          }
+          case "scroll": {
+            if (a.amount === "top")      window.scrollTo({ top: 0, behavior: "smooth" });
+            else if (a.amount === "bottom") window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+            else if (a.amount === "page_up")   window.scrollBy({ top: -window.innerHeight, behavior: "smooth" });
+            else if (a.amount === "page_down") window.scrollBy({ top:  window.innerHeight, behavior: "smooth" });
+            break;
+          }
+          case "read": {
+            const target = a.target_label ? findByLabel(a.target_label) : null;
+            let text = "";
+            if (target) text = (target.closest("section") || target).innerText || "";
+            else text = (document.querySelector("main")?.innerText || document.body.innerText || "").trim();
+            text = text.slice(0, 800);
+            if (text) speakLine(text);
+            break;
+          }
+          case "say": {
+            speakLine(a.say || "");
+            break;
+          }
+        }
+      } catch (e) {
+        // ignore individual action failures to keep sequence robust
+      }
+    }
+  }
+
+  // ---------- Realtime ----------
   async function startRealtime(){
     if (realtimeOn) return;
     if (!navigator.mediaDevices?.getUserMedia) {
       line("Assistant", "This browser does not support microphone capture.");
       return;
     }
-
     try {
-      // 1) Ask for mic (user gesture required)
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-      // 2) Mint ephemeral key + session url from Edge
       const { ephemeral_key, session_url } = await getRealtimeSession();
 
-      // 3) Create remote audio element (must be created on user gesture for iOS)
       inboundAudioEl = document.createElement("audio");
-      inboundAudioEl.autoplay = true;
-      inboundAudioEl.playsInline = true;
-      inboundAudioEl.style.display = "none";
-      document.body.appendChild(inboundAudioEl);
+      inboundAudioEl.autoplay = true; inboundAudioEl.playsInline = true;
+      inboundAudioEl.style.display = "none"; document.body.appendChild(inboundAudioEl);
 
-      // 4) Peer connection + tracks
       pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-
-      pc.ontrack = (e) => {
-        if (!inboundAudioEl.srcObject) inboundAudioEl.srcObject = e.streams[0];
-      };
-      // Ensure we can receive audio from the model
+      pc.ontrack = (e) => { if (!inboundAudioEl.srcObject) inboundAudioEl.srcObject = e.streams[0]; };
       pc.addTransceiver("audio", { direction: "recvonly" });
-
-      // Add our mic upstream
       micStream.getTracks().forEach(t => pc.addTrack(t, micStream));
-
-      // Optional: debug ICE/state
       pc.onconnectionstatechange = () => {
         if (pc.connectionState === "connected") line("Assistant","Realtime connected.");
-        if (pc.connectionState === "failed") line("Assistant","WebRTC failed.");
+        if (pc.connectionState === "failed")    line("Assistant","WebRTC failed.");
       };
 
-      // 5) Datachannel for text and control
       dc = pc.createDataChannel("oai-events");
       dc.onopen = () => line("Assistant","Data channel open.");
       dc.onclose = () => line("Assistant","Data channel closed.");
-      dc.onmessage = (e) => {
-        // Realtime server events (JSON). You may log/inspect as needed.
-        // console.log("Realtime message:", e.data);
+      dc.onmessage = async (e) => {
+        // Try to detect a user transcript from Realtime events and turn it into actions.
+        try {
+          const msg = JSON.parse(e.data);
+          // There are several event shapes; handle generously.
+          // Example (not guaranteed): {type:"input_audio_transcription.completed", transcript:"go to profile"}
+          const t1 = msg?.transcript || msg?.text;
+          const t2 = msg?.delta; // e.g., response.output_text.delta (we only act on completed events)
+          if (msg?.type === "input_audio_transcription.completed" && t1) {
+            line("You", t1);
+            const username = await getUsername();
+            const resp = await callAssistant({ text: t1, username });
+            const out = resp?.reply || "(no reply)";
+            executeActions(resp?.actions);
+            line("Assistant", out);
+            speakLine(out);
+          } else if (msg?.type === "response.completed" && typeof t2 === "string") {
+            // ignore; this is assistant's output text delta stream
+          }
+        } catch { /* non-JSON messages: ignore */ }
       };
 
-      // 6) Offer/answer with the Realtime endpoint using the **ephemeral key**
       const offer = await pc.createOffer({ offerToReceiveAudio: true });
       await pc.setLocalDescription(offer);
       await waitForICE(pc);
 
       const sdpAnswer = await fetch(session_url, {
         method: "POST",
-        headers: {
-          "Authorization": `Bearer ${ephemeral_key}`,
-          "Content-Type": "application/sdp",
-        },
+        headers: { "Authorization": `Bearer ${ephemeral_key}`, "Content-Type": "application/sdp" },
         body: pc.localDescription.sdp,
       }).then(r => r.text());
 
@@ -211,14 +306,9 @@
       line("Assistant", "Realtime is not connected. Click Listen first.");
       return;
     }
-    // Create a conversation item (user text) and then request a response
     dc.send(JSON.stringify({
       type: "conversation.item.create",
-      item: {
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text }]
-      }
+      item: { type: "message", role: "user", content: [{ type: "input_text", text }] }
     }));
     dc.send(JSON.stringify({ type: "response.create" }));
   }
@@ -232,19 +322,10 @@
 
     try {
       const username = await getUsername();
-      // Always call the tool-using agent on the server
       const resp = await callAssistant({ text, username });
-      const out = resp?.reply || "(no reply)";
-
-      // If Realtime is connected, have the model speak the agent's reply
-      if (realtimeOn && dc && dc.readyState === "open") {
-        dc.send(JSON.stringify({
-          type: "conversation.item.create",
-          item: { type: "message", role: "user", content: [{ type: "input_text", text: out }] }
-        }));
-        dc.send(JSON.stringify({ type: "response.create" }));
-      }
-
+      const out  = resp?.reply || "(no reply)";
+      executeActions(resp?.actions);
+      if (realtimeOn && dc && dc.readyState === "open") speakLine(out);
       line("Assistant", out);
     } catch (e) {
       line("Assistant", `Error: ${e.message || e}`);
@@ -254,7 +335,7 @@
   // ---------- Wire UI ----------
   send?.addEventListener("click", sendText);
   input?.addEventListener("keydown", (e)=>{ if (e.key === "Enter") sendText(); });
-  listen?.addEventListener("click", startRealtime);   // user gesture: good for iOS
+  listen?.addEventListener("click", startRealtime);
   stop?.addEventListener("click", stopRealtime);
 
   // ---------- Smoke-test greeting on load ----------
