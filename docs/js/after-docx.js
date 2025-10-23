@@ -1,4 +1,6 @@
 // js/after-docx.js
+// v=2025-10-24-oneeditor
+//
 // Renders the DOCX-styled “After” editor and keeps it fresh.
 // - Uses AfterDocxHelper to render + make paragraphs inline-editable.
 // - Auto-refreshes on Power Edit’s Auto-tailor kickoff/done events.
