@@ -1,8 +1,8 @@
 // js/after-docx.js
-// Renders the DOCX-styled “After” pane for Power Edit (PE IDs) and keeps it fresh.
+// Renders the DOCX-styled “After” editor and keeps it fresh.
 // - Uses AfterDocxHelper to render + make paragraphs inline-editable.
 // - Auto-refreshes on Power Edit’s Auto-tailor kickoff/done events.
-// - Falls back to short-polling drafts_index.json to detect new change files.
+// - Also supports saved change-files via the dropdown (short polling).
 
 (function(){
   const $ = (id) => document.getElementById(id);
@@ -121,7 +121,16 @@
   }
 
   // Event-driven hookup from Power Edit
-  window.addEventListener("jc:autoTailor:done", async () => {
+  window.addEventListener("jc:autoTailor:done", async (e) => {
+    // If we were given fresh rewrites, render immediately without waiting for a saved file.
+    const rewrites = Array.isArray(e?.detail?.rewrites) ? e.detail.rewrites : null;
+    const ab = await fetchOriginalDocxAB();
+    if (ab && rewrites?.length){
+      await window.AfterDocxHelper.renderAndPatch(ab, target, rewrites);
+      if (msg) msg.textContent = "";
+      return;
+    }
+    // Otherwise refresh dropdown (saved file mode)
     const names = await populateMenu(false);
     if (sel) sel.selectedIndex = names.length ? 0 : -1;
     await renderSelected();
