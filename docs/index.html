@@ -4,15 +4,16 @@
   <meta charset="utf-8" />
   <title>job-copilot — Optimize your resume, faster</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light">
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <a href="#main" class="skip-link">Skip to main content</a>
 
-  <!-- Minimal sticky header -->
-  <header class="site-header">
+  <header class="site-header" role="banner">
     <div class="bar container">
-      <div class="brand"><span class="dot"></span> job-copilot</div>
-      <nav class="nav">
+      <div class="brand"><span class="dot" aria-hidden="true"></span> <span>job-copilot</span></div>
+      <nav class="nav" aria-label="Primary">
         <a href="profile.html">Profile</a>
         <a href="power-edit.html">Power Edit</a>
         <a class="btn" href="login.html">Sign in</a>
@@ -20,59 +21,56 @@
     </div>
   </header>
 
-  <!-- Hero -->
-  <section class="hero">
-    <div class="container">
-      <h1>Tailor your resume to every job — in minutes</h1>
+  <main id="main" class="container section">
+    <section class="hero" aria-labelledby="hero-title">
+      <h1 id="hero-title">Tailor your resume to every job — in minutes</h1>
       <p class="lead">
         Paste a JD, upload your .docx, and get a clean score, gaps, and suggested inserts.
-        Built for clarity and speed — like Jobscan’s flow, but tuned to your workflow.
+        Built for clarity and speed.
       </p>
-      <div class="hero-ctas">
+      <div class="hero-ctas" role="group" aria-label="Primary actions">
         <a class="btn primary" href="power-edit.html">Open Power Edit</a>
         <a class="btn ghost" href="profile.html">Go to Profile</a>
         <a class="btn" href="feedback.html">Give Feedback</a>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <!-- Value cards -->
-  <main class="container section">
-    <div class="cards">
-      <article class="card">
-        <h3 style="margin-top:0">Power Edit</h3>
-        <p class="muted">Upload your .docx and paste a job description to get live score, gaps, coverage, and suggested inserts.</p>
-        <a class="btn primary" href="power-edit.html">Start editing</a>
-      </article>
+    <section aria-labelledby="value-title" class="section" style="padding-top:0">
+      <h2 id="value-title">What you can do</h2>
+      <div class="cards">
+        <article class="card" aria-labelledby="card1">
+          <h3 id="card1" style="margin-top:0">Power Edit</h3>
+          <p class="muted">Upload your .docx and paste a job description to get live score, gaps, coverage, and suggested inserts.</p>
+          <a class="btn primary" href="power-edit.html">Start editing</a>
+        </article>
 
-      <article class="card">
-        <h3 style="margin-top:0">Profile & Tracker</h3>
-        <p class="muted">Save targets, run your shortlist, and track applications in one place.</p>
-        <a class="btn" href="profile.html">Go to Profile</a>
-      </article>
+        <article class="card" aria-labelledby="card2">
+          <h3 id="card2" style="margin-top:0">Profile & Tracker</h3>
+          <p class="muted">Save targets, run your shortlist, and track applications in one place.</p>
+          <a class="btn" href="profile.html">Go to Profile</a>
+        </article>
 
-      <article class="card">
-        <h3 style="margin-top:0">Feedback</h3>
-        <p class="muted">Found a bug or have an idea? Send feedback with an optional screenshot.</p>
-        <a class="btn" href="feedback.html">Give feedback</a>
-      </article>
-    </div>
+        <article class="card" aria-labelledby="card3">
+          <h3 id="card3" style="margin-top:0">Feedback</h3>
+          <p class="muted">Found a bug or have an idea? Send feedback with an optional screenshot.</p>
+          <a class="btn" href="feedback.html">Give feedback</a>
+        </article>
+      </div>
 
-    <div class="card mt-4">
-      <p class="muted" style="margin:0">
-        Tip: Sign in on the Profile page to see your private shortlist and generated materials.
-      </p>
-    </div>
+      <div class="card mt-4" role="note" aria-label="Tip">
+        <p class="muted" style="margin:0">
+          Tip: Sign in on the Profile page to see your private shortlist and generated materials.
+        </p>
+      </div>
+    </section>
   </main>
 
-  <!-- Supabase config for widget -->
   <script>
+    /* Supabase config (kept for feedback widget parity) */
     window.SUPABASE_URL = "https://imozfqawxpsasjdmgdkh.supabase.co";
     window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc";
   </script>
   <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-
-  <!-- Feedback widget -->
   <script defer src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script defer src="js/feedback.js?v=2025-10-12"></script>
 </body>
