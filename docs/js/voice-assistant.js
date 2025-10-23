@@ -1,14 +1,14 @@
 // js/voice-assistant.js — Realtime voice wired to OpenAI via Supabase Edge
 // - Click "Listen" to start Realtime (mic -> model, model -> audio track).
 // - "Stop" tears down the PeerConnection.
-// - Typed messages: if Realtime is ON, they go over the datachannel so the
-//   model speaks back; otherwise they call the /assistant function (text reply).
+// - Typed messages always call the /assistant tool-using agent; if Realtime is ON,
+//   the agent's text reply is spoken back via the Realtime datachannel.
 //
 // Requires:
 //  - window.SUPABASE_URL, window.SUPABASE_ANON_KEY (already in your pages)
 //  - supabase.js loaded
 //  - Supabase Edge functions:
-//      * assistant (for greeting + text echo/search/files)
+//      * assistant (tool-using agent: web search, crawl, repo tree, etc.)
 //      * realtime-session (returns { ephemeral_key, session_url })
 //
 // This file is resilient: if your page doesn't have the expected elements,
@@ -223,22 +223,29 @@
     dc.send(JSON.stringify({ type: "response.create" }));
   }
 
-  // ---------- Text flow (fallback to Edge assistant when Realtime is off) ----------
+  // ---------- Text flow (ALWAYS use tool-agent; speak reply if Realtime ON) ----------
   async function sendText(){
     const text = (input.value || "").trim();
     if (!text) return;
     line("You", text);
     input.value = "";
 
-    if (realtimeOn) {
-      try { sendRealtimeText(text); } catch (e) { line("Assistant", `Realtime error: ${e.message || e}`); }
-      return;
-    }
-
     try {
       const username = await getUsername();
+      // Always call the tool-using agent on the server
       const resp = await callAssistant({ text, username });
-      line("Assistant", resp?.reply || "(no reply)");
+      const out = resp?.reply || "(no reply)";
+
+      // If Realtime is connected, have the model speak the agent's reply
+      if (realtimeOn && dc && dc.readyState === "open") {
+        dc.send(JSON.stringify({
+          type: "conversation.item.create",
+          item: { type: "message", role: "user", content: [{ type: "input_text", text: out }] }
+        }));
+        dc.send(JSON.stringify({ type: "response.create" }));
+      }
+
+      line("Assistant", out);
     } catch (e) {
       line("Assistant", `Error: ${e.message || e}`);
     }
