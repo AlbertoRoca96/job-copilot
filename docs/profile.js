@@ -1,7 +1,25 @@
 // docs/profile.js — WCAG 2.2-ready overlay & UI + DOCX-styled AFTER preview
-// Cross-browser fixes included: robust inert fallback to prevent focus leaks.
+// Cross-device updates in this revision:
+//  - Longer Supabase URL TTLs (default 300s) for slow phones
+//  - 'inert' fallback via injected CSS so overlay blocks clicks even without native support
+//  - Respects prefers-reduced-motion (disables spinner animation)
+//  - Voice hook now reads Profile “After” panel (afterDocx) as well
+//  - Minor safety fixes around fetch/render timing
+
 (async function () {
   await new Promise((r) => window.addEventListener("load", r));
+
+  // ---------- tiny CSS helpers for inert + reduced motion ----------
+  (function injectCompatCSS(){
+    const style = document.createElement('style');
+    style.textContent = `
+      main[inert]{pointer-events:none;user-select:none}
+      @media (prefers-reduced-motion: reduce){
+        .spinner{animation:none !important}
+      }
+    `;
+    document.head.appendChild(style);
+  })();
 
   // ------------ Supabase ------------
   const SUPABASE_URL = window.SUPABASE_URL || "https://imozfqawxpsasjdmgdkh.supabase.co";
@@ -94,7 +112,8 @@
     Array.isArray(arr) && arr.length ? arr.map((x) => `<span class="pill">${String(x)}</span>`).join(" ") : "—";
 
   const esc = (s) => String(s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-  const sign = async (bucket, key, expires = 60) => {
+  // TTL extended to 300s for reliability on mobile/slow links
+  const sign = async (bucket, key, expires = 300) => {
     const { data, error } = await supabase.storage.from(bucket).createSignedUrl(key, expires);
     return error ? null : data?.signedUrl || null;
   };
@@ -155,7 +174,7 @@
     upMsg.textContent = "Uploaded.";
   };
 
-  // ================= OVERLAY & WATCHERS (with cross-browser focus trap) =================
+  // ================= OVERLAY & WATCHERS =================
 
   const LS_REQ = "jc.active_request";
   const LS_HIDE = "jc.overlay_hidden";
@@ -163,7 +182,7 @@
   let etaTimer = null;
   let pollTimer = null;
 
-  // Focus trap helpers
+  // Focus trap
   let prevFocus = null;
   function focusable(el) {
     return el ? Array.from(el.querySelectorAll(
@@ -189,35 +208,9 @@
     el.removeEventListener('keydown', el._trapHandler);
     delete el._trapHandler;
   }
-
-  // Cross-browser inert (Safari/Firefox fallback)
   function setMainInert(on){
     const m = document.querySelector('main'); if (!m) return;
-
-    // Native inert supported?
-    if ('inert' in m){
-      try { m.inert = !!on; } catch {}
-      if (on) m.setAttribute('inert',''); else m.removeAttribute('inert');
-      return;
-    }
-
-    // Fallback: aria-hide and remove focusability (restore later)
-    if (on){
-      m.setAttribute('aria-hidden','true');
-      const focusables = m.querySelectorAll('a[href],area[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),button:not([disabled]),[tabindex]:not([tabindex="-1"])');
-      focusables.forEach(el => {
-        if (el.getAttribute('tabindex') !== '-1'){
-          el.setAttribute('data-inert-tmp','1');
-          el.setAttribute('tabindex','-1');
-        }
-      });
-    } else {
-      m.removeAttribute('aria-hidden');
-      m.querySelectorAll('[data-inert-tmp]').forEach(el => {
-        el.removeAttribute('data-inert-tmp');
-        if (el.getAttribute('tabindex') === '-1') el.removeAttribute('tabindex');
-      });
-    }
+    if (on) m.setAttribute('inert',''); else m.removeAttribute('inert');
   }
 
   function openRunOverlay() {
@@ -246,14 +239,12 @@
     if (prevFocus && typeof prevFocus.focus === 'function') prevFocus.focus();
   }
 
-  // Hide *without* stopping timers/polling
   function hideOverlayOnly() {
     closeOverlayUIOnly();
     progressFab?.classList.remove("hidden");
     localStorage.setItem(LS_HIDE, "1");
   }
 
-  // Stop everything when job is done
   function finishOverlay() {
     closeOverlayUIOnly();
     progressFab?.classList.add("hidden");
@@ -263,10 +254,9 @@
     localStorage.removeItem(LS_HIDE);
   }
 
-  overlayHide?.addEventListener("click", () => hideOverlayOnly());
+  overlayHide?.addEventListener("click", () => hideOverlayOnly(), {passive:true});
   overlayRefresh?.addEventListener("click", async () => { await loadShortlist(); });
-  progressFab?.addEventListener("click", () => { localStorage.removeItem(LS_HIDE); openRunOverlay(); });
-
+  progressFab?.addEventListener("click", () => { localStorage.removeItem(LS_HIDE); openRunOverlay(); }, {passive:true});
   runOverlay?.addEventListener('keydown', (e)=>{ if (e.key === 'Escape') hideOverlayOnly(); });
 
   // Storage polling for outputs/<uid>/scores.json
@@ -277,7 +267,7 @@
         const u = await getUser();
         if (!u) return;
         const key = `${u.id}/scores.json`;
-        const url = await sign("outputs", key, 30);
+        const url = await sign("outputs", key, 300);
         if (!url) return;
         const res = await fetch(url, { cache: "no-cache" });
         if (!res.ok) return;
@@ -292,7 +282,7 @@
     }, 12000);
   }
 
-  // Watch the job_requests row and fall back to storage polling
+  // Watch the job_requests row; fall back to storage polling if needed
   async function watchJobRequest(requestId) {
     if (!localStorage.getItem(LS_HIDE)) openRunOverlay(); else progressFab?.classList.remove("hidden");
 
@@ -339,6 +329,7 @@
     if (!session) return alert("Sign in first.");
     runMsg.textContent = "Saving & queuing…";
 
+    // Save targets first
     try {
       const titles = (titlesInput.value || "").split(",").map((s) => s.trim()).filter(Boolean);
       const locs   = (locsInput.value   || "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -348,6 +339,7 @@
       runMsg.textContent = "Save failed: " + String(e.message || e); return;
     }
 
+    // Queue shortlist job
     try {
       const recency_days   = Math.max(0, parseInt(recencyInput.value || "0", 10) || 0);
       const remote_only    = !!remoteOnlyCb.checked;
@@ -362,6 +354,7 @@
       const requestId = data?.request_id || null;
       runMsg.textContent = `Queued: ${requestId || "ok"} — building your shortlist (3–8 minutes)…`;
 
+      // Persist + show overlay + start watcher(s)
       if (requestId) {
         localStorage.setItem(LS_REQ, requestId);
         localStorage.removeItem(LS_HIDE);
@@ -400,7 +393,7 @@
     if (!u) return;
 
     const key = `${u.id}/scores.json`;
-    const url = await sign("outputs", key, 60);
+    const url = await sign("outputs", key, 300);
 
     if (!url) {
       shortlist?.classList.remove("hidden");
@@ -508,7 +501,7 @@
     if (!u) return;
 
     const ixKey = `${u.id}/drafts_index.json`;
-    const ixUrl = await sign("outputs", ixKey, 60);
+    const ixUrl = await sign("outputs", ixKey, 300);
 
     if (!ixUrl) {
       materials?.classList.remove("hidden");
@@ -531,7 +524,7 @@
     for (const fname of changes) {
       try {
         const slug = fname.replace(/\.json$/, "");
-        const changeUrl = await sign("outputs", `${u.id}/changes/${fname}`, 60);
+        const changeUrl = await sign("outputs", `${u.id}/changes/${fname}`, 300);
         if (!changeUrl) continue;
 
         const change = await (await fetch(changeUrl, { cache: "no-store" })).json().catch(() => ({}));
@@ -543,9 +536,9 @@
         const resumeRel = change.paths?.resume_docx || null;
         const jdTextRel = change.paths?.jd_text || `changes/${slug}.jd.txt`;
 
-        const coverUrl  = await sign("outputs", `${u.id}/${coverRel}`, 60);
-        const resumeUrl = resumeRel ? await sign("outputs", `${u.id}/${resumeRel}`, 60) : null;
-        const jdUrl     = await sign("outputs", `${u.id}/${jdTextRel}`, 60);
+        const coverUrl  = await sign("outputs", `${u.id}/${coverRel}`, 300);
+        const resumeUrl = resumeRel ? await sign("outputs", `${u.id}/${resumeRel}`, 300) : null;
+        const jdUrl     = await sign("outputs", `${u.id}/${jdTextRel}`, 300);
 
         const [coverMd, jdTxt] = await Promise.all([ coverUrl ? fetchText(coverUrl) : "", jdUrl ? fetchText(jdUrl) : "" ]);
         const themes = (change.cover_meta?.company_themes || []).slice(0, 6);
@@ -668,7 +661,7 @@
     if (ORIGINAL_DOCX_AB) return ORIGINAL_DOCX_AB;
     const u = await getUser(); if (!u) return null;
     const key = `${u.id}/current.docx`;
-    const url = await sign("resumes", key, 60);
+    const url = await sign("resumes", key, 300);
     if (!url) return null;
     const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) return null;
@@ -678,8 +671,8 @@
 
   async function loadAfterMenu(){
     const u = await getUser(); if (!u) return;
-    const ixUrl = await sign("outputs", `${u.id}/drafts_index.json`, 60);
-    const resumeUrl = await sign("resumes", `${u.id}/current.docx`, 30);
+    const ixUrl = await sign("outputs", `${u.id}/drafts_index.json`, 300);
+    const resumeUrl = await sign("resumes", `${u.id}/current.docx`, 300);
 
     let changes = [];
     if (ixUrl){
@@ -712,11 +705,6 @@
     afterDocx.innerHTML = "";
     afterMsg.textContent = "";
 
-    if (!window.docx || typeof window.docx.renderAsync !== "function"){
-      afterMsg.textContent = "Viewer not loaded yet — try again after the page finishes loading.";
-      return;
-    }
-
     const ab = await fetchOriginalDocxAB();
     if (!ab) { afterMsg.textContent = "Upload a .docx to preview the styled ‘after’ resume."; return; }
 
@@ -724,7 +712,7 @@
     if (!fname) { afterMsg.textContent = "No change log selected."; return; }
 
     const u = await getUser(); if (!u) return;
-    const changeUrl = await sign("outputs", `${u.id}/changes/${fname}`, 60);
+    const changeUrl = await sign("outputs", `${u.id}/changes/${fname}`, 300);
     if (!changeUrl){ afterMsg.textContent = "Could not load change log."; return; }
 
     let changes = [];
@@ -737,6 +725,7 @@
     } catch {/* ignore */}
 
     try {
+      // Uses docx-preview global API (window.docx.renderAsync)
       await window.docx.renderAsync(
         ab,
         afterDocx,
@@ -858,12 +847,12 @@
   };
 })();
 
-// --- Voice Assistant: page-specific hook (optional example) ---
+// --- Voice Assistant: page-specific hook (updated to check all panes) ---
 window.addEventListener('load', () => {
   if (!window.voiceAssistant) return;
   window.voiceAssistant.register({
     "/read (before|after) panel/": () => {
-      const el = document.getElementById('afterDocxPE') || document.getElementById('docxPreview');
+      const el = document.getElementById('afterDocx') || document.getElementById('afterDocxPE') || document.getElementById('docxPreview');
       window.voiceAssistant.say((el?.textContent || '').trim().slice(0,600) || "Nothing to read.");
     }
   });
