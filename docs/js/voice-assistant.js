@@ -1,223 +1,252 @@
-/* job-copilot — Voice Assistant (WCAG-first, cross-device)
-   - TTS: SpeechSynthesis (queued, after user gesture)
-   - STT: (webkit)SpeechRecognition when available & in secure context; else text-command fallback
-   - ARIA live regions for screen readers
-   - Keyboard: Alt+/, Ctrl+/, or ⌘+/ opens; Space toggles mic (when panel is open)
-   - Public API: window.voiceAssistant.register({ patternOrName: fn }), window.voiceAssistant.say(text)
+/* js/voice-assistant.js  —  FULL REWRITE (2025-10-24)
+   Advanced voice assistant:
+   - Realtime speech chat (OpenAI WebRTC) with live mic + streamed audio reply.
+   - Fallback TTS + typed chat if WebRTC or mic is unavailable.
+   - “/search …” command routes to a server agent that searches the web and proposes repo file changes.
+   - Clean UI: floating FAB -> panel with Listen/Stop, transcript, and results.
 */
+
 (function () {
-  // ---------- Feature detection ----------
-  const HAS_TTS = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
-  const Recog = (isSecureContext && (window.SpeechRecognition || window.webkitSpeechRecognition)) ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
-  const HAS_STT = !!Recog; // Recognition support is limited; many browsers lack it.
+  // ---------- DOM ----------
+  const ui = (() => {
+    const fab = document.createElement('button');
+    fab.className = 'btn fab';
+    fab.id = 'assistantFab';
+    fab.type = 'button';
+    fab.title = 'Assistant';
+    fab.textContent = 'Assistant';
+    Object.assign(fab.style, { position:'fixed', right:'16px', bottom:'16px', zIndex: 9999 });
 
-  // ---------- Styles (injected; avoids touching style.css) ----------
-  const css = `
-  .va-fab{position:fixed;right:16px;bottom:16px;z-index:10050}
-  .va-btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border,#e5e7eb);
-    background:var(--surface,#fff);color:var(--text,#111);padding:10px 14px;border-radius:999px;
-    box-shadow:var(--shadow-md,0 8px 24px rgba(17,24,39,.08));cursor:pointer}
-  .va-btn:focus-visible{outline:3px solid var(--ring,#1d4ed8);outline-offset:2px}
-  .va-dot{width:10px;height:10px;border-radius:99px;background:#9ca3af}
-  .va-dot.live{background:#10b981}
-  .va-panel{position:fixed;right:16px;bottom:76px;width:min(420px,96vw);z-index:10050;
-    background:#fff;border:1px solid var(--border,#e5e7eb);border-radius:12px;padding:12px;
-    box-shadow:var(--shadow-lg,0 16px 40px rgba(17,24,39,.10));display:none}
-  .va-open .va-panel{display:block}
-  .va-row{display:flex;gap:8px;align-items:center;justify-content:space-between}
-  .va-controls{display:flex;gap:8px;flex-wrap:wrap}
-  .va-kbd{font:12px ui-monospace;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:6px;padding:2px 6px}
-  .va-log{margin-top:8px;max-height:180px;overflow:auto;background:#f8fafc;border-radius:8px;padding:8px;border:1px dashed var(--border,#e5e7eb);font:13px ui-monospace;white-space:pre-wrap}
-  .va-mic{min-width:44px;min-height:44px}
-  .va-input{flex:1 1 auto;padding:10px;border:1px solid var(--border,#e5e7eb);border-radius:8px}
-  .sr-only{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
-  `;
-  const style = document.createElement('style'); style.textContent = css; document.head.appendChild(style);
+    const panel = document.createElement('div');
+    panel.id = 'assistantPanel';
+    panel.setAttribute('role','dialog');
+    panel.setAttribute('aria-label','Voice assistant');
+    Object.assign(panel.style, {
+      position:'fixed', right:'16px', bottom:'76px', width:'380px', maxWidth:'92vw',
+      background:'#fff', border:'1px solid #e5e7eb', borderRadius:'12px',
+      boxShadow:'0 10px 30px rgba(0,0,0,.15)', padding:'12px', display:'none', zIndex:9999
+    });
 
-  // ---------- Live regions ----------
-  const livePolite = document.createElement('div');
-  livePolite.className = 'sr-only'; livePolite.setAttribute('role','status'); livePolite.setAttribute('aria-live','polite');
-  const liveAssert = document.createElement('div');
-  liveAssert.className = 'sr-only'; liveAssert.setAttribute('role','alert'); liveAssert.setAttribute('aria-live','assertive');
-  document.body.appendChild(livePolite); document.body.appendChild(liveAssert);
-
-  // ---------- UI ----------
-  const root = document.createElement('div'); root.className = 'va-root';
-  root.innerHTML = `
-    <div class="va-fab">
-      <button class="va-btn" type="button" aria-haspopup="dialog" aria-controls="va-panel" aria-expanded="false" title="Open assistant (Alt+/, Ctrl+/, or ⌘+/)">
-        <span class="va-dot" aria-hidden="true"></span><span>Assistant</span>
-      </button>
-    </div>
-    <section id="va-panel" class="va-panel" role="dialog" aria-modal="false" aria-label="Voice assistant">
-      <div class="va-row">
+    panel.innerHTML = `
+      <div class="row" style="justify-content:space-between;align-items:center;gap:8px">
         <strong>Ask or say a command</strong>
-        <div class="muted small" aria-hidden="true"><span class="va-kbd">Alt+/</span> or <span class="va-kbd">Ctrl+/</span> or <span class="va-kbd">⌘+/</span> open · <span class="va-kbd">Space</span> mic</div>
-      </div>
-      <div class="va-row" style="margin-top:8px">
-        <input class="va-input" type="text" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="${HAS_STT ? 'Or type here…' : 'Type here…'}" aria-label="Type a question or command"/>
-        <div class="va-controls">
-          <button class="btn va-mic" type="button" aria-pressed="false" aria-label="${HAS_STT ? 'Start listening' : 'Send command'}">${HAS_STT ? '🎤 Listen' : '⌨️ Send'}</button>
-          <button class="btn" type="button" data-act="stop" aria-label="Stop speaking">⏹ Stop</button>
-          <button class="btn" type="button" data-act="help" aria-label="What can you do?">❓ Help</button>
+        <div class="row" style="gap:6px">
+          <button id="vaListen" class="btn" type="button">Listen</button>
+          <button id="vaStop" class="btn" type="button">Stop</button>
+          <button id="vaClose" class="btn" type="button" aria-label="Close">×</button>
         </div>
       </div>
-      <div class="va-log" role="region" aria-live="polite" aria-label="Assistant transcript"></div>
-    </section>
-  `;
-  document.body.appendChild(root);
-  const fabBtn = root.querySelector('.va-btn');
-  const micBtn = root.querySelector('.va-mic');
-  const stopBtn = root.querySelector('[data-act="stop"]');
-  const helpBtn = root.querySelector('[data-act="help"]');
-  const inputEl = root.querySelector('.va-input');
-  const dot = root.querySelector('.va-dot');
-  const log = root.querySelector('.va-log');
+      <div id="vaLog" style="height:220px; overflow:auto; border:1px solid #eee; border-radius:8px; padding:8px; margin:8px 0; font:13px/1.4 system-ui, sans-serif;"></div>
+      <div class="row" style="gap:6px">
+        <input id="vaInput" class="ctl" type="text" placeholder="Try: /search the best ATS practices" style="flex:1 1 auto">
+        <button id="vaSend" class="btn primary" type="button">Send</button>
+      </div>
+      <div id="vaHint" class="muted" style="margin-top:6px">
+        Tip: Say anything. Use <code>/search …</code> to let me browse and propose file changes.
+      </div>
+    `;
 
-  function setOpen(open){
-    root.classList.toggle('va-open', !!open);
-    fabBtn.setAttribute('aria-expanded', open ? 'true':'false');
-    if (open) inputEl.focus();
+    document.body.appendChild(fab);
+    document.body.appendChild(panel);
+
+    const q = id => panel.querySelector(id);
+    return {
+      fab,
+      panel,
+      listenBtn: q('#vaListen'),
+      stopBtn: q('#vaStop'),
+      closeBtn: q('#vaClose'),
+      log: q('#vaLog'),
+      box: q('#vaInput'),
+      sendBtn: q('#vaSend'),
+      show() { panel.style.display = 'block'; },
+      hide() { panel.style.display = 'none'; }
+    };
+  })();
+
+  const SUPABASE = (() => {
+    if (!window.supabase && window.SUPABASE_URL && window.SUPABASE_ANON_KEY) {
+      console.warn('Supabase UMD not yet ready, voice assistant will retry after load.');
+    }
+    function client() { return window.supabase?.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY); }
+    return { client };
+  })();
+
+  // ---------- Small helpers ----------
+  const log = (html) => { ui.log.insertAdjacentHTML('beforeend', `<div style="margin:6px 0">${html}</div>`); ui.log.scrollTop = ui.log.scrollHeight; };
+  const esc = s => String(s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  function say(text) {
+    try {
+      const u = new SpeechSynthesisUtterance(text);
+      u.rate = 1.0; u.pitch = 1.0;
+      window.speechSynthesis.cancel(); window.speechSynthesis.speak(u);
+    } catch {}
   }
-  fabBtn.addEventListener('click', ()=> setOpen(!root.classList.contains('va-open')));
-  document.addEventListener('keydown', (e)=>{
-    const open = root.classList.contains('va-open');
-    const isOpenShortcut = (e.altKey && e.key === '/') || (e.ctrlKey && e.key === '/') || (e.metaKey && e.key === '/');
-    if (isOpenShortcut){ e.preventDefault(); setOpen(!open); }
-    if (open && e.key === ' ' && document.activeElement !== inputEl){ e.preventDefault(); micBtn.click(); }
-    if (open && e.key === 'Escape'){ setOpen(false); }
-  }, {passive:false});
 
-  // ---------- TTS helpers ----------
-  let interacted = false; // iOS/Safari require user gesture before speaking
-  const afterFirstGesture = () => { interacted = true; document.removeEventListener('pointerdown', afterFirstGesture, true); };
-  document.addEventListener('pointerdown', afterFirstGesture, true);
+  // ---------- Realtime session (WebRTC) ----------
+  let pc = null, dc = null, localStream = null, remoteAudioEl = null, isListening = false;
 
-  // Cache voices (wait for load on Safari)
-  let voicesReady = !HAS_TTS;
-  if (HAS_TTS){
-    const ensureVoices = () => { const v = window.speechSynthesis.getVoices(); voicesReady = v && v.length > 0; };
-    ensureVoices();
-    if (!voicesReady) window.speechSynthesis.onvoiceschanged = () => { ensureVoices(); };
-  }
+  async function startRealtime() {
+    const sb = SUPABASE.client();
+    if (!sb) throw new Error('Supabase not ready');
 
-  function say(text, mode='polite'){
-    if (!text) return;
-    livePolite.textContent = ''; liveAssert.textContent = '';
-    (mode === 'assertive' ? liveAssert : livePolite).textContent = text; // SR announcement
-    log.textContent += `Assistant: ${text}\n`;
-    // Only speak after a user gesture to satisfy iOS autoplay policies
-    if (HAS_TTS && interacted && voicesReady){
+    // Ask backend for an ephemeral Realtime session (voice enabled)
+    const { data, error } = await sb.functions.invoke('realtime-session', {
+      body: { model: 'gpt-4o-realtime-preview', voice: 'alloy', modalities: ['audio','text'] }
+    });
+    if (error) throw new Error(error.message || 'Failed to get Realtime session');
+
+    // Create mic stream
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: true }); // mic capture. 
+
+    // Set up RTCPeerConnection
+    pc = new RTCPeerConnection();
+    pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed' || pc.connectionState === 'closed') stopRealtime(); };
+
+    // Play remote audio
+    pc.ontrack = (e) => {
+      if (!remoteAudioEl) {
+        remoteAudioEl = document.createElement('audio');
+        remoteAudioEl.autoplay = true;
+        remoteAudioEl.playsInline = true;
+        remoteAudioEl.style.display = 'none';
+        document.body.appendChild(remoteAudioEl);
+      }
+      remoteAudioEl.srcObject = e.streams[0];
+    };
+
+    for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
+
+    // Data channel for events
+    dc = pc.createDataChannel('oai-events');
+    dc.onmessage = (ev) => {
       try {
-        window.speechSynthesis.cancel();
-        const chunks = String(text).match(/.{1,180}(\s|$)/g) || [String(text)];
-        for (const c of chunks){
-          const u = new SpeechSynthesisUtterance(c.trim());
-          u.rate = 1.03; u.pitch = 1.0; u.lang = navigator.language || 'en-US';
-          window.speechSynthesis.speak(u);
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'response.output_text.delta' && msg.delta) {
+          // live text stream
+        } else if (msg.type === 'response.output_text.done' && msg.text) {
+          log(`<div><strong>Assistant:</strong> ${esc(msg.text)}</div>`);
+        } else if (msg.type === 'response.error') {
+          log(`<div class="error">Error: ${esc(msg.error?.message || 'unknown')}</div>`);
         }
-      } catch {}
+      } catch { /* ignore non-JSON control frames */ }
+    };
+
+    const offer = await pc.createOffer({ offerToReceiveAudio: true });
+    await pc.setLocalDescription(offer);
+
+    // Exchange SDP with OpenAI Realtime over HTTPS using the ephemeral token. 
+    const resp = await fetch(data.session_url, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${data.ephemeral_key}`, 'Content-Type': 'application/sdp' },
+      body: offer.sdp
+    });
+    const answer = { type: 'answer', sdp: await resp.text() };
+    await pc.setRemoteDescription(answer);
+
+    // Kick a first response so it greets the user
+    dc?.send(JSON.stringify({
+      type: 'response.create',
+      response: {
+        instructions: 'You are Job Copilot, a concise, proactive voice assistant for resume tailoring and job search. Be brief and helpful.',
+        modalities: ['audio','text'],
+        audio: { voice: 'alloy' }
+      }
+    }));
+
+    isListening = true;
+  }
+
+  function stopRealtime() {
+    try { dc?.close(); } catch {}
+    try { pc?.close(); } catch {}
+    try { localStream?.getTracks()?.forEach(t => t.stop()); } catch {}
+    pc = dc = localStream = null;
+    isListening = false;
+  }
+
+  // Send a typed user message into the realtime session
+  function realtimeSendText(text) {
+    if (!dc) return false;
+    dc.send(JSON.stringify({ type: 'response.create', response: { instructions: text, modalities:['audio','text'], audio:{voice:'alloy'} } }));
+    return true;
+  }
+
+  // ---------- Tool-using “web agent” over HTTP ----------
+  async function runWebAgent(query) {
+    const sb = SUPABASE.client();
+    if (!sb) throw new Error('Supabase not ready');
+    log(`<div><strong>You:</strong> ${esc(query)}</div>`);
+    const { data, error } = await sb.functions.invoke('assistant', { body: { query } });
+    if (error) { log(`<div class="error">Error: ${esc(error.message||'invoke failed')}</div>`); say('Sorry, the web agent failed.'); return; }
+
+    // Render summary + proposed file list
+    if (data?.summary) log(`<div><strong>Summary:</strong> ${esc(data.summary)}</div>`);
+    if (Array.isArray(data?.proposed_changes) && data.proposed_changes.length) {
+      const items = data.proposed_changes.map(pc => `<li><code>${esc(pc.path)}</code> — ${esc(pc.reason||'change')}</li>`).join('');
+      log(`<div style="margin-top:6px"><strong>Proposed file changes:</strong><ul>${items}</ul></div>`);
+      say('I proposed a file change plan. Tell me which files you want me to rewrite next.');
+    } else {
+      say('I searched the web and summarized findings.');
     }
   }
 
-  // ---------- Intent registry ----------
-  const registry = [];
-  function register(pattern, handler, hint){ registry.push({ pattern, handler, hint }); }
-  function clickIf(id){ const el = document.getElementById(id); if (el){ el.click(); return true; } return false; }
-  function readScore(){ const pill = document.getElementById('scoreVal'); if (pill){ say(`Current score ${pill.textContent.trim() || '—'}.`); return true; } return false; }
-  function readSelection(){
-    const t = (window.getSelection?.().toString() || '').trim();
-    if (t) { say(t); return true; }
-    const el = document.getElementById('afterDocx') || document.getElementById('afterDocxPE') || document.getElementById('docxPreview') || document.body;
-    const first = (el.textContent||'').trim().slice(0, 600);
-    if (first) { say(first); return true; }
-    return false;
-  }
+  // ---------- UI wiring ----------
+  ui.fab.onclick = () => (ui.panel.style.display === 'none' ? ui.show() : ui.hide());
+  ui.closeBtn.onclick = ui.hide;
 
-  // Built-ins
-  [
-    [/^(help|what can you do|commands)/i, () => {
-      const hints = registry.map(r => typeof r.pattern === 'string' ? r.pattern : (r.hint || '')).filter(Boolean);
-      say("You can say: 'read score', 'auto tailor', 'export docx', 'print PDF', 'fetch job', 'choose file', 'read selection', 'run shortlist', 'draft materials', 'refresh', 'upload resume', 'open power edit', 'profile', 'sign in', or 'go home'." + (hints.length ? ` Also: ${hints.join(', ')}.` : ''));
-    }],
-    [/^(read )?(score|ats)/i, () => readScore() || say("I couldn't find a score on this page.")],
-    [/^(read|speak|say) (this|selection|page|change|panel)/i, () => readSelection() || say("Select some text first, then try 'read selection'.")],
-    [/^(auto[-\s]?tailor|tailor now)/i, () => clickIf('autoTailor') || say("Auto-tailor isn’t available here.")],
-    [/^(export( docx)?|download( resume)?)/i, () => clickIf('exportDocx') || say("Export isn't available on this page.")],
-    [/^(print|pdf)/i, () => clickIf('printPdf') || say("Print isn’t available here.")],
-    [/^(fetch( job| jd)?|load (job|jd))/i, () => clickIf('fetchJD') || say("Fetch JD isn't available here.")],
-    [/^(choose|upload) (file|docx)/i, () => clickIf('chooseFile') || clickIf('fileInput') || say("I couldn't find the file picker.")],
-    [/^(run|build) (my )?(shortlist|list)/i, () => clickIf('runTailor') || say("Shortlist controls aren’t on this page.")],
-    [/^(draft|create) (covers?|materials|resumes?)/i, () => clickIf('runDrafts') || say("Drafting isn't on this page.")],
-    [/^(refresh|reload)( now)?/i, () => clickIf('refresh') || clickIf('overlayRefresh') || say("No refresh control found.")],
-    [/^(upload) resume/i, () => clickIf('uploadResume') || say("Upload control not found.")],
-    [/^(open )?power edit/i, () => { location.href = 'power-edit.html'; }],
-    [/^(open )?profile/i, () => { location.href = 'profile.html'; }],
-    [/^(sign in|login|log in)/i, () => { location.href = 'login.html'; }],
-    [/^(go )?(home|start)/i, () => { location.href = './'; }],
-    [/^(stop|quiet|silence)/i, () => { try{window.speechSynthesis.cancel();}catch{}; say("Stopped.", 'assertive'); }]
-  ].forEach(([p, h]) => register(p, h));
-
-  // External API
-  window.voiceAssistant = {
-    register(map){
-      for (const key of Object.keys(map||{})){
-        const val = map[key];
-        if (key.startsWith('/') && key.endsWith('/')){
-          const re = new RegExp(key.slice(1,-1), 'i'); register(re, val, key);
-        } else register(String(key).toLowerCase(), val, key);
+  ui.listenBtn.onclick = async () => {
+    if (isListening) return;
+    ui.listenBtn.disabled = true;
+    try {
+      // Prefer realtime if possible, else fall back to plain TTS greeting
+      if (navigator.mediaDevices?.getUserMedia) {
+        await startRealtime();
+        log('<em>Listening… speak to me.</em>');
+      } else {
+        log('<em>Microphone not available on this device.</em>');
+        say('Microphone not available on this device.');
       }
-    },
-    say
+    } catch (e) {
+      log(`<div class="error">Start error: ${esc(e?.message||e)}</div>`);
+      say('Sorry, I could not start voice mode.');
+    } finally {
+      ui.listenBtn.disabled = false;
+    }
   };
 
-  function route(text){
-    const t = String(text||'').trim();
-    if (!t) return;
-    log.textContent += `You: ${t}\n`;
-    try { window.dispatchEvent(new CustomEvent('voice:command', { detail:{ text:t } })); } catch {}
-    for (const {pattern,handler} of registry){
-      try{
-        if (pattern instanceof RegExp && pattern.test(t)) return void handler(t);
-        if (typeof pattern === 'string' && t.toLowerCase().includes(pattern)) return void handler(t);
-      }catch{}
+  ui.stopBtn.onclick = () => { stopRealtime(); log('<em>Stopped.</em>'); };
+
+  ui.sendBtn.onclick = async () => {
+    const txt = ui.box.value.trim();
+    if (!txt) return;
+    ui.box.value = '';
+    if (txt.startsWith('/search ')) {
+      stopRealtime(); // switch to tool mode for determinism
+      await runWebAgent(txt.replace(/^\/search\s+/,''));
+      return;
     }
-    say("Sorry — I didn’t catch a supported command. Say 'help' to hear examples.");
-  }
+    log(`<div><strong>You:</strong> ${esc(txt)}</div>`);
+    if (!realtimeSendText(txt)) {
+      // fallback simple reply (no WebRTC)
+      const sb = SUPABASE.client();
+      try {
+        const { data, error } = await sb.functions.invoke('assistant', { body: { query: txt } });
+        if (error) throw new Error(error.message || 'invoke failed');
+        const reply = data?.summary || data?.text || '(no reply)';
+        log(`<div><strong>Assistant:</strong> ${esc(reply)}</div>`);
+        say(reply);
+      } catch (e) {
+        log(`<div class="error">Error: ${esc(e?.message||e)}</div>`);
+      }
+    }
+  };
 
-  // ---------- STT session ----------
-  let rec = null, listening = false;
-  function setListening(on){
-    listening = !!on;
-    micBtn.setAttribute('aria-pressed', listening ? 'true':'false');
-    micBtn.textContent = listening ? '🛑 Stop' : (HAS_STT ? '🎤 Listen' : '⌨️ Send');
-    dot.classList.toggle('live', listening);
-  }
-
-  if (HAS_STT){
-    rec = new Recog();
-    rec.lang = navigator.language || 'en-US';
-    rec.interimResults = false; rec.maxAlternatives = 1; rec.continuous = false;
-    rec.onresult = (e) => { const phrase = e.results?.[0]?.[0]?.transcript || ''; route(phrase); };
-    rec.onend = () => { setListening(false); };
-    rec.onerror = () => { setListening(false); say("Mic error or permission denied."); };
-  }
-
-  micBtn.addEventListener('click', async () => {
-    interacted = true; // authorize TTS after a gesture
-    if (!HAS_STT){ const t = inputEl.value.trim(); inputEl.value=''; route(t); return; }
-    try {
-      if (!listening){ rec.start(); setListening(true); } else { rec.stop(); setListening(false); }
-    } catch { setListening(false); }
+  // Open panel automatically on first load so users discover it
+  window.addEventListener('load', () => {
+    // If the page already includes a floating assistant button, replace it.
+    const oldFab = document.getElementById('progressFab');
+    if (oldFab) oldFab.parentNode.removeChild(oldFab);
+    ui.show();
   });
-
-  stopBtn.addEventListener('click', () => { try{window.speechSynthesis.cancel();}catch{}; say("Stopped.", 'assertive'); });
-  helpBtn.addEventListener('click', () => route('help'));
-  inputEl.addEventListener('keydown', (e)=>{ if (e.key === 'Enter'){ interacted = true; const t=inputEl.value.trim(); inputEl.value=''; route(t); } });
-
-  // First-run hint (live region only; actual speech after first gesture)
-  setTimeout(()=> say(HAS_STT
-    ? "Assistant ready. Press Alt, Ctrl, or Command plus Slash to open; then Space to start listening."
-    : "Assistant ready in text mode. Type a command and press Enter."
-  ), 250);
 })();
