@@ -1,7 +1,8 @@
 // js/after-docx.js
-// Renders the DOCX-styled “After” preview (docx-preview) and auto-refreshes when:
-// 1) Power Edit’s Auto-tailor signals kickoff/done (event-driven), and
-// 2) As a fallback, we short-poll drafts_index.json for newly added change files.
+// Renders the DOCX-styled “After” pane for Power Edit (PE IDs) and keeps it fresh.
+// - Uses AfterDocxHelper to render + make paragraphs inline-editable.
+// - Auto-refreshes on Power Edit’s Auto-tailor kickoff/done events.
+// - Falls back to short-polling drafts_index.json to detect new change files.
 
 (function(){
   const $ = (id) => document.getElementById(id);
@@ -29,40 +30,12 @@
   let lastIndex = [];
   let pollTimer = null;
 
-  // Allow Power Edit to feed us the loaded DOCX (so we don’t re-download)
+  // Allow Power Edit to feed us the loaded DOCX (avoid re-download)
   window.addEventListener("pe:docx-loaded", (e) => {
     if (e?.detail?.ab) ORIGINAL_DOCX_AB = e.detail.ab;
   });
 
-  // ---- Patch rendered HTML with change entries ----
-  const norm = s => String(s||"").replace(/[–—]/g,"-").replace(/\s+/g," ").trim().toLowerCase();
-
-  function applyChanges(root, changes){
-    const paras = Array.from(root.querySelectorAll("p"));
-    const bucket = new Map();
-    for (const p of paras){
-      const t = norm(p.textContent);
-      if (!t) continue;
-      if (!bucket.has(t)) bucket.set(t, []);
-      bucket.get(t).push(p);
-    }
-    for (const ch of (changes || [])){
-      const orig = norm(ch.original_paragraph_text || ch.anchor || "");
-      if (!orig) continue;
-      let candidates = bucket.get(orig);
-      if (!candidates || !candidates.length){
-        candidates = paras.filter(p => norm(p.textContent).includes(orig));
-      }
-      if (!candidates?.length) continue;
-      const p = candidates.shift();
-      if (ch.modified_paragraph_text){
-        p.textContent = ch.modified_paragraph_text;
-      } else if (ch.inserted_sentence){
-        p.textContent = (p.textContent.trim() + " " + ch.inserted_sentence).replace(/\s+/g," ");
-      }
-    }
-  }
-
+  // ---- Helpers ----
   async function fetchOriginalDocxAB(){
     if (ORIGINAL_DOCX_AB) return ORIGINAL_DOCX_AB;
     const u = await getUser(); if (!u) return null;
@@ -113,12 +86,11 @@
   }
 
   async function renderSelected(){
-    if (!target) return;
     target.innerHTML = "";
     if (msg) msg.textContent = "";
 
     const ab = await fetchOriginalDocxAB();
-    if (!ab){ if (msg) msg.textContent = "Upload a .docx to preview the styled ‘after’ resume."; return; }
+    if (!ab){ if (msg) msg.textContent = "Upload a .docx to preview the styled ‘After’ resume."; return; }
 
     const fname = sel?.value || "";
     if (!fname){ if (msg) msg.textContent = "No change log selected."; return; }
@@ -137,13 +109,7 @@
     } catch {}
 
     try {
-      await window.docx.renderAsync(
-        ab,
-        target,
-        null,
-        { className:"docx", inWrapper:true, breakPages:true, ignoreFonts:false, trimXmlDeclaration:true }
-      );
-      applyChanges(target, changes || []);
+      await window.AfterDocxHelper.renderAndPatch(ab, target, changes || []);
     } catch(e){
       if (msg) msg.textContent = "Render error: " + String(e?.message || e);
     }
@@ -155,17 +121,9 @@
   }
 
   // Event-driven hookup from Power Edit
-  window.addEventListener("jc:autoTailor:done", async (e) => {
-    const targetFile = e?.detail?.change;
+  window.addEventListener("jc:autoTailor:done", async () => {
     const names = await populateMenu(false);
-    if (sel) {
-      if (targetFile){
-        const idx = names.findIndex(n => n === targetFile);
-        sel.selectedIndex = idx >= 0 ? idx : 0;
-      } else {
-        sel.selectedIndex = 0;
-      }
-    }
+    if (sel) sel.selectedIndex = names.length ? 0 : -1;
     await renderSelected();
   });
 
