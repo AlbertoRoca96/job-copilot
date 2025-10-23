@@ -12,6 +12,11 @@
     .modal-content{width:min(980px,92vw); max-height:86vh; overflow:auto; background:#fff; border-radius:12px; box-shadow:0 8px 30px rgba(0,0,0,.2)}
     .modal-header{display:flex; justify-content:space-between; align-items:center; padding:12px 14px; border-bottom:1px solid var(--border); position:sticky; top:0; background:#fff}
     .modal-body{padding:14px}
+
+    /* DOCX-styled AFTER preview (identical look to "Formatted Resume") */
+    .docx-wrap{background:#6b7280; padding:14px; display:flex; justify-content:center; border-radius:8px}
+    .docx .page{background:#fff; box-shadow:0 6px 18px rgba(0,0,0,.2); margin:12px 0}
+    .muted.small{font-size:12px; color:#6b7280}
   </style>
 </head>
 <body>
@@ -103,6 +108,25 @@
           <span id="draftMsg" class="status" aria-live="polite"></span>
         </li>
       </ol>
+    </section>
+
+    <!-- NEW: After (DOCX styles) -->
+    <section id="afterDocxCard" class="card hidden mt-4" aria-labelledby="after-docx-title">
+      <div class="row" style="justify-content:space-between; align-items:center">
+        <div>
+          <h2 id="after-docx-title" style="margin:0 0 6px 0">After (DOCX styles)</h2>
+          <p class="muted small" style="margin:0">Exact clone of your formatted resume with AI-woven text applied.</p>
+        </div>
+        <div class="row" style="gap:8px">
+          <label for="afterChange" class="sr-only">Change set</label>
+          <select id="afterChange" class="ctl" style="min-width:260px"></select>
+          <button id="afterRender" class="btn" type="button">Render</button>
+        </div>
+      </div>
+      <div id="afterDocxWrap" class="docx-wrap" style="margin-top:10px">
+        <div id="afterDocx" class="docx" role="region" aria-label="After resume preview"></div>
+      </div>
+      <div id="afterDocxMsg" class="status" aria-live="polite"></div>
     </section>
 
     <!-- Power Edit -->
@@ -206,7 +230,11 @@
     window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc";
   </script>
   <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-  <script defer src="/job-copilot/profile.js?v=2025-10-23-a11y"></script>
+
+  <!-- docx-preview for styled rendering -->
+  <script defer src="https://cdn.jsdelivr.net/npm/docx-preview@0.3.4/dist/docx-preview.min.js"></script>
+
+  <script defer src="/job-copilot/profile.js?v=2025-10-23-after-docx"></script>
 
   <script defer src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script defer src="js/feedback.js?v=2025-10-12"></script>
