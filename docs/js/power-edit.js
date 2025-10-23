@@ -1,12 +1,13 @@
-// Power Edit client (JD-URL fetch + Rich Editor + formatted DOCX preview).
+// Power Edit client (JD-URL fetch + ATS scoring + formatted DOCX preview).
 // Format-preserving DOCX export (v6):
 // - Education + References are HARD-LOCKED.
-// - Only write inside existing <w:t> nodes (never delete runs).
-// - Preserve: bullet/numbering, leading punctuation prefix (—/–/-/• + spaces), hyperlinks,
-//             run boundaries (by pouring new text proportionally across original non-link runs).
+// - Only write inside existing <w:t xml:space="preserve"> nodes (never delete runs).
+// - Preserve: bullet/numbering, leading punctuation, hyperlinks,
+//             run boundaries (pour new text across original non-link runs).
 // NEW:
-// - Editable “After (DOCX styles)” pane (docx-preview) that patches AI rewrites and inline edits.
-// - Auto-tailor hook: immediately re-renders the styled “After” pane and polls for saved change files.
+// - The “After (DOCX styles)” pane is the ONLY editor (contenteditable).
+// - Export pulls diffs directly from that pane.
+// - Auto-tailor immediately re-renders the styled “After” with results.
 
 (async function () {
   await new Promise((r) => window.addEventListener("load", r));
@@ -41,7 +42,7 @@
   const fmtState     = $("fmtState");
   const docxPreview  = $("docxPreview");
 
-  // Styled After (editable) — allow PE IDs or non-PE IDs (fallback)
+  // Primary (styled) editor elements
   const afterDocx    = $("afterDocx")    || $("afterDocxPE");
   const afterDocxMsg = $("afterDocxMsg") || $("afterDocxMsgPE");
   const afterChange  = $("afterChange")  || $("afterChangePE");
@@ -49,12 +50,10 @@
   // ---------- state ----------
   let originalDocxBuffer = null; // used by export + After pane
   let lastRewrites = [];
-  let editor = null;
 
   // ---------- helpers ----------
   const esc = (s) => String(s || "").replace(/[&<>]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c]));
   const normalizeWS = (s) => String(s || "").replace(/\s+/g, " ").trim();
-  const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const WORD_RE = /[A-Za-z][A-Za-z0-9+./-]{1,}/g;
 
   const HEADERS_CANON = new Map([
@@ -106,49 +105,6 @@
   }
   const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
 
-  // ---------- TinyMCE ----------
-  async function ensureEditor() {
-    if (editor) return editor;
-    if (!window.tinymce) return null;
-    const eds = await window.tinymce.init({
-      selector: '#afterEditor',
-      menubar: false,
-      plugins: 'lists link',
-      toolbar: 'undo redo | styles | bold italic underline | bullist numlist outdent indent | link | removeformat',
-      height: 420,
-      branding: false,
-      content_style: 'body{font:13px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding:10px;}'
-    });
-    editor = eds?.[0] || null;
-    return editor;
-  }
-
-  function textToEditorHtml(txt="") {
-    const lines = String(txt).replace(/\r/g,"").split("\n");
-    let html = "", inList = false;
-    const bullet = /^([•\-\u2013\u2014\*]|\d+[.)])\s+(.*)$/;
-    for (const raw of lines) {
-      const l = raw.trim();
-      if (!l) { if (inList) { html += "</ul>"; inList=false; } html += "<p><br></p>"; continue; }
-      const m = l.match(bullet);
-      if (m) {
-        if (!inList) { html += "<ul>"; inList = true; }
-        html += `<li>${esc(m[2])}</li>`;
-      } else {
-        if (inList) { html += "</ul>"; inList=false; }
-        html += `<p>${esc(l)}</p>`;
-      }
-    }
-    if (inList) html += "</ul>";
-    return html || "<p><br></p>";
-  }
-
-  function editorTextOrAfter() {
-    const ed = window.tinymce?.get('afterEditor');
-    const txt = ed ? ed.getContent({ format: 'text' }).trim() : "";
-    return txt || (resumeText.value || "");
-  }
-
   // ---------- textarea bullets (section-aware) ----------
   function bulletsFromText(txt) {
     const lines = (txt || "").replace(/\r/g,"").split("\n");
@@ -175,18 +131,6 @@
       <pre class="mono">${esc(after)}</pre>
       <div class="change-reason">${esc(item.reason || "Full rewrite using JD keywords (formatting preserved).")}</div>
     </div>`;
-  }
-
-  function rebuildAfterPreviewText(source, rewrites) {
-    let text = source || "";
-    for (const r of rewrites) {
-      const before = (r.original || "").trim();
-      const after = (r.rewritten || "").trim();
-      if (!before || !after) continue;
-      const pattern = new RegExp(`(^|\\n)\\s*(?:[•\\-\\u2013\\u2014\\*]|\\d+[.)])?\\s*${escapeRegExp(before)}\\s*(?=\\n|$)`, "g");
-      text = text.replace(pattern, (m,g1) => `${g1}${after}`);
-    }
-    return text;
   }
 
   // ---------- DOCX utils ----------
@@ -249,7 +193,7 @@
     let tNodes = Array.from(pNode.getElementsByTagNameNS(W_NS,"t"));
     if (!tNodes.length) tNodes = ensureTextRun(xmlDoc, pMeta);
 
-    // Preserve the bullet/number run (if any) by skipping the first <w:t> that is just a symbol/space.
+    // Preserve bullet/number run (if any) by skipping the first <w:t> that is just a symbol/space.
     let startIdx = 0;
     if (tNodes.length) {
       const firstText = tNodes[0].textContent || "";
@@ -279,7 +223,7 @@
     const prefix = prefixMatch ? prefixMatch[1] : "";
     const combined = prefix + newText;
 
-    // Distribute 'combined' across the editable nodes proportionally to their original lengths
+    // Distribute 'combined' across the editable nodes proportionally
     const originalLens = editable.map(t => (t.textContent || "").length || 1);
     const totalOrig = originalLens.reduce((a,b)=>a+b,0) || 1;
     const totalNew = combined.length;
@@ -298,7 +242,7 @@
 
   async function buildDocxWithRewrites(buffer, rewrites) {
     const zip = await window.JSZip.loadAsync(buffer);
-    let docPath = "word/document.xml";
+    const docPath = "word/document.xml";
     const xmlStr = await zip.file(docPath).async("string");
 
     const xmlDoc = new DOMParser().parseFromString(xmlStr, "application/xml");
@@ -312,6 +256,7 @@
       const target = normalizeWS(originalText || "");
       let bestIdx=-1, bestScore=0;
 
+      // 1) prefer bullet/list paragraphs
       for (let i=0;i<paragraphs.length;i++){
         if (replaced.has(i)) continue;
         const p = paragraphs[i];
@@ -322,6 +267,7 @@
       }
       if (bestScore>=0.72) return bestIdx;
 
+      // 2) fallback: any paragraph (except protected)
       bestIdx=-1; bestScore=0;
       for (let i=0;i<paragraphs.length;i++){
         if (replaced.has(i)) continue;
@@ -333,7 +279,7 @@
       return bestScore>=0.92 ? bestIdx : -1;
     }
 
-    for (const r of rewrites || []) {
+    for (const r of (rewrites || [])) {
       const before = String(r.original || "").trim();
       const after  = String(r.rewritten || "").trim();
       if (!before || !after) continue;
@@ -354,7 +300,7 @@
     try {
       const buf = await f.arrayBuffer(); originalDocxBuffer = buf; setFmtState(true);
 
-      // let the PE “After” pane reuse this buffer without re-fetching
+      // let the After pane reuse this buffer without re-fetching
       window.dispatchEvent(new CustomEvent("pe:docx-loaded", { detail:{ ab: buf } }));
 
       // Render a read-only formatted view of the DOCX
@@ -365,6 +311,7 @@
         }
       } catch {}
 
+      // Extract plaintext for ATS + tailoring
       const zip = await window.JSZip.loadAsync(buf);
       const xmlStr = await zip.file("word/document.xml").async("string");
       const xmlDoc = new DOMParser().parseFromString(xmlStr, "application/xml");
@@ -384,8 +331,6 @@
         setFmtState(true); refreshScore();
       } catch (e2) { setFmtState(false); alert("Failed to read .docx: " + (e?.message || e)); }
     }
-
-    await ensureEditor();
   };
 
   // ---------- scoring ----------
@@ -427,7 +372,7 @@
     }
   };
 
-  // ---------- Styled AFTER (DOCX) helpers ----------
+  // ---------- Styled AFTER (DOCX) ----------
   async function ensureOriginalDocxBuffer() {
     if (originalDocxBuffer) return originalDocxBuffer;
     const u = await getUser(); if (!u) return null;
@@ -445,10 +390,7 @@
   // ---------- server call (rewrites) ----------
   autoTailor.onclick = async () => {
     tailorMsg.textContent = ""; changesBox.innerHTML = "";
-
-    // signal kickoff for the PE After pane watcher
-    window.dispatchEvent(new CustomEvent("jc:autoTailor:kickoff"));
-
+    window.dispatchEvent(new CustomEvent("jc:autoTailor:kickoff")); // notify pane poller
     await refreshAuthPill();
     if (afterDocxMsg) afterDocxMsg.textContent = "Generating rewrites…";
 
@@ -475,23 +417,24 @@
       if (!lastRewrites.length) {
         tailorMsg.textContent = "No eligible rewrite suggestions returned.";
         afterDocxMsg && (afterDocxMsg.textContent = "No changes to apply.");
-        // signal done anyway
         window.dispatchEvent(new CustomEvent("jc:autoTailor:done"));
         return;
       }
 
-      // Change log (side card)
+      // Change log cards
       changesBox.innerHTML = lastRewrites.map(renderChangeCard).join("");
-
-      // Plain editor convenience (not authoritative for export)
-      const afterText = rebuildAfterPreviewText(resumeText.value, lastRewrites);
-      await ensureEditor();
-      if (editor) editor.setContent(textToEditorHtml(afterText));
 
       const gated = data?.stats?.gated ?? 0, took = data?.stats?.took_ms ?? 0;
       tailorMsg.textContent = `Rewrites: ${lastRewrites.length} (gated ${gated}, ${took} ms)`;
 
-      // Notify the PE pane to re-render immediately; filename may be unknown.
+      // Immediately render into the live styled editor
+      const ab = await ensureOriginalDocxBuffer();
+      if (ab && afterDocx && window.AfterDocxHelper) {
+        await window.AfterDocxHelper.renderAndPatch(ab, afterDocx, lastRewrites);
+        afterDocxMsg && (afterDocxMsg.textContent = "");
+      }
+
+      // Also notify the pane listener (so dropdown / saved file mode stays in sync)
       window.dispatchEvent(new CustomEvent("jc:autoTailor:done", { detail: { rewrites: lastRewrites } }));
     } catch (e) {
       tailorMsg.textContent = "Error: " + String(e?.message || e);
@@ -503,7 +446,7 @@
 
   // ---------- export ----------
   exportDocx.onclick = async () => {
-    // Preferred: export using live inline edits captured from the styled After pane
+    // Preferred: export using live inline edits captured from the styled pane
     try {
       const ab = await ensureOriginalDocxBuffer();
       const styledRoot = afterDocx;
@@ -517,23 +460,16 @@
       }
     } catch (e) { console.warn("Styled-pane export failed, trying server rewrites:", e); }
 
-    // Fallback: server rewrites applied to original DOCX
+    // Fallback: apply last server rewrites
     if (originalDocxBuffer && lastRewrites?.length) {
       try {
         const blob = await buildDocxWithRewrites(originalDocxBuffer, lastRewrites);
         const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "Resume-tailored.docx"; a.click(); URL.revokeObjectURL(a.href);
         return;
-      } catch (e) { console.warn("Format-preserving export failed; falling back:", e); }
+      } catch (e) { console.warn("Format-preserving export failed; fallback skipped:", e); }
     }
 
-    // Final fallback: simple paragraphs from the plain editor
-    const { Document, Packer, Paragraph, TextRun } = window.docx || {};
-    if (!Document) { alert("docx library not loaded."); return; }
-    const finalText = editorTextOrAfter();
-    const lines = (finalText || "").split(/\n/);
-    const doc = new Document({ sections:[{ properties:{}, children: lines.map(l => new Paragraph({ children:[new TextRun(l)] })) }] });
-    const blob = await Packer.toBlob(doc);
-    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "Resume-edited.docx"; a.click(); URL.revokeObjectURL(a.href);
+    alert("Nothing to export yet — upload a .docx and make or accept edits first.");
   };
 
   // ---------- print ----------
@@ -544,20 +480,21 @@
       styledRoot.querySelectorAll("[contenteditable]").forEach(n=>n.removeAttribute("contenteditable"));
       w.document.write(`<div>${styledRoot.innerHTML}</div>`);
     } else {
-      w.document.write(`<pre style="white-space:pre-wrap;font:13px ui-monospace">${esc(editorTextOrAfter())}</pre>`);
+      w.document.write(`<pre style="white-space:pre-wrap;font:13px ui-monospace">${esc(resumeText.value || "")}</pre>`);
     }
     w.document.close(); w.focus(); w.print();
   };
 
   // ---------- initial boot ----------
-  await ensureEditor();
   await refreshAuthPill(); setFmtState(false); refreshScore();
 })();
 
 /* -----------------------------------------------------------------------
    Helper (inlined): AfterDocxHelper
-   - renderAndPatch(arrayBuffer, rootEl, changes[])
-   - getRewrites(rootEl) -> [{original, rewritten}]
+   - renderAndPatch(arrayBuffer, rootEl, changes[]):
+       Renders DOCX to HTML via docx-preview and applies change entries.
+       Makes paragraphs inline-editable and snapshots orig/current text.
+   - getRewrites(rootEl) -> [{original, rewritten}] from inline edits.
 ------------------------------------------------------------------------ */
 (function (w) {
   const NS = {};
@@ -592,12 +529,9 @@
     const out = [];
     for (const ch of arr){
       const before =
-        ch.original_paragraph_text ??
-        ch.original ??
-        ch.anchor ?? "";
+        ch.original_paragraph_text ?? ch.original ?? ch.anchor ?? "";
       let after =
-        ch.modified_paragraph_text ??
-        ch.rewritten ?? "";
+        ch.modified_paragraph_text ?? ch.rewritten ?? "";
       if (!after && ch.inserted_sentence && before){
         after = plain(before + " " + ch.inserted_sentence);
       }
