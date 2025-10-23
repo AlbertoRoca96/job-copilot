@@ -8,11 +8,16 @@
   <link rel="stylesheet" href="style.css" />
   <style>
     .editor-note{margin-top:6px; color:#555; font-size:12px}
+    .docx-view{background:#6b7280; padding:14px; border-radius:8px}
+
     /* DOCX-styled AFTER preview */
     .docx-wrap{background:#6b7280; padding:14px; display:flex; justify-content:center; border-radius:8px}
     .docx .page{background:#fff; box-shadow:0 6px 18px rgba(0,0,0,.2); margin:12px 0}
     .muted.small{font-size:12px; color:#6b7280}
-    .docx-view{background:#6b7280; padding:14px; border-radius:8px}
+
+    /* Inline-edit affordance inside the docx-preview area */
+    .docx [contenteditable="true"]{outline:2px solid transparent}
+    .docx [contenteditable="true"]:focus{outline:2px dashed #93c5fd; background:rgba(147,197,253,.08)}
   </style>
 </head>
 <body>
@@ -83,12 +88,12 @@
       <div class="small muted">Rendered locally via <code>docx-preview</code>.</div>
     </section>
 
-    <!-- NEW: After (DOCX styles) -->
+    <!-- After (DOCX styles) — now EDITABLE -->
     <section class="card" style="margin-top:12px" aria-labelledby="after-docx-title">
       <div class="row" style="justify-content:space-between; align-items:center">
         <div>
           <h2 id="after-docx-title" style="margin:6px 0">After (DOCX styles)</h2>
-          <p class="muted small" style="margin:0">Exact clone of your formatted resume with AI-woven text applied.</p>
+          <p class="muted small" style="margin:0">Exact clone of your formatted resume with AI-woven text applied. <strong>Click text to edit inline.</strong></p>
         </div>
         <div class="row" style="gap:8px">
           <label for="afterChangePE" class="sr-only">Change set</label>
@@ -106,17 +111,12 @@
       <h2 style="margin:6px 0">Rich Editor (After)</h2>
       <label class="sr-only" for="afterEditor">After editor</label>
       <textarea id="afterEditor"></textarea>
-      <div class="editor-note">Touch up the “After” content here. Style-preserving export still applies to auto-tailored bullets; freeform edits export through the simple fallback DOCX/PDF.</div>
+      <div class="editor-note">Touch up text if you prefer a plain editor. Export uses the styled “After” (including your inline edits) when possible; otherwise it falls back gracefully.</div>
     </section>
 
     <section class="card" style="margin-top:12px">
       <h2 style="margin:6px 0">Change Log</h2>
       <div id="changes" role="region" aria-live="polite" aria-label="Change log"></div>
-    </section>
-
-    <section class="card" style="margin-top:12px">
-      <h2 style="margin:6px 0">Preview (After)</h2>
-      <pre id="afterPreview" class="mono" role="region" aria-label="After preview">(no changes yet)</pre>
     </section>
   </main>
 
@@ -133,9 +133,11 @@
   <script defer src="https://cdn.jsdelivr.net/npm/docx-preview@0.3.4/dist/docx-preview.min.js"></script>
   <script defer src="js/scoring.js?v=2025-10-07-2"></script>
 
-  <!-- NEW: Styled “After” helper + Power Edit app -->
-  <script defer src="js/after-docx.js?v=2025-10-23-auto"></script>
-  <script defer src="js/power-edit.js?v=2025-10-23-auto"></script>
+  <!-- PE glue for the “After (DOCX styles)” pane -->
+  <script defer src="js/after-docx.js?v=2025-10-23-editable"></script>
+
+  <!-- Power Edit app (includes the helper at bottom) -->
+  <script defer src="js/power-edit.js?v=2025-10-23-editable"></script>
 
   <script defer src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script defer src="js/feedback.js?v=2025-10-12"></script>
