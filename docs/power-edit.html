@@ -4,136 +4,113 @@
   <meta charset="utf-8" />
   <title>job-copilot — Power Edit (resume)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light">
   <link rel="stylesheet" href="style.css" />
   <style>
-    .wrap { max-width: 1100px; margin:20px auto; padding:0 12px; }
-    .card { border:1px solid #e5e5e5; border-radius:12px; padding:16px; background:#fcfcfc; }
-    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-    .btn { padding:6px 10px; border:1px solid #ccc; background:#fff; border-radius:8px; cursor:pointer; text-decoration:none; display:inline-block; }
-    .pill { display:inline-block; padding:2px 8px; margin:2px; border:1px solid #e0e0e0; border-radius:999px; font-size:12px; background:#f6f6f6; }
-    .ctl { margin:6px 8px 0 0; min-width:260px; }
-    textarea { width:100%; min-height:160px; padding:8px; border:1px solid #e0e0e0; border-radius:8px; font: 13px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; background:#fff; }
-    input[type="url"], input[type="text"], input[type="number"] { padding:8px; border:1px solid #e0e0e0; border-radius:8px; }
-    .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
-    .pane { background:#fff; border:1px solid #eee; border-radius:10px; padding:10px; }
-    .pane h3 { margin: 6px 0; }
-    .muted { color:#666; }
-    .small { font-size:12px; }
-    .mono { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; background:#fff; border:1px dashed #eee; padding:10px; border-radius:8px; }
-    .change-card { border:1px solid #eee; border-radius:8px; padding:10px; margin-bottom:10px; background:#fafafa; }
-    .change-title { font-weight:600; margin-bottom:6px; }
-    .change-reason { color:#555; font-size:12px; margin-top:6px; }
-    .scorebox { font-size:13px; background:#fff; border:1px solid #eee; border-radius:8px; padding:6px 8px; }
-
-    /* Formatted DOCX viewer */
-    .docx-view { background:#fff; border:1px solid #eee; border-radius:10px; padding:10px; max-height:560px; overflow:auto; }
-
-    /* Editor note */
-    .editor-note { margin-top:6px; color:#666; font-size:12px; }
+    .editor-note{margin-top:6px; color:#555; font-size:12px}
   </style>
 </head>
 <body>
-  <main class="wrap">
-    <h1>Power Edit (resume)</h1>
+  <a href="#main" class="skip-link">Skip to main content</a>
+
+  <main id="main" class="wrap" aria-labelledby="page-title">
+    <h1 id="page-title">Power Edit (resume)</h1>
     <p class="muted">
       Upload your .docx or paste resume text, then paste a JD <em>or fetch by URL</em>.
       You’ll get live score + compound/complex rewrites with natural JD keyword weaving.
     </p>
 
-    <div class="row" style="margin-bottom:8px">
+    <div class="row" style="margin-bottom:8px" role="group" aria-label="Utilities">
       <a href="feedback.html" class="btn">Give Feedback</a>
-      <button id="chooseFile" class="btn">Choose .docx</button>
-      <input id="fileInput" type="file" accept=".docx" style="display:none" />
-      <button id="exportDocx" class="btn">Export .docx</button>
-      <button id="printPdf" class="btn">Print / Save as PDF</button>
-      <span class="scorebox">Score: <span id="scoreVal">—</span></span>
-      <span id="signinState" class="pill">Checking sign-in…</span>
+      <button id="chooseFile" class="btn" type="button">Choose .docx</button>
+      <input id="fileInput" type="file" accept=".docx" style="display:none" aria-hidden="true" tabindex="-1" />
+      <button id="exportDocx" class="btn" type="button">Export .docx</button>
+      <button id="printPdf" class="btn" type="button">Print / Save as PDF</button>
+      <span class="pill" aria-live="polite">Score: <span id="scoreVal">—</span></span>
+      <span id="signinState" class="pill" aria-live="polite">Checking sign-in…</span>
       <span id="fmtState" class="pill" title="Shown when a .docx has been loaded; export will preserve original list/paragraph styles.">Formatting: simple</span>
     </div>
 
     <section class="card" style="margin-top:8px">
       <div class="grid2">
-        <div class="pane">
-          <h3>Your Resume (editable)</h3>
+        <div class="pane" aria-labelledby="resume-title">
+          <h3 id="resume-title">Your Resume (editable)</h3>
           <div class="small muted">If you upload a .docx we’ll extract plaintext to start; you can edit freely. Export will preserve the original .docx’s list/paragraph styles.</div>
-          <textarea id="resumeText" placeholder="Paste your resume plaintext here…"></textarea>
+          <label for="resumeText" class="sr-only">Resume text</label>
+          <textarea id="resumeText" placeholder="Paste your resume plaintext here…" aria-describedby="resume-h"></textarea>
+          <div id="resume-h" class="sr-only">Paste or edit your resume text.</div>
         </div>
 
-        <div class="pane">
-          <h3>Job Description</h3>
+        <div class="pane" aria-labelledby="jd-title">
+          <h3 id="jd-title">Job Description</h3>
           <div class="row" style="align-items:flex-end">
             <div style="flex:1 1 320px">
               <label class="small muted" for="jdUrl">JD URL (Greenhouse/Lever/Ashby/Workday/etc.)</label><br/>
               <input id="jdUrl" class="ctl" type="url" placeholder="https://boards.greenhouse.io/.../jobs/12345" style="min-width:340px" />
             </div>
-            <button id="fetchJD" class="btn">Fetch</button>
-            <span id="fetchMsg" class="muted small" aria-live="polite"></span>
+            <button id="fetchJD" class="btn" type="button" aria-describedby="fetchMsg">Fetch</button>
+            <span id="fetchMsg" class="muted small" role="status" aria-live="polite"></span>
           </div>
 
           <div class="row" style="margin-top:6px">
+            <label class="sr-only" for="jobTitle">Job title</label>
             <input id="jobTitle" class="ctl" type="text" placeholder="e.g., Software Engineer I (Full-Stack)" />
+            <label class="sr-only" for="jobCompany">Company</label>
             <input id="jobCompany" class="ctl" type="text" placeholder="e.g., RoadRunner" />
           </div>
 
+          <label class="sr-only" for="jobDesc">Job description</label>
           <textarea id="jobDesc" placeholder="Paste the JD here…"></textarea>
 
           <div class="row" style="margin-top:6px">
-            <label>Max words per bullet</label>
+            <label for="maxWords">Max words per bullet</label>
             <input id="maxWords" class="ctl" type="number" min="12" max="60" value="28" style="max-width:110px" />
-            <button id="autoTailor" class="btn">Auto-tailor (server)</button>
-            <span id="tailorMsg" class="muted"></span>
+            <button id="autoTailor" class="btn" type="button">Auto-tailor (server)</button>
+            <span id="tailorMsg" class="muted" role="status" aria-live="polite"></span>
           </div>
         </div>
       </div>
     </section>
 
-    <section class="card" style="margin-top:12px">
-      <h2 style="margin:6px 0">Formatted Resume (read-only, original DOCX styles)</h2>
-      <div id="docxPreview" class="docx-view">(upload a .docx to see the formatted view)</div>
+    <section class="card" style="margin-top:12px" aria-labelledby="formatted-title">
+      <h2 id="formatted-title" style="margin:6px 0">Formatted Resume (read-only, original DOCX styles)</h2>
+      <div id="docxPreview" class="docx-view" role="region" aria-live="polite" aria-label="Formatted resume preview">(upload a .docx to see the formatted view)</div>
       <div class="small muted">Rendered locally via <code>docx-preview</code>.</div>
     </section>
 
     <section class="card" style="margin-top:12px">
       <h2 style="margin:6px 0">Rich Editor (After)</h2>
+      <label class="sr-only" for="afterEditor">After editor</label>
       <textarea id="afterEditor"></textarea>
       <div class="editor-note">Touch up the “After” content here. Style-preserving export still applies to auto-tailored bullets; freeform edits export through the simple fallback DOCX/PDF.</div>
     </section>
 
     <section class="card" style="margin-top:12px">
       <h2 style="margin:6px 0">Change Log</h2>
-      <div id="changes"></div>
+      <div id="changes" role="region" aria-live="polite" aria-label="Change log"></div>
     </section>
 
     <section class="card" style="margin-top:12px">
       <h2 style="margin:6px 0">Preview (After)</h2>
-      <pre id="afterPreview" class="mono">(no changes yet)</pre>
+      <pre id="afterPreview" class="mono" role="region" aria-label="After preview">(no changes yet)</pre>
     </section>
   </main>
 
-  <!-- Supabase config -->
+  <!-- Supabase + libs (unchanged) -->
   <script>
     window.SUPABASE_URL = "https://imozfqawxpsasjdmgdkh.supabase.co";
     window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc";
   </script>
   <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-
-  <!-- Mammoth (kept for import fallback) -->
   <script defer src="https://unpkg.com/mammoth@1.6.0/mammoth.browser.min.js"></script>
-  <!-- JSZip to patch original DOCX -->
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  <!-- docx: fallback export only -->
   <script defer src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
-
-  <!-- New: TinyMCE WYSIWYG (OSS build) -->
   <script defer src="https://cdn.jsdelivr.net/npm/tinymce@6.8.3/tinymce.min.js" referrerpolicy="origin"></script>
-  <!-- New: docx-preview (client-side .docx renderer) -->
   <script defer src="https://cdn.jsdelivr.net/npm/docx-preview@0.3.4/dist/docx-preview.min.js"></script>
 
-  <!-- Local scripts -->
   <script defer src="js/scoring.js?v=2025-10-07-2"></script>
   <script defer src="js/power-edit.js?v=2025-10-12-editor"></script>
 
-  <!-- Feedback widget -->
   <script defer src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script defer src="js/feedback.js?v=2025-10-12"></script>
 </body>
