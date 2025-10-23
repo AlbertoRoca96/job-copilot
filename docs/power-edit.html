@@ -7,10 +7,9 @@
   <meta name="color-scheme" content="light">
   <link rel="stylesheet" href="style.css" />
   <style>
-    .editor-note{margin-top:6px; color:#555; font-size:12px}
     .docx-view{background:#6b7280; padding:14px; border-radius:8px}
 
-    /* DOCX-styled AFTER preview */
+    /* DOCX-styled AFTER editor */
     .docx-wrap{background:#6b7280; padding:14px; display:flex; justify-content:center; border-radius:8px}
     .docx .page{background:#fff; box-shadow:0 6px 18px rgba(0,0,0,.2); margin:12px 0}
     .muted.small{font-size:12px; color:#6b7280}
@@ -26,8 +25,8 @@
   <main id="main" class="wrap" aria-labelledby="page-title">
     <h1 id="page-title">Power Edit (resume)</h1>
     <p class="muted">
-      Upload your .docx or paste resume text, then paste a JD <em>or fetch by URL</em>.
-      You’ll get live score + compound/complex rewrites with natural JD keyword weaving.
+      Upload your .docx or paste a JD (or fetch by URL). We’ll score and auto-tailor,
+      and you can <strong>edit inline directly in the Word-styled “After” pane</strong>.
     </p>
 
     <div class="row" style="margin-bottom:8px" role="group" aria-label="Utilities">
@@ -44,11 +43,10 @@
     <section class="card" style="margin-top:8px">
       <div class="grid2">
         <div class="pane" aria-labelledby="resume-title">
-          <h3 id="resume-title">Your Resume (editable)</h3>
-          <div class="small muted">If you upload a .docx we’ll extract plaintext to start; you can edit freely. Export will preserve the original .docx’s list/paragraph styles.</div>
+          <h3 id="resume-title">Your Resume (plaintext)</h3>
+          <div class="small muted">We extract plaintext from your DOCX for ATS scoring and for the tailor engine. Editing is done below in the “After (DOCX styles)” pane.</div>
           <label for="resumeText" class="sr-only">Resume text</label>
-          <textarea id="resumeText" placeholder="Paste your resume plaintext here…" aria-describedby="resume-h"></textarea>
-          <div id="resume-h" class="sr-only">Paste or edit your resume text.</div>
+          <textarea id="resumeText" placeholder="(auto-filled from .docx)"></textarea>
         </div>
 
         <div class="pane" aria-labelledby="jd-title">
@@ -88,7 +86,7 @@
       <div class="small muted">Rendered locally via <code>docx-preview</code>.</div>
     </section>
 
-    <!-- After (DOCX styles) — now EDITABLE -->
+    <!-- After (DOCX styles) — EDITABLE & the primary editor -->
     <section class="card" style="margin-top:12px" aria-labelledby="after-docx-title">
       <div class="row" style="justify-content:space-between; align-items:center">
         <div>
@@ -108,13 +106,6 @@
     </section>
 
     <section class="card" style="margin-top:12px">
-      <h2 style="margin:6px 0">Rich Editor (After)</h2>
-      <label class="sr-only" for="afterEditor">After editor</label>
-      <textarea id="afterEditor"></textarea>
-      <div class="editor-note">Touch up text if you prefer a plain editor. Export uses the styled “After” (including your inline edits) when possible; otherwise it falls back gracefully.</div>
-    </section>
-
-    <section class="card" style="margin-top:12px">
       <h2 style="margin:6px 0">Change Log</h2>
       <div id="changes" role="region" aria-live="polite" aria-label="Change log"></div>
     </section>
@@ -129,15 +120,14 @@
   <script defer src="https://unpkg.com/mammoth@1.6.0/mammoth.browser.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script defer src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/tinymce@6.8.3/tinymce.min.js" referrerpolicy="origin"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/docx-preview@0.3.4/dist/docx-preview.min.js"></script>
   <script defer src="js/scoring.js?v=2025-10-07-2"></script>
 
   <!-- PE glue for the “After (DOCX styles)” pane -->
-  <script defer src="js/after-docx.js?v=2025-10-23-editable"></script>
+  <script defer src="js/after-docx.js?v=2025-10-23-oneeditor"></script>
 
   <!-- Power Edit app (includes the helper at bottom) -->
-  <script defer src="js/power-edit.js?v=2025-10-23-editable"></script>
+  <script defer src="js/power-edit.js?v=2025-10-23-oneeditor"></script>
 
   <script defer src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script defer src="js/feedback.js?v=2025-10-12"></script>
