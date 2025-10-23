@@ -836,3 +836,14 @@
     location.reload();
   };
 })();
+
+// --- Voice Assistant: page-specific hook (as discussed) ---
+window.addEventListener('load', () => {
+  if (!window.voiceAssistant) return;
+  window.voiceAssistant.register({
+    "/read (before|after) panel/": () => {
+      const el = document.getElementById('afterDocxPE') || document.getElementById('docxPreview');
+      window.voiceAssistant.say((el?.textContent || '').trim().slice(0,600) || "Nothing to read.");
+    }
+  });
+});
