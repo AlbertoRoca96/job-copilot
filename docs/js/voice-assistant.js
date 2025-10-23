@@ -1,18 +1,21 @@
-/* job-copilot — Voice Assistant (WCAG-first)
+/* job-copilot — Voice Assistant (Cross-browser hardened, WCAG-first)
    - TTS via SpeechSynthesis; STT via (webkit)SpeechRecognition when available.
-   - Mirrors responses into ARIA live regions for screen readers.
-   - Floating FAB with keyboard support: Alt+/ opens panel, Space toggles mic.
-   - Page intents are auto-wired by looking up well-known element IDs.
-   - Public API: window.voiceAssistant.register({ patternOrName: fn }), window.voiceAssistant.say(text)
+   - Defers speech until first user interaction (autoplay policy compliant).
+   - Works on Windows/macOS/Linux and iOS/Android (notch-safe, HC mode aware).
+   - Public API: window.voiceAssistant.register({ "pattern" or /regex/: fn })
+                 window.voiceAssistant.say(text[, mode={'polite'|'assertive'}, {force:false}])
 */
 (function () {
   const HAS_TTS = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
   const Recog = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const HAS_STT = !!Recog; // STT availability varies by browser; Chrome exposes webkitSpeechRecognition. :contentReference[oaicite:1]{index=1}
+  const HAS_STT = !!Recog; // Chromium-based mostly; Firefox/iOS Safari usually missing.
+  const IS_SECURE = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
 
-  // ---------- Styles (injected so you don't have to touch style.css) ----------
+  // ---------- Styles (inject so you don't have to touch style.css) ----------
   const css = `
-  .va-fab{position:fixed;right:16px;bottom:16px;z-index:10050}
+  .va-fab{position:fixed;right:16px;z-index:10050}
+  .va-fab{bottom:16px} /* fallback for browsers without env() */
+  .va-fab{bottom:calc(16px + env(safe-area-inset-bottom))} /* notch safe */
   .va-btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border,#e5e7eb);
     background:var(--surface,#fff);color:var(--text,#111);padding:10px 14px;border-radius:999px;
     box-shadow:var(--shadow-md,0 8px 24px rgba(17,24,39,.08));cursor:pointer}
@@ -30,12 +33,19 @@
   .va-mic{min-width:44px;min-height:44px}
   .va-input{flex:1 1 auto;padding:10px;border:1px solid var(--border,#e5e7eb);border-radius:8px}
   .sr-only{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+  @media (pointer:coarse){ .va-btn,.va-controls .btn{min-height:48px;padding:14px 16px} }
+  /* Windows High Contrast / forced colors */
+  @media (forced-colors: active){
+    .va-btn,.va-panel{border-color:CanvasText; background:Canvas; color:CanvasText}
+    .va-dot.live{forced-color-adjust:none; background:LinkText}
+    .va-log{border-color:CanvasText; background:Canvas}
+  }
   `;
   const style = document.createElement('style'); style.textContent = css; document.head.appendChild(style);
 
   // ---------- Live regions for AT ----------
   const livePolite = document.createElement('div');
-  livePolite.className = 'sr-only'; livePolite.setAttribute('role','status'); livePolite.setAttribute('aria-live','polite'); // polite updates for SRs. 
+  livePolite.className = 'sr-only'; livePolite.setAttribute('role','status'); livePolite.setAttribute('aria-live','polite');
   const liveAssert = document.createElement('div');
   liveAssert.className = 'sr-only'; liveAssert.setAttribute('role','alert'); liveAssert.setAttribute('aria-live','assertive');
   document.body.appendChild(livePolite); document.body.appendChild(liveAssert);
@@ -66,7 +76,6 @@
   `;
   document.body.appendChild(root);
   const fabBtn = root.querySelector('.va-btn');
-  const panel = root.querySelector('#va-panel');
   const micBtn = root.querySelector('.va-mic');
   const stopBtn = root.querySelector('[data-act="stop"]');
   const helpBtn = root.querySelector('[data-act="help"]');
@@ -86,19 +95,50 @@
     if (e.key === 'Escape' && root.classList.contains('va-open')) setOpen(false);
   });
 
+  // ---------- User-gesture gate for TTS (autoplay policies) ----------
+  let userInteracted = false;
+  function markInteracted(){ userInteracted = true;
+    window.removeEventListener('pointerdown', markInteracted, {capture:true});
+    window.removeEventListener('keydown', markInteracted, {capture:true});
+    window.removeEventListener('touchstart', markInteracted, {capture:true});
+  }
+  window.addEventListener('pointerdown', markInteracted, {capture:true, passive:true});
+  window.addEventListener('keydown', markInteracted, {capture:true});
+  window.addEventListener('touchstart', markInteracted, {capture:true, passive:true});
+
+  // ---------- Voice selection (best-match for locale) ----------
+  let voices = [];
+  function refreshVoices(){ try { voices = window.speechSynthesis?.getVoices?.() || []; } catch { voices = []; } }
+  if (HAS_TTS){
+    refreshVoices();
+    try { window.speechSynthesis.addEventListener('voiceschanged', refreshVoices); } catch{}
+  }
+  function pickVoice(locale){
+    if (!HAS_TTS) return null;
+    const lang = String(locale||navigator.language||'').toLowerCase();
+    refreshVoices();
+    let v = voices.find(v=>String(v.lang||'').toLowerCase() === lang) ||
+            voices.find(v=>String(v.lang||'').toLowerCase().startsWith(lang.split('-')[0])) ||
+            voices[0] || null;
+    return v || null;
+  }
+
   // ---------- Speak helpers ----------
-  function say(text, mode='polite'){
+  function say(text, mode='polite', {force=false}={}){
     if (!text) return;
     livePolite.textContent = ''; liveAssert.textContent = '';
-    (mode === 'assertive' ? liveAssert : livePolite).textContent = text; // announce via ARIA live
+    (mode === 'assertive' ? liveAssert : livePolite).textContent = text; // SR announcement
     if (HAS_TTS){
+      // Respect autoplay: don't speak until user interacts unless explicitly forced.
+      if (!userInteracted && !force) { log.textContent += `Assistant (queued): ${text}\n`; return; }
       try {
         window.speechSynthesis.cancel();
         const chunks = String(text).match(/.{1,180}(\s|$)/g) || [String(text)];
         for (const c of chunks){
           const u = new SpeechSynthesisUtterance(c.trim());
           u.rate = 1.03; u.pitch = 1.0; u.lang = navigator.language || 'en-US';
-          window.speechSynthesis.speak(u); // queue to speak response. :contentReference[oaicite:3]{index=3}
+          const v = pickVoice(u.lang); if (v) u.voice = v;
+          window.speechSynthesis.speak(u);
         }
       } catch {}
     }
@@ -120,7 +160,6 @@
     return false;
   }
 
-  // Built-in intents (auto-wire to your existing IDs)
   const INTENTS = [
     [/^(help|what can you do|commands)/i, () => {
       const hints = registry.map(r => typeof r.pattern === 'string' ? r.pattern : (r.hint || '')).filter(Boolean);
@@ -141,14 +180,13 @@
     [/^(open )?profile/i, () => { location.href = 'profile.html'; }],
     [/^(sign in|login|log in)/i, () => { location.href = 'login.html'; }],
     [/^(go )?(home|start)/i, () => { location.href = './'; }],
-    [/^(stop|quiet|silence)/i, () => { try{window.speechSynthesis.cancel();}catch{}; say("Stopped.", 'assertive'); }]
+    [/^(stop|quiet|silence)/i, () => { try{window.speechSynthesis.cancel();}catch{}; say("Stopped.", 'assertive', {force:true}); }]
   ];
   INTENTS.forEach(([p, h]) => register(p, h));
 
   // External API for page-specific commands
   window.voiceAssistant = {
     register(map){
-      // { "command name or /regex/": fn }
       for (const key of Object.keys(map||{})){
         const val = map[key];
         if (key.startsWith('/') && key.endsWith('/')){
@@ -197,20 +235,21 @@
 
   micBtn.addEventListener('click', async () => {
     if (!HAS_STT){
-      // Text-mode fallback: submit typed text
       const t = inputEl.value.trim(); inputEl.value = ''; route(t); return;
     }
-    // Starting STT requires a user gesture and permission; secure contexts recommended for mic access. 
-    if (!listening){ try { rec.start(); setListening(true); } catch { setListening(false); } }
+    if (!IS_SECURE){
+      say("Microphone requires HTTPS (or localhost). Please open this page over HTTPS.");
+      return;
+    }
+    if (!listening){ try { rec.start(); setListening(true); } catch { setListening(false); say("Unable to start microphone."); } }
     else { try { rec.stop(); } catch {} setListening(false); }
   });
 
-  stopBtn.addEventListener('click', () => { try{window.speechSynthesis.cancel();}catch{}; say("Stopped.", 'assertive'); });
+  stopBtn.addEventListener('click', () => { try{window.speechSynthesis.cancel();}catch{}; say("Stopped.", 'assertive', {force:true}); });
   helpBtn.addEventListener('click', () => route('help'));
-
   inputEl.addEventListener('keydown', (e)=>{ if (e.key === 'Enter'){ const t=inputEl.value.trim(); inputEl.value=''; route(t); } });
 
-  // First-run hint
+  // First-run hint (announce to SR; defer TTS until user interacts)
   setTimeout(()=> say(HAS_STT
     ? "Assistant ready. Press Alt plus Slash to open, then Space to start listening."
     : "Assistant ready in text mode. Type a command and press Enter."
