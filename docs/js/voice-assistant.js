@@ -1,9 +1,5 @@
 // js/voice-assistant.js — Realtime voice wired to OpenAI via Supabase Edge
-// Typed messages always call the /assistant tool-using agent. If Realtime is ON,
-// the agent's text reply is spoken via the Realtime datachannel. When the agent
-// returns DOM actions, we execute them in the browser.
-//
-// Requires window.SUPABASE_URL, window.SUPABASE_ANON_KEY and supabase.js.
+// Adds: client-side executor for {actions} returned by /assistant (navigate/click/input/scroll/focus/announce/snapshot)
 
 (function () {
   // ---------- Supabase ----------
@@ -27,7 +23,7 @@
         <button id="va-listen" class="btn" type="button">Listen</button>
         <button id="va-stop" class="btn" type="button">Stop</button>
       </div>
-      <div id="va-log" style="height:220px;overflow:auto;padding:10px 12px" aria-live="polite"></div>
+      <div id="va-log" style="height:220px;overflow:auto;padding:10px 12px"></div>
       <div style="display:flex;gap:8px;padding:10px 12px;border-top:1px solid #eee">
         <input id="va-input" class="ctl" type="text" style="flex:1" placeholder="Type a message… (/search … or /files)"/>
         <button id="va-send" class="btn" type="button">Send</button>
@@ -41,6 +37,18 @@
     stop   = box.querySelector("#va-stop");
   }
   ensureWidget();
+
+  // ---------- Accessibility (ARIA live announcements) ----------
+  let live = document.getElementById("va-aria-live");
+  if (!live) {
+    live = document.createElement("div");
+    live.id = "va-aria-live";
+    live.setAttribute("aria-live", "polite");
+    live.setAttribute("aria-atomic", "true");
+    live.style.cssText = "position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden";
+    document.body.appendChild(live);
+  }
+  function announce(text){ live.textContent = text || ""; }
 
   // ---------- Log helpers ----------
   function esc(s){ return String(s||"").replace(/[&<>]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c])); }
@@ -69,7 +77,7 @@
   async function callAssistant(payload){
     const { data, error } = await supabase.functions.invoke("assistant", { body: payload });
     if (error) throw new Error(error.message || "assistant failed");
-    return data; // { reply, actions? }
+    return data;
   }
   async function getRealtimeSession(options = {}){
     const { data, error } = await supabase.functions.invoke("realtime-session", { body: options });
@@ -79,7 +87,11 @@
   }
 
   // ---------- WebRTC state ----------
-  let pc = null, dc = null, micStream = null, inboundAudioEl = null, realtimeOn = false;
+  let pc = null;
+  let dc = null;
+  let micStream = null;
+  let inboundAudioEl = null;
+  let realtimeOn = false;
 
   function cleanupRealtime(){
     realtimeOn = false;
@@ -106,10 +118,8 @@
 
   async function startRealtime(){
     if (realtimeOn) return;
-    if (!navigator.mediaDevices?.getUserMedia) {
-      line("Assistant", "This browser does not support microphone capture.");
-      return;
-    }
+    if (!navigator.mediaDevices?.getUserMedia) { line("Assistant", "This browser does not support microphone capture."); return; }
+
     try {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const { ephemeral_key, session_url } = await getRealtimeSession();
@@ -121,18 +131,20 @@
       document.body.appendChild(inboundAudioEl);
 
       pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+
       pc.ontrack = (e) => { if (!inboundAudioEl.srcObject) inboundAudioEl.srcObject = e.streams[0]; };
       pc.addTransceiver("audio", { direction: "recvonly" });
+
       micStream.getTracks().forEach(t => pc.addTrack(t, micStream));
+
       pc.onconnectionstatechange = () => {
         if (pc.connectionState === "connected") line("Assistant","Realtime connected.");
-        if (pc.connectionState === "failed")     line("Assistant","WebRTC failed.");
+        if (pc.connectionState === "failed")    line("Assistant","WebRTC failed.");
       };
 
       dc = pc.createDataChannel("oai-events");
       dc.onopen  = () => line("Assistant","Data channel open.");
       dc.onclose = () => line("Assistant","Data channel closed.");
-      dc.onmessage = (e) => { /* optional: console.log("Realtime message:", e.data); */ };
 
       const offer = await pc.createOffer({ offerToReceiveAudio: true });
       await pc.setLocalDescription(offer);
@@ -143,16 +155,19 @@
         headers: { "Authorization": `Bearer ${ephemeral_key}`, "Content-Type": "application/sdp" },
         body: pc.localDescription.sdp,
       }).then(r => r.text());
-      await pc.setRemoteDescription({ type: "answer", sdp: sdpAnswer });
+
+      const answer = { type: "answer", sdp: sdpAnswer };
+      await pc.setRemoteDescription(answer);
 
       realtimeOn = true;
       line("Assistant", "Listening… (say something or type to make me speak back)");
     } catch (e) {
       const name = e && (e.name || e.code) || "";
-      if (name === "NotFoundError" || name === "DevicesNotFoundError")          line("Assistant", "Requested device not found. Check microphone availability.");
-      else if (name === "NotAllowedError" || name === "SecurityError" || name === "PermissionDeniedError") line("Assistant", "Microphone permission denied.");
-      else if (name === "InvalidStateError")                                     line("Assistant", "Audio system is in an invalid state. Reload the page and try again.");
-      else                                                                        line("Assistant", `Start error: ${e.message || e}`);
+      if (name === "NotFoundError" || name === "DevicesNotFoundError")       line("Assistant", "Requested device not found. Check microphone availability.");
+      else if (name === "NotAllowedError" || name === "SecurityError" || name === "PermissionDeniedError")
+        line("Assistant", "Microphone permission denied.");
+      else if (name === "InvalidStateError")                                  line("Assistant", "Audio system is in an invalid state. Reload the page and try again.");
+      else                                                                     line("Assistant", `Start error: ${e.message || e}`);
       cleanupRealtime();
     }
   }
@@ -168,74 +183,139 @@
     dc.send(JSON.stringify({ type: "response.create" }));
   }
 
-  // ---------- DOM Action Executor ----------
-  function findByText(root, selectorList, text, role){
-    const sel = selectorList || "*";
-    const candidates = Array.from(root.querySelectorAll(sel));
-    const norm = (s) => (s || "").replace(/\s+/g," ").trim().toLowerCase();
-    const targetText = norm(text || "");
-    return candidates.find(el => {
-      const tag  = (el.tagName || "").toLowerCase();
-      const roleGuess = (tag === "a" ? "link" : (tag === "button" ? "button" : ""));
-      if (role && roleGuess && role !== roleGuess) return false;
-      const t = norm(el.textContent || el.getAttribute("aria-label") || "");
-      return t === targetText || (targetText && t.includes(targetText));
+  // ---------- DOM helpers for action execution ----------
+  function norm(s){ return (s||"").replace(/\s+/g," ").trim().toLowerCase(); }
+
+  function any(el, sel){ try { return el.querySelector(sel); } catch { return null; } }
+
+  function findByText(text){
+    const target = norm(text);
+    const tags = ["button","a","summary","div","span"];
+    for (const t of tags){
+      const nodes = Array.from(document.getElementsByTagName(t));
+      for (const n of nodes){
+        const label = n.getAttribute("aria-label") || n.getAttribute("title") || n.textContent || "";
+        if (norm(label).includes(target)) return n;
+      }
+    }
+    // role=button
+    const roleBtns = Array.from(document.querySelectorAll('[role="button"]'));
+    for (const n of roleBtns){
+      const label = n.getAttribute("aria-label") || n.getAttribute("title") || n.textContent || "";
+      if (norm(label).includes(target)) return n;
+    }
+    return null;
+  }
+
+  function safeSameOrigin(url){
+    try { return new URL(url, window.location.href).origin === window.location.origin; }
+    catch { return false; }
+  }
+
+  function extractVisibleText(limit = 8000){
+    // Grab headings, buttons, and main paragraphs for summarization.
+    const parts = [];
+    const sel = "h1,h2,h3,h4,main p,section p,button,a";
+    document.querySelectorAll(sel).forEach(n => {
+      const t = (n.textContent || "").replace(/\s+/g," ").trim();
+      if (t && t.length > 2) parts.push(t);
     });
+    return parts.join("\n").slice(0, limit);
   }
 
-  function safeNavigate(url){
-    try {
-      const u = new URL(url, window.location.href);
-      if (u.origin !== window.location.origin) { line("Assistant", "Blocked cross-origin navigation."); return; }
-      window.location.href = u.href;
-    } catch { /* ignore */ }
-  }
+  async function executeActions(actions){
+    if (!Array.isArray(actions) || actions.length === 0) return;
 
-  async function executeDomActions(actions){
-    if (!Array.isArray(actions) || !actions.length) return;
-    for (const a of actions) {
+    for (const a of actions){
       try {
-        if (a.type === "navigate" && a.url) {
-          safeNavigate(a.url);
-          continue;
-        }
-        if (a.type === "click") {
-          let el = null;
-          if (a.selector) el = document.querySelector(a.selector);
-          if (!el && a.text) el = findByText(document, a.selector || "button, a, [role='button'], [role='link']", a.text, a.role);
-          if (el) { (el as HTMLElement).click(); continue; }
-        }
-        if (a.type === "scroll") {
-          if (a.target === "top")      window.scrollTo({ top: 0, behavior: "smooth" });
-          else if (a.target === "bottom") window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
-          else if (a.target === "selector" && a.selector) {
-            const el = document.querySelector(a.selector); if (el) (el as HTMLElement).scrollIntoView({ behavior: "smooth", block: "center" });
+        switch (a.type) {
+          case "announce": {
+            if (a.text) announce(a.text);
+            break;
           }
-          continue;
-        }
-        if (a.type === "focus") {
-          let el = a.selector ? document.querySelector(a.selector) : null;
-          if (!el && a.text) el = findByText(document, "input, textarea, [contenteditable='true']", a.text);
-          if (el) { (el as HTMLElement).focus(); continue; }
-        }
-        if (a.type === "input" && a.text != null) {
-          let el = a.selector ? document.querySelector(a.selector) : null;
-          if (!el) el = document.querySelector("input, textarea");
-          if (el) {
-            (el as HTMLInputElement).value = a.text;
-            (el as HTMLElement).dispatchEvent(new Event("input", { bubbles: true }));
-            if (a.submit) {
-              const form = (el as HTMLElement).closest("form");
-              if (form) (form as HTMLFormElement).requestSubmit();
+          case "navigate": {
+            let href = a.url || a.path || "";
+            if (!href) break;
+            const u = new URL(href, window.location.href);
+            if (!safeSameOrigin(u.href)) { line("Assistant", "Blocked navigation to different origin."); break; }
+            if (a.announce) announce(a.announce);
+            window.location.href = u.href;
+            return; // stop further actions; page will reload
+          }
+          case "click": {
+            let el = null;
+            if (a.selector) el = any(document, a.selector);
+            if (!el && a.text) el = findByText(a.text);
+            if (el) {
+              if (a.announce) announce(a.announce);
+              (el as HTMLElement).click();
+            } else {
+              line("Assistant", `Could not find element to click (${a.text || a.selector || "unknown"}).`);
             }
-            continue;
+            break;
           }
+          case "input": {
+            let el = null;
+            if (a.selector) el = any(document, a.selector);
+            if (!el && a.placeholder) el = Array.from(document.querySelectorAll("input,textarea"))
+              .find((e) => norm(e.getAttribute("placeholder")).includes(norm(a.placeholder)));
+            if (el && "value" in el) {
+              (el as HTMLInputElement).focus();
+              (el as HTMLInputElement).value = a.value ?? "";
+              (el as HTMLInputElement).dispatchEvent(new Event("input", { bubbles: true }));
+              if (a.announce) announce(a.announce);
+            } else {
+              line("Assistant", `Could not find input ${a.selector || a.placeholder || ""}.`);
+            }
+            break;
+          }
+          case "scroll": {
+            if (a.to === "top") window.scrollTo({ top: 0, behavior: "smooth" });
+            else if (a.to === "bottom") window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+            else if (typeof a.y === "number") window.scrollTo({ top: a.y, behavior: "smooth" });
+            else if (a.selector) {
+              const el = any(document, a.selector);
+              if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+            }
+            if (a.announce) announce(a.announce);
+            break;
+          }
+          case "focus": {
+            let el = null;
+            if (a.selector) el = any(document, a.selector);
+            if (!el && a.text) el = findByText(a.text);
+            if (el && "focus" in el) { (el as HTMLElement).focus(); if (a.announce) announce(a.announce); }
+            break;
+          }
+          case "snapshot": {
+            // Capture the page and send a follow-up to the assistant so it can summarize/guide
+            const username = await getUsername();
+            const payload = {
+              text: a.prompt || "Summarize this page and guide me to the next step.",
+              username,
+              page_snapshot: {
+                url: window.location.href,
+                title: document.title,
+                text: extractVisibleText(),
+              },
+            };
+            const resp = await callAssistant(payload);
+            const out = resp?.reply || "(no reply)";
+            line("Assistant", out);
+            // If the assistant replies with more actions, run them too.
+            if (resp?.actions) await executeActions(resp.actions);
+            break;
+          }
+          default:
+            break;
         }
-      } catch { /* ignore single action errors */ }
+      } catch (e) {
+        line("Assistant", `Action error (${a.type}): ${e.message || e}`);
+      }
     }
   }
 
-  // ---------- Text flow ----------
+  // ---------- Text flow (ALWAYS use tool-agent; speak reply if Realtime ON) ----------
   async function sendText(){
     const text = (input.value || "").trim();
     if (!text) return;
@@ -244,12 +324,9 @@
 
     try {
       const username = await getUsername();
-      const resp = await supabase.functions.invoke("assistant", { body: { text, username } });
-      if (resp.error) throw new Error(resp.error.message || "assistant failed");
-      const data = resp.data || {};
-      const out  = data.reply || "(no reply)";
+      const resp = await callAssistant({ text, username });
+      const out = resp?.reply || "(no reply)";
 
-      // Speak via Realtime if connected
       if (realtimeOn && dc && dc.readyState === "open") {
         dc.send(JSON.stringify({
           type: "conversation.item.create",
@@ -258,29 +335,25 @@
         dc.send(JSON.stringify({ type: "response.create" }));
       }
 
-      // Execute any DOM actions
-      await executeDomActions(data.actions);
-
       line("Assistant", out);
+      if (resp?.actions) await executeActions(resp.actions);
     } catch (e) {
       line("Assistant", `Error: ${e.message || e}`);
     }
   }
 
   // ---------- Wire UI ----------
-  send?.addEventListener("click", sendText);
-  input?.addEventListener("keydown", (e)=>{ if (e.key === "Enter") sendText(); });
-  listen?.addEventListener("click", startRealtime);
-  stop?.addEventListener("click", stopRealtime);
+  document.getElementById("va-send")?.addEventListener("click", sendText);
+  document.getElementById("va-input")?.addEventListener("keydown", (e)=>{ if (e.key === "Enter") sendText(); });
+  document.getElementById("va-listen")?.addEventListener("click", startRealtime);
+  document.getElementById("va-stop")?.addEventListener("click", stopRealtime);
 
   // ---------- Smoke-test greeting on load ----------
   window.addEventListener("load", async () => {
     try {
       const username = await getUsername();
-      const { data, error } = await supabase.functions.invoke("assistant", { body: { greet: true, username } });
-      if (error) throw new Error(error.message || "assistant greet failed");
-      await executeDomActions(data?.actions);
-      line("Assistant", data?.reply || `Hello ${username}, how may I assist you today?`);
+      const resp = await callAssistant({ greet: true, username });
+      line("Assistant", resp?.reply || `Hello ${username}, how may I assist you today?`);
     } catch (e) {
       const username = await getUsername();
       line("Assistant", `Hello ${username}, how may I assist you today?`);
@@ -291,7 +364,10 @@
   // Small API for console/testing
   window.JobCopilotAssistant = {
     start: startRealtime,
-    stop:  stopRealtime,
-    send:  (t)=>{ input.value = t; sendText(); },
+    stop: stopRealtime,
+    send: (t)=>{ input.value = t; sendText(); },
+    snapshot: async (prompt) => {
+      await executeActions([{ type: "snapshot", prompt }]);
+    }
   };
 })();
