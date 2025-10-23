@@ -1,8 +1,9 @@
-// docs/profile.js — WCAG 2.2-ready overlay & UI
+// docs/profile.js — WCAG 2.2-ready overlay & UI + DOCX-styled AFTER preview
 // - Keeps run state while hidden (localStorage)
 // - Restores overlay across reloads
 // - Focus-traps the overlay; ESC hides overlay (does not cancel run)
 // - Fixes previous HTML string/template literal issues
+// - Adds "After (DOCX styles)" that renders original .docx then patches AI changes.
 
 (async function () {
   await new Promise((r) => window.addEventListener("load", r));
@@ -82,6 +83,13 @@
   const changeClose = changeModal?.querySelector(".close");
   if (changeClose) changeClose.onclick = () => changeModal.classList.remove("open");
   if (changeModal) changeModal.addEventListener("click", (e) => { if (e.target === changeModal) changeModal.classList.remove("open"); });
+
+  // NEW: After (DOCX) preview DOM
+  const afterCard = $("afterDocxCard");
+  const afterDocx = $("afterDocx");
+  const afterMsg = $("afterDocxMsg");
+  const afterChangeSel = $("afterChange");
+  const afterRenderBtn = $("afterRender");
 
   // ------------ helpers ------------
   const getUser = () => supabase.auth.getUser().then((r) => r.data.user || null);
@@ -364,7 +372,7 @@
       const { data, error } = await supabase.functions.invoke("request-draft", { body: { top } });
       if (error) { draftMsg.textContent = `Error: ${error.message || "invoke failed"}`; return; }
       draftMsg.textContent = `Drafts queued: ${data?.request_id || "ok"} (top=${data?.top || top})`;
-      setTimeout(() => { loadMaterials(); }, 3000);
+      setTimeout(() => { loadMaterials(); loadAfterMenu(); }, 3000);
     } catch (e) {
       draftMsg.textContent = "Error: " + String(e);
     }
@@ -601,6 +609,128 @@
     materials?.classList.remove("hidden");
   }
 
+  // ============ NEW: After (DOCX styles) preview ============
+  let ORIGINAL_DOCX_AB = null;
+
+  const norm = s => String(s||"")
+    .replace(/[–—]/g,"-")
+    .replace(/\s+/g," ")
+    .trim()
+    .toLowerCase();
+
+  function applyChangesToRenderedDocx(root, changes){
+    const paras = Array.from(root.querySelectorAll("p"));
+    const bucket = new Map();
+    for (const p of paras){
+      const t = norm(p.textContent);
+      if (!t) continue;
+      if (!bucket.has(t)) bucket.set(t, []);
+      bucket.get(t).push(p);
+    }
+
+    for (const ch of (changes || [])){
+      const orig = norm(ch.original_paragraph_text || ch.anchor || "");
+      if (!orig) continue;
+
+      let candidates = bucket.get(orig);
+      if (!candidates || !candidates.length){
+        candidates = paras.filter(p => norm(p.textContent).includes(orig));
+      }
+      if (!candidates.length) continue;
+
+      const p = candidates.shift();
+
+      if (ch.modified_paragraph_text){
+        p.textContent = ch.modified_paragraph_text;
+      } else if (ch.inserted_sentence){
+        p.textContent = (p.textContent.trim() + " " + ch.inserted_sentence).replace(/\s+/g," ");
+      }
+    }
+  }
+
+  async function fetchOriginalDocxAB(){
+    if (ORIGINAL_DOCX_AB) return ORIGINAL_DOCX_AB;
+    const u = await getUser(); if (!u) return null;
+    const key = `${u.id}/current.docx`;
+    const url = await sign("resumes", key, 60);
+    if (!url) return null;
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return null;
+    ORIGINAL_DOCX_AB = await res.arrayBuffer();
+    return ORIGINAL_DOCX_AB;
+  }
+
+  async function loadAfterMenu(){
+    const u = await getUser(); if (!u) return;
+    const ixUrl = await sign("outputs", `${u.id}/drafts_index.json`, 60);
+    const resumeUrl = await sign("resumes", `${u.id}/current.docx`, 30);
+
+    let changes = [];
+    if (ixUrl){
+      try {
+        const res = await fetch(ixUrl, { cache: "no-cache" });
+        if (res.ok){
+          const idx = await res.json();
+          changes = Array.isArray(idx?.changes) ? idx.changes.filter(Boolean) : [];
+        }
+      } catch {/* ignore */}
+    }
+
+    if (resumeUrl && changes.length){
+      afterCard?.classList.remove("hidden");
+      afterChangeSel.innerHTML = "";
+      changes.slice().reverse().forEach((fname, i) => {
+        const opt = document.createElement("option");
+        const slug = fname.replace(/\.json$/, "");
+        opt.value = fname;
+        opt.textContent = (i===0 ? "Latest — " : "") + slug;
+        afterChangeSel.appendChild(opt);
+      });
+    } else {
+      afterCard?.classList.add("hidden");
+    }
+  }
+
+  async function renderAfterDocx(){
+    if (!afterDocx) return;
+    afterDocx.innerHTML = "";
+    afterMsg.textContent = "";
+
+    const ab = await fetchOriginalDocxAB();
+    if (!ab) { afterMsg.textContent = "Upload a .docx to preview the styled ‘after’ resume."; return; }
+
+    const fname = afterChangeSel?.value || "";
+    if (!fname) { afterMsg.textContent = "No change log selected."; return; }
+
+    const u = await getUser(); if (!u) return;
+    const changeUrl = await sign("outputs", `${u.id}/changes/${fname}`, 60);
+    if (!changeUrl){ afterMsg.textContent = "Could not load change log."; return; }
+
+    let changes = [];
+    try {
+      const r = await fetch(changeUrl, { cache: "no-store" });
+      if (r.ok){
+        const obj = await r.json();
+        changes = Array.isArray(obj) ? obj : (Array.isArray(obj?.changes) ? obj.changes : []);
+      }
+    } catch {/* ignore */}
+
+    try {
+      await window.docx.renderAsync(
+        ab,
+        afterDocx,
+        null,
+        { className: "docx", inWrapper: true, breakPages: true, ignoreFonts: false, trimXmlDeclaration: true }
+      );
+      applyChangesToRenderedDocx(afterDocx, changes || []);
+    } catch (e) {
+      afterMsg.textContent = "Render error: " + String(e?.message || e);
+    }
+  }
+
+  afterRenderBtn?.addEventListener("click", renderAfterDocx);
+  afterChangeSel?.addEventListener("change", renderAfterDocx);
+
   // ------------ Tracker ------------
   const STATUS_ORDER = ["saved", "applied", "interview", "offer", "rejected"];
   function statusButtons(current) {
@@ -692,11 +822,13 @@
     await loadShortlist();
     await loadMaterials();
     await loadTracker();
+    await loadAfterMenu();
   };
 
   await loadShortlist();
   await loadMaterials();
   await loadTracker();
+  await loadAfterMenu();
   await resumePendingWatcher();
 
   logout.onclick = async () => {
