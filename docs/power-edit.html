@@ -8,6 +8,11 @@
   <link rel="stylesheet" href="style.css" />
   <style>
     .editor-note{margin-top:6px; color:#555; font-size:12px}
+    /* DOCX-styled AFTER preview */
+    .docx-wrap{background:#6b7280; padding:14px; display:flex; justify-content:center; border-radius:8px}
+    .docx .page{background:#fff; box-shadow:0 6px 18px rgba(0,0,0,.2); margin:12px 0}
+    .muted.small{font-size:12px; color:#6b7280}
+    .docx-view{background:#6b7280; padding:14px; border-radius:8px}
   </style>
 </head>
 <body>
@@ -28,7 +33,7 @@
       <button id="printPdf" class="btn" type="button">Print / Save as PDF</button>
       <span class="pill" aria-live="polite">Score: <span id="scoreVal">—</span></span>
       <span id="signinState" class="pill" aria-live="polite">Checking sign-in…</span>
-      <span id="fmtState" class="pill" title="Shown when a .docx has been loaded; export will preserve original list/paragraph styles.">Formatting: simple</span>
+      <span id="fmtState" class="pill" title="Shown when a .docx has been loaded; export will preserve the original .docx’s list/paragraph styles.">Formatting: simple</span>
     </div>
 
     <section class="card" style="margin-top:8px">
@@ -78,6 +83,25 @@
       <div class="small muted">Rendered locally via <code>docx-preview</code>.</div>
     </section>
 
+    <!-- NEW: After (DOCX styles) -->
+    <section class="card" style="margin-top:12px" aria-labelledby="after-docx-title">
+      <div class="row" style="justify-content:space-between; align-items:center">
+        <div>
+          <h2 id="after-docx-title" style="margin:6px 0">After (DOCX styles)</h2>
+          <p class="muted small" style="margin:0">Exact clone of your formatted resume with AI-woven text applied.</p>
+        </div>
+        <div class="row" style="gap:8px">
+          <label for="afterChangePE" class="sr-only">Change set</label>
+          <select id="afterChangePE" class="ctl" style="min-width:260px"></select>
+          <button id="afterRenderPE" class="btn" type="button">Render</button>
+        </div>
+      </div>
+      <div class="docx-wrap" style="margin-top:10px">
+        <div id="afterDocxPE" class="docx" role="region" aria-label="After resume preview"></div>
+      </div>
+      <div id="afterDocxMsgPE" class="status" aria-live="polite"></div>
+    </section>
+
     <section class="card" style="margin-top:12px">
       <h2 style="margin:6px 0">Rich Editor (After)</h2>
       <label class="sr-only" for="afterEditor">After editor</label>
@@ -96,7 +120,7 @@
     </section>
   </main>
 
-  <!-- Supabase + libs (unchanged) -->
+  <!-- Supabase + libs -->
   <script>
     window.SUPABASE_URL = "https://imozfqawxpsasjdmgdkh.supabase.co";
     window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc";
@@ -107,9 +131,11 @@
   <script defer src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/tinymce@6.8.3/tinymce.min.js" referrerpolicy="origin"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/docx-preview@0.3.4/dist/docx-preview.min.js"></script>
-
   <script defer src="js/scoring.js?v=2025-10-07-2"></script>
-  <script defer src="js/power-edit.js?v=2025-10-12-editor"></script>
+
+  <!-- NEW: Styled “After” helper + Power Edit app -->
+  <script defer src="js/after-docx.js?v=2025-10-23-auto"></script>
+  <script defer src="js/power-edit.js?v=2025-10-23-auto"></script>
 
   <script defer src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script defer src="js/feedback.js?v=2025-10-12"></script>
