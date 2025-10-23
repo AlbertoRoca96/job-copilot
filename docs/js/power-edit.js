@@ -1,3 +1,6 @@
+// js/power-edit.js
+// v=2025-10-24-oneeditor
+//
 // Power Edit client (JD-URL fetch + ATS scoring + formatted DOCX preview).
 // Format-preserving DOCX export (v6):
 // - Education + References are HARD-LOCKED.
