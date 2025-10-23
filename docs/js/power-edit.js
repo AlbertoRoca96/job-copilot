@@ -1,9 +1,12 @@
 // Power Edit client (JD-URL fetch + Rich Editor + formatted DOCX preview).
-// Format-preserving DOCX export (v5):
+// Format-preserving DOCX export (v6):
 // - Education + References are HARD-LOCKED.
 // - Only write inside existing <w:t> nodes (never delete runs).
 // - Preserve: bullet/numbering, leading punctuation prefix (—/–/-/• + spaces), hyperlinks,
 //             run boundaries (by pouring new text proportionally across original non-link runs).
+// NEW:
+// - Editable “After (DOCX styles)” pane (docx-preview) that patches AI rewrites and inline edits.
+// - Auto-tailor hook: immediately re-renders the styled “After” pane and polls for saved change files.
 
 (async function () {
   await new Promise((r) => window.addEventListener("load", r));
@@ -31,7 +34,6 @@
   const autoTailor   = $("autoTailor");
   const tailorMsg    = $("tailorMsg");
   const changesBox   = $("changes");
-  const afterPreview = $("afterPreview");
   const exportDocx   = $("exportDocx");
   const printPdf     = $("printPdf");
   const scoreVal     = $("scoreVal");
@@ -39,8 +41,14 @@
   const fmtState     = $("fmtState");
   const docxPreview  = $("docxPreview");
 
+  // NEW: Styled After (editable)
+  const afterDocx    = $("afterDocx");
+  const afterDocxMsg = $("afterDocxMsg");
+  const afterChange  = $("afterChange");
+  const afterRender  = $("afterRender");
+
   // ---------- state ----------
-  let originalDocxBuffer = null;
+  let originalDocxBuffer = null; // also used by editable After pane + export
   let lastRewrites = [];
   let editor = null;
 
@@ -90,6 +98,15 @@
     } catch { signinState.textContent = "Anonymous (rate-limited)"; signinState.style.background = "#fff7e6"; }
   }
 
+  async function getUser(){ try { return (await supabase.auth.getUser())?.data?.user || null; } catch { return null; } }
+  async function sign(bucket, key, expires=60){
+    try {
+      const { data, error } = await supabase.storage.from(bucket).createSignedUrl(key, expires);
+      return error ? null : data?.signedUrl || null;
+    } catch { return null; }
+  }
+  const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
+
   // ---------- TinyMCE ----------
   async function ensureEditor() {
     if (editor) return editor;
@@ -130,7 +147,7 @@
   function editorTextOrAfter() {
     const ed = window.tinymce?.get('afterEditor');
     const txt = ed ? ed.getContent({ format: 'text' }).trim() : "";
-    return txt || (afterPreview.textContent || resumeText.value || "");
+    return txt || (resumeText.value || "");
   }
 
   // ---------- textarea bullets (section-aware) ----------
@@ -149,7 +166,8 @@
   }
 
   function renderChangeCard(item) {
-    const before = String(item.original || ""), after = String(item.rewritten || "");
+    const before = String(item.original || item.original_paragraph_text || item.anchor || "");
+    const after  = String(item.rewritten || item.modified_paragraph_text || (before && item.inserted_sentence ? `${before} ${item.inserted_sentence}` : "") || "");
     return `<div class="change-card">
       <div class="change-title">Work Experience</div>
       <div class="muted" style="margin-bottom:4px">Before</div>
@@ -160,7 +178,7 @@
     </div>`;
   }
 
-  function rebuildAfterPreview(source, rewrites) {
+  function rebuildAfterPreviewText(source, rewrites) {
     let text = source || "";
     for (const r of rewrites) {
       const before = (r.original || "").trim();
@@ -337,9 +355,6 @@
     try {
       const buf = await f.arrayBuffer(); originalDocxBuffer = buf; setFmtState(true);
 
-      // Broadcast original DOCX to the After (DOCX) helper so it can render without re-downloading
-      window.dispatchEvent(new CustomEvent("pe:docx-loaded", { detail:{ ab: buf, name: f.name } }));
-
       // Render a read-only formatted view of the DOCX
       try {
         if (window.docx && docxPreview) {
@@ -359,6 +374,9 @@
       ).join("\n").trim();
 
       resumeText.value = plain; refreshScore();
+
+      // If there's a selected change set, re-render the styled After with this new original docx
+      if (afterChange?.value) await renderAfterFromSelected();
     } catch (e) {
       try {
         const arr = await f.arrayBuffer();
@@ -411,10 +429,84 @@
     }
   };
 
+  // ---------- Styled AFTER (DOCX) helpers ----------
+  async function ensureOriginalDocxBuffer() {
+    if (originalDocxBuffer) return originalDocxBuffer;
+    // Try to fetch the user's current.docx if signed-in
+    const u = await getUser(); if (!u) return null;
+    const url = await sign("resumes", `${u.id}/current.docx`, 60);
+    if (!url) return null;
+    try {
+      const r = await fetch(url, { cache:"no-store" });
+      if (!r.ok) return null;
+      originalDocxBuffer = await r.arrayBuffer();
+      setFmtState(true);
+      return originalDocxBuffer;
+    } catch { return null; }
+  }
+
+  async function renderAfterFromChangesArray(changesArr){
+    const ab = await ensureOriginalDocxBuffer();
+    if (!ab) { afterDocxMsg.textContent = "Upload a .docx to preview the styled ‘After’ resume."; return; }
+    afterDocxMsg.textContent = "";
+    await window.AfterDocxHelper.renderAndPatch(ab, afterDocx, changesArr || []);
+  }
+
+  async function renderAfterFromSelected(){
+    const fname = afterChange?.value || "";
+    if (!fname) { afterDocxMsg.textContent = "No change log selected."; return; }
+    const u = await getUser(); if (!u) { afterDocxMsg.textContent = "Sign in to load change logs."; return; }
+    const url = await sign("outputs", `${u.id}/changes/${fname}`, 60);
+    if (!url) { afterDocxMsg.textContent = "Could not load change log."; return; }
+    try {
+      const r = await fetch(url, { cache:"no-store" });
+      if (!r.ok) throw new Error(String(r.status));
+      const obj = await r.json();
+      const arr = Array.isArray(obj) ? obj : (Array.isArray(obj?.changes) ? obj.changes : []);
+      await renderAfterFromChangesArray(arr);
+    } catch (e) {
+      afterDocxMsg.textContent = "Render error: " + String(e?.message || e);
+    }
+  }
+
+  async function loadAfterMenu(){
+    const u = await getUser(); if (!u || !afterChange) return;
+    const ixUrl = await sign("outputs", `${u.id}/drafts_index.json`, 60);
+    let changes = [];
+    if (ixUrl){
+      try {
+        const res = await fetch(ixUrl, { cache:"no-cache" });
+        if (res.ok){
+          const idx = await res.json();
+          changes = Array.isArray(idx?.changes) ? idx.changes.filter(Boolean) : [];
+        }
+      } catch {/* ignore */}
+    }
+    afterChange.innerHTML = "";
+    if (!changes.length){
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "(no change logs yet)";
+      afterChange.appendChild(opt);
+      return;
+    }
+    changes.slice().reverse().forEach((fname, i) => {
+      const opt = document.createElement("option");
+      opt.value = fname;
+      opt.textContent = (i===0 ? "Latest — " : "") + fname.replace(/\.json$/,"");
+      afterChange.appendChild(opt);
+    });
+  }
+
+  afterRender?.addEventListener("click", renderAfterFromSelected);
+  afterChange?.addEventListener("change", renderAfterFromSelected);
+
   // ---------- server call (rewrites) ----------
   autoTailor.onclick = async () => {
-    tailorMsg.textContent = ""; changesBox.innerHTML = ""; afterPreview.textContent = "(working…)";
-    refreshScore(); await refreshAuthPill();
+    tailorMsg.textContent = ""; changesBox.innerHTML = "";
+    await refreshAuthPill();
+    // show working status in styled pane if available
+    if (afterDocxMsg) afterDocxMsg.textContent = "Generating rewrites…";
 
     const bullets = bulletsFromText(resumeText.value);
     const allowed = window.deriveAllowedVocabFromResume(resumeText.value);
@@ -433,87 +525,61 @@
           dash_threshold_words: 7,
         },
       });
-      if (error) { tailorMsg.textContent = "Server error: " + (error.message || "invoke failed"); afterPreview.textContent = "(error)"; lastRewrites = []; return; }
+      if (error) { tailorMsg.textContent = "Server error: " + (error.message || "invoke failed"); afterDocxMsg.textContent = "(error)"; lastRewrites = []; return; }
 
       lastRewrites = Array.isArray(data?.rewrites) ? data.rewrites : [];
-      if (!lastRewrites.length) { tailorMsg.textContent = "No eligible rewrite suggestions returned."; afterPreview.textContent = resumeText.value || "(no input)"; return; }
+      if (!lastRewrites.length) {
+        tailorMsg.textContent = "No eligible rewrite suggestions returned.";
+        afterDocxMsg.textContent = "No changes to apply.";
+        return;
+      }
 
+      // Change log (side card)
       changesBox.innerHTML = lastRewrites.map(renderChangeCard).join("");
-      const afterText = rebuildAfterPreview(resumeText.value, lastRewrites);
-      afterPreview.textContent = afterText;
 
-      // Push into the rich editor
+      // Push into the rich editor (kept for convenience)
+      const afterText = rebuildAfterPreviewText(resumeText.value, lastRewrites);
       await ensureEditor();
       if (editor) editor.setContent(textToEditorHtml(afterText));
 
       const gated = data?.stats?.gated ?? 0, took = data?.stats?.took_ms ?? 0;
       tailorMsg.textContent = `Rewrites: ${lastRewrites.length} (gated ${gated}, ${took} ms)`;
+
+      // === NEW: immediately refresh the styled "After" pane with the returned rewrites ===
+      await renderAfterFromChangesArray(lastRewrites);
+
+      // Also try to refresh the dropdown with the saved change file (poll a few times)
+      for (let i=0;i<4;i++){
+        await loadAfterMenu();
+        // If we now have at least one real option, prefer the first and render it (keeps parity with saved files)
+        if (afterChange && afterChange.options && afterChange.options.length && afterChange.value){
+          await renderAfterFromSelected();
+          break;
+        }
+        await sleep(2000);
+      }
     } catch (e) {
       tailorMsg.textContent = "Error: " + String(e?.message || e);
-      afterPreview.textContent = "(error)"; lastRewrites = [];
-      return;
-    }
-
-    // ---- NEW: Kick off server-side DOCX-styled "After" generation that writes a change JSON ----
-    // We keep your existing UX, but also trigger a background function that persists a
-    // change file to outputs/<uid>/changes/*.json. When it lands, after-docx.js will
-    // auto-refresh via events/polling.
-    try {
-      // Signal kickoff (starts short polling on the viewer)
-      window.dispatchEvent(new CustomEvent("jc:autoTailor:kickoff"));
-
-      // Try to persist a server-side change log using current resume in storage.
-      const { data: udata } = await supabase.auth.getUser();
-      const uid = udata?.user?.id || null;
-      let resumeSignedUrl = null;
-      if (uid) {
-        const sig = await supabase.storage.from("resumes").createSignedUrl(`${uid}/current.docx`, 60);
-        resumeSignedUrl = sig?.data?.signedUrl || null;
-      }
-
-      // Prefer a dedicated function if present; fall back to the generic drafting endpoint.
-      // Expectation: backend writes drafts_index.json and a new changes/<slug>.json, and
-      // (optionally) returns { change_file: "xxxx.json" }.
-      let resp = await supabase.functions.invoke("power-edit-tailor", {
-        body: {
-          job_title: jobTitle.value || "",
-          job_company: jobCompany.value || "",
-          jd_text: jobDesc.value || "",
-          resume_signed_url: resumeSignedUrl,
-          resume_key: uid ? `${uid}/current.docx` : null
-        }
-      });
-
-      if (resp.error) {
-        // Fallback: ask the generic pipeline to draft for this one JD/resume pair.
-        resp = await supabase.functions.invoke("request-draft", {
-          body: {
-            top: 1,
-            context: {
-              job_title: jobTitle.value || "",
-              job_company: jobCompany.value || "",
-              jd_text: jobDesc.value || "",
-              resume_key: uid ? `${uid}/current.docx` : null
-            }
-          }
-        });
-      }
-
-      if (!resp.error) {
-        const changeFile = resp.data?.change_file || resp.data?.changes?.[0] || null;
-        if (changeFile) {
-          // Tell the viewer exactly which file to render (instant refresh).
-          window.dispatchEvent(new CustomEvent("jc:autoTailor:done", { detail:{ change: changeFile } }));
-        }
-      }
-      // If neither endpoint returns a filename, the polling started at kickoff will still catch it.
-    } catch {
-      // Silent best-effort; the main UX above already completed.
+      afterDocxMsg.textContent = "(error)";
+      lastRewrites = [];
     }
   };
 
   // ---------- export ----------
   exportDocx.onclick = async () => {
+    // Preferred path: export using the styled After pane (includes inline edits + AI changes)
+    try {
+      const ab = await ensureOriginalDocxBuffer();
+      if (ab && afterDocx) {
+        const paneRewrites = window.AfterDocxHelper.getRewrites(afterDocx);
+        if (paneRewrites.length){
+          const blob = await buildDocxWithRewrites(ab, paneRewrites);
+          const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "Resume-tailored.docx"; a.click(); URL.revokeObjectURL(a.href);
+          return;
+        }
+      }
+    } catch (e) { console.warn("Styled-pane export failed, trying server rewrites:", e); }
+
     // If we have the original DOCX and server rewrites, use the format-preserving path.
     if (originalDocxBuffer && lastRewrites?.length) {
       try {
@@ -536,10 +602,20 @@
   // ---------- print ----------
   printPdf.onclick = () => {
     const w = window.open("", "_blank"); if (!w) return;
-    w.document.write(`<pre style="white-space:pre-wrap;font:13px ui-monospace">${esc(editorTextOrAfter())}</pre>`);
+    // Prefer printing from the styled pane if available
+    const styledRoot = afterDocx?.cloneNode(true);
+    if (styledRoot && styledRoot.querySelector(".page")) {
+      // strip contenteditable outlines for print
+      styledRoot.querySelectorAll("[contenteditable]").forEach(n=>n.removeAttribute("contenteditable"));
+      w.document.write(`<div>${styledRoot.innerHTML}</div>`);
+    } else {
+      w.document.write(`<pre style="white-space:pre-wrap;font:13px ui-monospace">${esc(editorTextOrAfter())}</pre>`);
+    }
     w.document.close(); w.focus(); w.print();
   };
 
+  // ---------- initial boot ----------
   await ensureEditor();
   await refreshAuthPill(); setFmtState(false); refreshScore();
+  await loadAfterMenu();
 })();
