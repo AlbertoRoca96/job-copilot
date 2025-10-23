@@ -1,10 +1,5 @@
 // docs/profile.js — WCAG 2.2-ready overlay & UI + DOCX-styled AFTER preview
-// - Keeps run state while hidden (localStorage)
-// - Restores overlay across reloads
-// - Focus-traps the overlay; ESC hides overlay (does not cancel run)
-// - Fixes previous HTML string/template literal issues
-// - Adds "After (DOCX styles)" that renders original .docx then patches AI changes.
-
+// Cross-browser fixes included: robust inert fallback to prevent focus leaks.
 (async function () {
   await new Promise((r) => window.addEventListener("load", r));
 
@@ -160,7 +155,7 @@
     upMsg.textContent = "Uploaded.";
   };
 
-  // ================= OVERLAY & WATCHERS (with focus trap) =================
+  // ================= OVERLAY & WATCHERS (with cross-browser focus trap) =================
 
   const LS_REQ = "jc.active_request";
   const LS_HIDE = "jc.overlay_hidden";
@@ -168,7 +163,7 @@
   let etaTimer = null;
   let pollTimer = null;
 
-  // Focus trap
+  // Focus trap helpers
   let prevFocus = null;
   function focusable(el) {
     return el ? Array.from(el.querySelectorAll(
@@ -194,9 +189,35 @@
     el.removeEventListener('keydown', el._trapHandler);
     delete el._trapHandler;
   }
+
+  // Cross-browser inert (Safari/Firefox fallback)
   function setMainInert(on){
     const m = document.querySelector('main'); if (!m) return;
-    if (on) m.setAttribute('inert',''); else m.removeAttribute('inert');
+
+    // Native inert supported?
+    if ('inert' in m){
+      try { m.inert = !!on; } catch {}
+      if (on) m.setAttribute('inert',''); else m.removeAttribute('inert');
+      return;
+    }
+
+    // Fallback: aria-hide and remove focusability (restore later)
+    if (on){
+      m.setAttribute('aria-hidden','true');
+      const focusables = m.querySelectorAll('a[href],area[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),button:not([disabled]),[tabindex]:not([tabindex="-1"])');
+      focusables.forEach(el => {
+        if (el.getAttribute('tabindex') !== '-1'){
+          el.setAttribute('data-inert-tmp','1');
+          el.setAttribute('tabindex','-1');
+        }
+      });
+    } else {
+      m.removeAttribute('aria-hidden');
+      m.querySelectorAll('[data-inert-tmp]').forEach(el => {
+        el.removeAttribute('data-inert-tmp');
+        if (el.getAttribute('tabindex') === '-1') el.removeAttribute('tabindex');
+      });
+    }
   }
 
   function openRunOverlay() {
@@ -246,7 +267,6 @@
   overlayRefresh?.addEventListener("click", async () => { await loadShortlist(); });
   progressFab?.addEventListener("click", () => { localStorage.removeItem(LS_HIDE); openRunOverlay(); });
 
-  // Also allow ESC to hide overlay (not cancel run)
   runOverlay?.addEventListener('keydown', (e)=>{ if (e.key === 'Escape') hideOverlayOnly(); });
 
   // Storage polling for outputs/<uid>/scores.json
@@ -272,7 +292,7 @@
     }, 12000);
   }
 
-  // Watch the job_requests row (best) and fall back to storage polling
+  // Watch the job_requests row and fall back to storage polling
   async function watchJobRequest(requestId) {
     if (!localStorage.getItem(LS_HIDE)) openRunOverlay(); else progressFab?.classList.remove("hidden");
 
@@ -306,7 +326,6 @@
     }, 10000);
   }
 
-  // Resume a pending run on load
   async function resumePendingWatcher() {
     const rid = localStorage.getItem(LS_REQ);
     if (!rid) return;
@@ -320,7 +339,6 @@
     if (!session) return alert("Sign in first.");
     runMsg.textContent = "Saving & queuing…";
 
-    // Save targets first
     try {
       const titles = (titlesInput.value || "").split(",").map((s) => s.trim()).filter(Boolean);
       const locs   = (locsInput.value   || "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -330,7 +348,6 @@
       runMsg.textContent = "Save failed: " + String(e.message || e); return;
     }
 
-    // Queue shortlist job
     try {
       const recency_days   = Math.max(0, parseInt(recencyInput.value || "0", 10) || 0);
       const remote_only    = !!remoteOnlyCb.checked;
@@ -345,7 +362,6 @@
       const requestId = data?.request_id || null;
       runMsg.textContent = `Queued: ${requestId || "ok"} — building your shortlist (3–8 minutes)…`;
 
-      // Persist + show overlay + start watcher(s)
       if (requestId) {
         localStorage.setItem(LS_REQ, requestId);
         localStorage.removeItem(LS_HIDE);
@@ -696,6 +712,11 @@
     afterDocx.innerHTML = "";
     afterMsg.textContent = "";
 
+    if (!window.docx || typeof window.docx.renderAsync !== "function"){
+      afterMsg.textContent = "Viewer not loaded yet — try again after the page finishes loading.";
+      return;
+    }
+
     const ab = await fetchOriginalDocxAB();
     if (!ab) { afterMsg.textContent = "Upload a .docx to preview the styled ‘after’ resume."; return; }
 
@@ -837,7 +858,7 @@
   };
 })();
 
-// --- Voice Assistant: page-specific hook (as discussed) ---
+// --- Voice Assistant: page-specific hook (optional example) ---
 window.addEventListener('load', () => {
   if (!window.voiceAssistant) return;
   window.voiceAssistant.register({
