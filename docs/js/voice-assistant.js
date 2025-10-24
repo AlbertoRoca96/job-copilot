@@ -1,18 +1,14 @@
-// js/voice-assistant.js — Realtime voice wired to OpenAI via Supabase Edge
-// • Typed messages always call /assistant (tool agent).
-// • If Realtime is ON, the agent's reply is spoken by the model.
-// • Executes server-proposed DOM actions (navigate/click/input/scroll/focus/announce/snapshot).
-// • NEW: Local intent parser (client-side) so commands like “open power edit”,
-//   “go to profile”, “scroll to bottom”, “click sign in” work even when the model
-//   doesn’t return actions.
-// • NEW: Hide/Show — panel collapses to a FAB and keeps listening until you press Stop.
+// js/voice-assistant.js — Realtime voice via Supabase Edge
+// • Executes server DOM actions (navigate/click/input/scroll/focus/announce/snapshot)
+// • Adds client-side intent fallback (so “open power edit”, “go to profile”, “click sign in”, etc. just work)
+// • Adds Hide/Show: panel collapses to a FAB and keeps listening until you press Stop.
 
 (function () {
   // ---------- Supabase ----------
   const supabase = (window.supabase || (() => { throw new Error("supabase.js not loaded"); })())
     .createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
 
-  // ---------- UI bootstrap (use existing if present; else create) ----------
+  // ---------- UI ----------
   let panel = document.getElementById("va-panel");
   let logEl  = document.getElementById("va-log");
   let input  = document.getElementById("va-input");
@@ -62,13 +58,13 @@
   }
   ensureWidget();
 
-  // ---------- Hide / Show (panel hides; audio keeps streaming until Stop) ----------
+  // Hide/Show (listening continues while hidden)
   function showPanel(){ panel.style.display = "";  fabBtn.style.display = "none"; }
   function hidePanel(){ panel.style.display = "none"; fabBtn.style.display = ""; }
   hideBtn?.addEventListener("click", hidePanel);
   fabBtn?.addEventListener("click", showPanel);
 
-  // ---------- Accessibility (ARIA live announcements) ----------
+  // ---------- ARIA live ----------
   let live = document.getElementById("va-aria-live");
   if (!live) {
     live = document.createElement("div");
@@ -80,7 +76,7 @@
   }
   function announce(text){ live.textContent = text || ""; }
 
-  // ---------- Log helpers ----------
+  // ---------- Log ----------
   function esc(s){ return String(s||"").replace(/[&<>]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c])); }
   function line(role, text){
     const d = document.createElement("div");
@@ -90,7 +86,7 @@
     logEl.scrollTop = logEl.scrollHeight;
   }
 
-  // ---------- Auth display name ----------
+  // ---------- Auth ----------
   async function getUsername(){
     try {
       const { data } = await supabase.auth.getUser();
@@ -116,12 +112,8 @@
     return data;
   }
 
-  // ---------- WebRTC state ----------
-  let pc = null;
-  let dc = null;
-  let micStream = null;
-  let inboundAudioEl = null;
-  let realtimeOn = false;
+  // ---------- Realtime ----------
+  let pc = null, dc = null, micStream = null, inboundAudioEl = null, realtimeOn = false;
 
   function cleanupRealtime(){
     realtimeOn = false;
@@ -152,23 +144,17 @@
       line("Assistant", "This browser does not support microphone capture.");
       return;
     }
-
     try {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
       const { ephemeral_key, session_url } = await getRealtimeSession();
 
       inboundAudioEl = document.createElement("audio");
-      inboundAudioEl.autoplay = true;
-      inboundAudioEl.playsInline = true;
-      inboundAudioEl.style.display = "none";
+      inboundAudioEl.autoplay = true; inboundAudioEl.playsInline = true; inboundAudioEl.style.display = "none";
       document.body.appendChild(inboundAudioEl);
 
       pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-
       pc.ontrack = (e) => { if (!inboundAudioEl.srcObject) inboundAudioEl.srcObject = e.streams[0]; };
       pc.addTransceiver("audio", { direction: "recvonly" });
-
       micStream.getTracks().forEach(t => pc.addTrack(t, micStream));
 
       pc.onconnectionstatechange = () => {
@@ -179,7 +165,6 @@
       dc = pc.createDataChannel("oai-events");
       dc.onopen  = () => line("Assistant","Data channel open.");
       dc.onclose = () => line("Assistant","Data channel closed.");
-      // Note: you can inspect e.data for streaming events if you want
       dc.onmessage = () => {};
 
       const offer = await pc.createOffer({ offerToReceiveAudio: true });
@@ -200,9 +185,8 @@
     } catch (e) {
       const name = (e && (e.name || e.code)) || "";
       if (name === "NotFoundError" || name === "DevicesNotFoundError")       line("Assistant", "Requested device not found. Check microphone availability.");
-      else if (name === "NotAllowedError" || name === "SecurityError" || name === "PermissionDeniedError")
-        line("Assistant", "Microphone permission denied.");
-      else if (name === "InvalidStateError")                                  line("Assistant", "Audio system is in an invalid state. Reload the page and try again.");
+      else if (name === "NotAllowedError" || name === "SecurityError" || name === "PermissionDeniedError") line("Assistant", "Microphone permission denied.");
+      else if (name === "InvalidStateError")                                  line("Assistant", "Audio system is in an invalid state. Reload and try again.");
       else                                                                     line("Assistant", "Start error: " + (e.message || e));
       cleanupRealtime();
     }
@@ -211,10 +195,7 @@
   function stopRealtime(){ cleanupRealtime(); line("Assistant","Stopped."); }
 
   function sendRealtimeText(text){
-    if (!realtimeOn || !dc || dc.readyState !== "open") {
-      line("Assistant", "Realtime is not connected. Click Listen first.");
-      return;
-    }
+    if (!realtimeOn || !dc || dc.readyState !== "open") { line("Assistant", "Realtime is not connected. Click Listen first."); return; }
     dc.send(JSON.stringify({
       type: "conversation.item.create",
       item: { type: "message", role: "user", content: [{ type: "input_text", text }] }
@@ -272,7 +253,7 @@
             if (!safeSameOrigin(u.href)) { line("Assistant", "Blocked navigation to different origin."); break; }
             if (a.announce) announce(a.announce);
             window.location.href = u.href;
-            return; // page reloads
+            return; // page will reload
           }
           case "click": {
             let el = null;
@@ -315,11 +296,7 @@
             const payload = {
               text: a.prompt || "Summarize this page and guide me to the next step.",
               username,
-              page_snapshot: {
-                url: window.location.href,
-                title: document.title,
-                text: extractVisibleText(),
-              },
+              page_snapshot: { url: window.location.href, title: document.title, text: extractVisibleText() },
             };
             const resp = await callAssistant(payload);
             const out = (resp && resp.reply) || "(no reply)";
@@ -335,7 +312,7 @@
     }
   }
 
-  // ---------- Local intent parser (client fallback) ----------
+  // Client fallback intent
   function detectLocalActions(raw) {
     const t = (raw || "").toLowerCase();
     const out = [];
@@ -358,7 +335,7 @@
     line("You", text);
     input.value = "";
 
-    // Immediate local fallback so things click even if the model doesn’t plan actions
+    // Immediate local fallback (acts even if the server doesn’t return actions)
     const local = detectLocalActions(text);
     if (local.length) await executeActions(local);
 
@@ -385,7 +362,7 @@
   // ---------- Wire UI ----------
   send?.addEventListener("click", sendText);
   input?.addEventListener("keydown", (e)=>{ if (e.key === "Enter") sendText(); });
-  listen?.addEventListener("click", startRealtime);   // user gesture (iOS friendly)
+  listen?.addEventListener("click", startRealtime);
   stop?.addEventListener("click", stopRealtime);
 
   // ---------- Greeting ----------
