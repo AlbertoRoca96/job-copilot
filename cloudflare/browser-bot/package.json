@@ -1,0 +1,9 @@
+{
+  "name": "browser-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@cloudflare/puppeteer": "^0.5.0"
+  }
+}
