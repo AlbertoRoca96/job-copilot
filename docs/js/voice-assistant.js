@@ -1,7 +1,4 @@
-// js/voice-assistant.js
-// Realtime voice UI + uses DomAgent to:
-//  - send page snapshot + text to the "assistant" Edge Function
-//  - execute returned DOM actions across your whole site
+// Realtime voice UI + DomAgent bridge (supabase always-200 compatible)
 
 (function () {
   // ---------- Supabase ----------
@@ -83,6 +80,7 @@
     d.innerHTML = `<strong>${esc(role)}:</strong> ${esc(text)}`;
     logEl.appendChild(d);
     logEl.scrollTop = logEl.scrollHeight;
+    if (role === "Assistant") announce(text);
   }
 
   // ---------- Auth ----------
@@ -133,12 +131,13 @@
     try {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      // get ephemeral session token for OpenAI Realtime
+      // get ephemeral session token for OpenAI Realtime (server returns { ephemeral_key, session_url })
       const { data, error } = await supabase.functions.invoke("realtime-session", {
         body: { model: "gpt-4o-realtime-preview", voice: "alloy", modalities: ["audio","text"] }
       });
       if (error) throw new Error(error.message || "realtime-session failed");
-      const { ephemeral_key, session_url } = data;
+      const { ephemeral_key, session_url } = data || {};
+      if (!ephemeral_key || !session_url) throw new Error("Realtime: missing ephemeral key or session URL.");
 
       inboundAudioEl = document.createElement("audio");
       inboundAudioEl.autoplay = true; inboundAudioEl.playsInline = true; inboundAudioEl.style.display = "none";
@@ -225,14 +224,15 @@
     try {
       const username = await getUsername();
       const resp = await window.DomAgent.askAssistant({ text, username });
-      const out = (resp && resp.reply) || "(no reply)";
+
+      // normalized: { reply, actions? } ; error -> reply: "Error: …"
+      const out = (resp && (resp.reply || resp.text)) || "(no reply)";
 
       if (realtimeOn && dc && dc.readyState === "open") {
         sendRealtimeText(out);
       }
 
       line("Assistant", out);
-      // DomAgent already executed resp.actions
     } catch (e) {
       line("Assistant", "Error: " + (e.message || e));
     }
@@ -249,7 +249,7 @@
     try {
       const username = await getUsername();
       const resp = await window.DomAgent.askAssistant({ greet: true, username });
-      line("Assistant", (resp && resp.reply) || (`Hello ${username}, how may I assist you today?`));
+      line("Assistant", (resp && (resp.reply || resp.text)) || (`Hello ${username}, how may I assist you today?`));
     } catch (e) {
       const username = await getUsername();
       line("Assistant", `Hello ${username}, how may I assist you today?`);
