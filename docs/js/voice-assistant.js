@@ -1,7 +1,7 @@
 // js/voice-assistant.js — Realtime voice via Supabase Edge
 // • Executes server DOM actions (navigate/click/input/scroll/focus/announce/snapshot)
-// • Adds client-side intent fallback (so “open power edit”, “go to profile”, “click sign in”, etc. just work)
-// • Adds Hide/Show: panel collapses to a FAB and keeps listening until you press Stop.
+// • Client-side intent fallback so “open power edit”, “go to profile”, etc. still work
+// • Hide/Show widget, plus WebRTC Realtime voice
 
 (function () {
   // ---------- Supabase ----------
@@ -58,7 +58,6 @@
   }
   ensureWidget();
 
-  // Hide/Show (listening continues while hidden)
   function showPanel(){ panel.style.display = "";  fabBtn.style.display = "none"; }
   function hidePanel(){ panel.style.display = "none"; fabBtn.style.display = ""; }
   hideBtn?.addEventListener("click", hidePanel);
@@ -123,7 +122,6 @@
     if (inboundAudioEl) { try { inboundAudioEl.pause(); inboundAudioEl.srcObject = null; } catch {} inboundAudioEl.remove(); }
     pc = dc = micStream = inboundAudioEl = null;
   }
-
   function waitForICE(pc){
     if (pc.iceGatheringState === "complete") return Promise.resolve();
     return new Promise((resolve) => {
@@ -137,7 +135,6 @@
       setTimeout(resolve, 1500);
     });
   }
-
   async function startRealtime(){
     if (realtimeOn) return;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -146,7 +143,9 @@
     }
     try {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const { ephemeral_key, session_url } = await getRealtimeSession();
+
+      // Ask backend for OpenAI Realtime session (ephemeral key)
+      const { ephemeral_key, session_url } = await getRealtimeSession(); // POST /v1/realtime/sessions returns client_secret.value (ephemeral) and session url 
 
       inboundAudioEl = document.createElement("audio");
       inboundAudioEl.autoplay = true; inboundAudioEl.playsInline = true; inboundAudioEl.style.display = "none";
@@ -191,9 +190,7 @@
       cleanupRealtime();
     }
   }
-
   function stopRealtime(){ cleanupRealtime(); line("Assistant","Stopped."); }
-
   function sendRealtimeText(text){
     if (!realtimeOn || !dc || dc.readyState !== "open") { line("Assistant", "Realtime is not connected. Click Listen first."); return; }
     dc.send(JSON.stringify({
@@ -206,7 +203,6 @@
   // ---------- DOM helpers ----------
   function norm(s){ return String(s||"").replace(/\s+/g," ").trim().toLowerCase(); }
   function q(el, sel){ try { return el.querySelector(sel); } catch { return null; } }
-
   function findByText(text){
     const target = norm(text);
     const tags = ["button","a","summary","div","span"];
@@ -224,12 +220,10 @@
     }
     return null;
   }
-
   function safeSameOrigin(url){
     try { return new URL(url, window.location.href).origin === window.location.origin; }
     catch { return false; }
   }
-
   function extractVisibleText(limit = 8000){
     const parts = [];
     const sel = "h1,h2,h3,h4,main p,section p,button,a";
@@ -253,7 +247,7 @@
             if (!safeSameOrigin(u.href)) { line("Assistant", "Blocked navigation to different origin."); break; }
             if (a.announce) announce(a.announce);
             window.location.href = u.href;
-            return; // page will reload
+            return; // reload
           }
           case "click": {
             let el = null;
@@ -312,7 +306,6 @@
     }
   }
 
-  // Client fallback intent
   function detectLocalActions(raw) {
     const t = (raw || "").toLowerCase();
     const out = [];
@@ -335,13 +328,16 @@
     line("You", text);
     input.value = "";
 
-    // Immediate local fallback (acts even if the server doesn’t return actions)
+    // Local fallback executes immediately
     const local = detectLocalActions(text);
     if (local.length) await executeActions(local);
 
     try {
       const username = await getUsername();
-      const resp = await callAssistant({ text, username });
+      const resp = await callAssistant({
+        text, username,
+        page_snapshot: { url: window.location.href, title: document.title, text: extractVisibleText() }
+      });
       const out = (resp && resp.reply) || "(no reply)";
 
       if (realtimeOn && dc && dc.readyState === "open") {
