@@ -8,13 +8,9 @@
   <link rel="stylesheet" href="style.css" />
   <style>
     .docx-view{background:#6b7280; padding:14px; border-radius:8px}
-
-    /* DOCX-styled AFTER editor */
     .docx-wrap{background:#6b7280; padding:14px; display:flex; justify-content:center; border-radius:8px}
     .docx .page{background:#fff; box-shadow:0 6px 18px rgba(0,0,0,.2); margin:12px 0}
     .muted.small{font-size:12px; color:#6b7280}
-
-    /* Inline-edit affordance inside the docx-preview area */
     .docx [contenteditable="true"]{outline:2px solid transparent}
     .docx [contenteditable="true"]:focus{outline:2px dashed #93c5fd; background:rgba(147,197,253,.08)}
   </style>
@@ -116,25 +112,20 @@
     window.SUPABASE_URL = "https://imozfqawxpsasjdmgdkh.supabase.co";
     window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc";
   </script>
-  <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script defer src="https://unpkg.com/mammoth@1.6.0/mammoth.browser.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script defer src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/docx-preview@0.3.4/dist/docx-preview.min.js"></script>
   <script defer src="js/scoring.js?v=2025-10-07-2"></script>
-
-  <!-- PE glue for the “After (DOCX styles)” pane -->
   <script defer src="js/after-docx.js?v=2025-10-24-oneeditor"></script>
-
-  <!-- Power Edit app (includes the helper at bottom) -->
   <script defer src="js/power-edit.js?v=2025-10-24-oneeditor"></script>
 
   <script defer src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script defer src="js/feedback.js?v=2025-10-12"></script>
 
-  <!-- NEW: page snapshot + DOM action runner + recorder -->
+  <!-- Page snapshot + DOM action runner + voice UI -->
   <script defer src="js/dom-agent.js"></script>
-  <!-- Voice assistant -->
   <script defer src="js/voice-assistant.js"></script>
 </body>
 </html>
