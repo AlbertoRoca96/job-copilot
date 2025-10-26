@@ -1,13 +1,12 @@
 // supabase/functions/assistant/index.ts
-// Job Copilot assistant (fixed tool schemas).
-// - Robust CORS
-// - Always 200 JSON ({reply, actions} or {error})
-// - Tool schemas valid for OpenAI (arrays define "items")
+// Job Copilot assistant — tools + DOM-action planning + optional Cloudflare browser runner.
+// - Robust CORS + "always-200" JSON (errors in { error }) to avoid FunctionsHttpError in clients.
+// - FIX: Tool schema for `browser_task` now includes an `items` definition for steps[].
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 /* ---------------- CORS ---------------- */
-const ALLOW_ORIGINS = new Set([
+const ALLOW_ORIGINS = new Set<string>([
   "https://albertoroca96.github.io",
   "http://localhost:5173",
   "http://localhost:3000",
@@ -16,9 +15,8 @@ const ALLOW_ORIGINS = new Set([
 
 function corsHeaders(req: Request) {
   const origin = req.headers.get("origin") || "";
-  const vary = "Origin, Access-Control-Request-Headers, Access-Control-Request-Method";
   const h = new Headers({
-    "Vary": vary,
+    "Vary": "Origin, Access-Control-Request-Headers, Access-Control-Request-Method",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Max-Age": "86400",
     "Content-Type": "application/json",
@@ -48,7 +46,6 @@ function stripHtml(html: string, max = 4000) {
   const text = noScripts.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
   return text.slice(0, max);
 }
-
 async function tavilySearch(query: string, maxResults = 5) {
   if (!TAVILY_API_KEY) return { error: "TAVILY_API_KEY not set on server; web_search unavailable." };
   const r = await fetch("https://api.tavily.com/search", {
@@ -59,7 +56,6 @@ async function tavilySearch(query: string, maxResults = 5) {
   if (!r.ok) throw new Error(`Tavily error: ${await r.text()}`);
   return await r.json();
 }
-
 async function fetchPage(url: string, maxChars = 5000) {
   const r = await fetch(url, { redirect: "follow" });
   const ct = r.headers.get("content-type") || "";
@@ -67,7 +63,6 @@ async function fetchPage(url: string, maxChars = 5000) {
   const text = /html/i.test(ct) ? stripHtml(body, maxChars) : body.slice(0, maxChars);
   return { url, contentType: ct, text, html: /html/i.test(ct) ? body : "" };
 }
-
 async function repoTree(owner: string, repo: string, prefix = "") {
   if (!GITHUB_TOKEN) return { error: "GITHUB_TOKEN not set on server; repo_tree unavailable." };
   const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/main?recursive=1`, {
@@ -83,16 +78,13 @@ async function repoTree(owner: string, repo: string, prefix = "") {
   const files = prefix ? all.filter((p: string) => p.startsWith(prefix)) : all;
   return { count: files.length, files: files.slice(0, 400) };
 }
-
 function sameOrigin(url: string, origin: string) { try { return new URL(url).origin === origin; } catch { return false; } }
-
 function extractLinksFromHtml(html: string, baseUrl: string) {
   const out: string[] = [];
   const re = /href\s*=\s*["']([^"']+)["']/gi; let m: RegExpExecArray | null;
   while (m = re.exec(html)) { try { out.push(new URL(m[1], baseUrl).href); } catch {} }
   return Array.from(new Set(out));
 }
-
 async function siteCrawl(root: string, limit = 12) {
   const first = await fetchPage(root, 6000);
   const origin = new URL(root).origin;
@@ -107,30 +99,23 @@ async function siteCrawl(root: string, limit = 12) {
   ];
   return { pages };
 }
-
 async function runBrowserTask(args: any) {
   if (!BROWSER_BOT_URL) return { error: "BROWSER_BOT_URL not set on server; browser_task unavailable." };
-
-  // Map snake_case (tool) -> camelCase (worker)
   const payload = {
     startUrl: args?.start_url || "https://albertoroca96.github.io/job-copilot/",
     steps: Array.isArray(args?.steps) ? args.steps : [],
     timeoutMs: Number(args?.timeout_ms) || 45000,
     viewport: args?.viewport || { width: 1280, height: 900 },
   };
-
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (BROWSER_BOT_AUTH) headers["Authorization"] = BROWSER_BOT_AUTH;
-
   const r = await fetch(BROWSER_BOT_URL, { method: "POST", headers, body: JSON.stringify(payload) });
   let json: any; try { json = await r.json(); } catch { json = { error: await r.text().catch(() => "unknown error") }; }
   if (!r.ok) return { error: `Browser task error: ${JSON.stringify(json)}` };
-
   const { finalUrl, results, screenshot } = json || {};
   const html = typeof json?.html === "string" ? String(json.html).slice(0, 8000) : "";
   return { finalUrl, results, screenshot, html };
 }
-
 function detectLocalActions(raw: string) {
   const t = (raw || "").toLowerCase(); const out: any[] = [];
   if (/(^| )(home|go home|back to home)( |$)/.test(t)) out.push({ type: "navigate", path: "/job-copilot/", announce: "Going Home." });
@@ -145,7 +130,7 @@ function detectLocalActions(raw: string) {
   return out.slice(0, 10);
 }
 
-/* ---------------- Chat + tools ---------------- */
+/* ---------------- OpenAI tool-calling (chat) ---------------- */
 async function chatWithTools(messages: any[], tools: any[], model = "gpt-4o-mini", maxIterations = 4) {
   for (let i = 0; i < maxIterations; i++) {
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -153,9 +138,8 @@ async function chatWithTools(messages: any[], tools: any[], model = "gpt-4o-mini
       headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({ model, messages, tools, tool_choice: "auto" }),
     });
-    const bodyText = await r.text();
-    if (!r.ok) throw new Error(`OpenAI error: ${bodyText}`);
-    const data = JSON.parse(bodyText);
+    if (!r.ok) throw new Error(`OpenAI error: ${await r.text()}`);
+    const data = await r.json();
     const msg = data.choices?.[0]?.message;
 
     if (msg?.tool_calls?.length) {
@@ -169,8 +153,9 @@ async function chatWithTools(messages: any[], tools: any[], model = "gpt-4o-mini
           else if (name === "repo_tree")    result = await repoTree(args.owner ?? "AlbertoRoca96", args.repo ?? "job-copilot", args.path_prefix ?? "");
           else if (name === "crawl_site")   result = await siteCrawl(args.root ?? "https://albertoroca96.github.io/job-copilot/", args.limit ?? 10);
           else if (name === "propose_dom_actions") {
-            // passthrough; client will execute
-            result = { accepted: true, count: Array.isArray(args.actions) ? args.actions.length : 0 };
+            // Just acknowledge; actions are executed client-side
+            const a = Array.isArray(args?.actions) ? args.actions : [];
+            result = { accepted: true, count: a.length };
           } else if (name === "browser_task") {
             result = await runBrowserTask(args);
           }
@@ -179,10 +164,13 @@ async function chatWithTools(messages: any[], tools: any[], model = "gpt-4o-mini
         }
         messages.push({ role: "tool", tool_call_id: call.id, name, content: JSON.stringify(result) });
       }
-      continue; // loop again
+      continue; // allow model to incorporate tool results
     }
 
-    const finalText = typeof msg?.content === "string" ? msg.content : "(no reply)";
+    const finalText =
+      typeof msg?.content === "string"
+        ? msg.content
+        : (Array.isArray(msg?.content) ? msg.content.map((c: any) => c?.text || "").join(" ").trim() : "(no reply)");
     return { text: finalText };
   }
   return { text: "I ran into a loop while using tools. Please try again." };
@@ -208,30 +196,49 @@ Deno.serve(async (req) => {
       return ok(req, { status: r.status, ...json });
     }
 
-    // Cheap greet (no OpenAI)
+    // Cheap greet path (no OpenAI)
     if (body?.greet) return ok(req, { reply: `Hello ${username}, how may I assist you today?` });
 
     ensureOpenAI();
 
     const SITE_HINT = `
-Known pages:
-- Home → "/job-copilot/"
-- Profile → "/job-copilot/#profile"
-- Power Edit → via the "Open Power Edit" button on Home
-Prefer proposing SAFE DOM actions by visible text. Keep plans short.`.trim();
+Known pages (friendly name → path):
+- "Home" → "/job-copilot/"
+- "Profile" → "/job-copilot/#profile"
+- "Power Edit" → open via the "Open Power Edit" button on Home
+Prefer proposing DOM actions by visible button/link text. Keep plans short and safe.`.trim();
 
     const SYSTEM = {
       role: "system",
       content:
         "You are Job Copilot. Be concise, friendly, and proactive. You can use tools to search the web, fetch pages, " +
-        "crawl the site, list repo files, and (optionally) run a remote browser via browser_task. " + SITE_HINT,
+        "crawl the site, list repo files, and (optionally) run a remote browser via browser_task. Propose DOM actions " +
+        "with a compact plan; keep actions minimal and safe. " + SITE_HINT,
     };
     const USER = { role: "user", content: text || "Say hello." };
     const CONTEXT = pageSnapshot
       ? [{ role: "system", content: `CURRENT PAGE: ${pageSnapshot.url || ""}\nTITLE: ${pageSnapshot.title || ""}\nTEXT: ${pageSnapshot.text?.slice(0, 2000) || ""}` }]
       : [];
 
-    /* ---------- TOOL SCHEMAS (fixed) ---------- */
+    // ---------- FIXED TOOL SCHEMAS ----------
+    // Reusable step schema for browser_task.steps[]
+    const BrowserStepSchema = {
+      type: "object",
+      properties: {
+        action:   { type: "string", description: "e.g., clickText, press, navigate, setValue, waitFor, scroll" },
+        selector: { type: "string", description: "CSS selector (when applicable)" },
+        text:     { type: "string", description: "Visible text to click/type or assertion text" },
+        key:      { type: "string", description: "Keyboard key for 'press' actions, e.g., Enter" },
+        value:    { type: "string", description: "Value for set/input actions" },
+        url:      { type: "string", description: "URL for navigate actions" },
+        waitMs:   { type: "integer", minimum: 0, description: "Optional delay after step" },
+        x:        { type: "integer", description: "Optional x for mouse actions" },
+        y:        { type: "integer", description: "Optional y for mouse actions" }
+      },
+      required: ["action"],
+      additionalProperties: true
+    };
+
     const tools = [
       {
         type: "function",
@@ -241,8 +248,8 @@ Prefer proposing SAFE DOM actions by visible text. Keep plans short.`.trim();
           parameters: {
             type: "object",
             properties: {
-              query:  { type: "string", description: "Search query" },
-              top_k:  { type: "integer", minimum: 1, maximum: 10, default: 5 }
+              query: { type: "string" },
+              top_k: { type: "integer", minimum: 1, maximum: 10 }
             },
             required: ["query"]
           }
@@ -256,8 +263,8 @@ Prefer proposing SAFE DOM actions by visible text. Keep plans short.`.trim();
           parameters: {
             type: "object",
             properties: {
-              url:       { type: "string" },
-              max_chars: { type: "integer", minimum: 500, maximum: 20000, default: 5000 }
+              url: { type: "string" },
+              max_chars: { type: "integer", minimum: 500, maximum: 20000 }
             },
             required: ["url"]
           }
@@ -267,13 +274,13 @@ Prefer proposing SAFE DOM actions by visible text. Keep plans short.`.trim();
         type: "function",
         function: {
           name: "repo_tree",
-          description: "List files in a GitHub repo tree (main branch).",
+          description: "List files in the GitHub repo tree (main branch).",
           parameters: {
             type: "object",
             properties: {
-              owner:       { type: "string", default: "AlbertoRoca96" },
-              repo:        { type: "string", default: "job-copilot" },
-              path_prefix: { type: "string", description: "Only include files under this path" }
+              owner: { type: "string" },
+              repo: { type: "string" },
+              path_prefix: { type: "string" }
             }
           }
         }
@@ -286,8 +293,8 @@ Prefer proposing SAFE DOM actions by visible text. Keep plans short.`.trim();
           parameters: {
             type: "object",
             properties: {
-              root:  { type: "string", default: "https://albertoroca96.github.io/job-copilot/" },
-              limit: { type: "integer", minimum: 1, maximum: 20, default: 10 }
+              root: { type: "string" },
+              limit: { type: "integer", minimum: 1, maximum: 20 }
             }
           }
         }
@@ -296,7 +303,7 @@ Prefer proposing SAFE DOM actions by visible text. Keep plans short.`.trim();
         type: "function",
         function: {
           name: "propose_dom_actions",
-          description: "Plan SAFE client actions (navigate/click/input/scroll/focus/announce/snapshot).",
+          description: "Plan SAFE client actions (navigate/click/input/scroll/focus/announce/snapshot). Prefer clicks by visible text.",
           parameters: {
             type: "object",
             properties: {
@@ -305,20 +312,22 @@ Prefer proposing SAFE DOM actions by visible text. Keep plans short.`.trim();
                 items: {
                   type: "object",
                   properties: {
-                    type:     { type: "string", enum: ["navigate","click","input","scroll","focus","announce","snapshot"] },
-                    url:      { type: "string" },
-                    path:     { type: "string" },
-                    name:     { type: "string" },
+                    type: { type: "string", enum: ["navigate","click","input","scroll","focus","announce","snapshot"] },
+                    url: { type: "string" },
+                    path: { type: "string" },
+                    name: { type: "string" },
                     selector: { type: "string" },
-                    text:     { type: "string" },
-                    value:    { type: "string" },
-                    to:       { type: "string", enum: ["top","bottom"] },
-                    y:        { type: "number" },
+                    text: { type: "string" },
+                    value: { type: "string" },
+                    to: { type: "string", enum: ["top","bottom"] },
+                    y: { type: "number" },
                     announce: { type: "string" },
                     placeholder: { type: "string" }
                   },
-                  required: ["type"]
-                }
+                  required: ["type"],
+                  additionalProperties: true
+                },
+                default: []
               }
             },
             required: ["actions"]
@@ -326,59 +335,34 @@ Prefer proposing SAFE DOM actions by visible text. Keep plans short.`.trim();
         }
       },
       {
-        // *** FIXED: array has "items" with a concrete object schema ***
         type: "function",
         function: {
           name: "browser_task",
-          description: "Run scripted steps in a remote headless Chromium via Cloudflare Worker.",
+          description: "Run scripted steps in remote headless Chromium via your Cloudflare Worker.",
           parameters: {
             type: "object",
             properties: {
-              start_url: { type: "string", description: "Starting URL" },
+              start_url: { type: "string", description: "Page to open first" },
               steps: {
                 type: "array",
-                description: "Sequence of browser steps",
-                items: {
-                  type: "object",
-                  properties: {
-                    action: { type: "string", enum: [
-                      "goto",          // {url}
-                      "clickText",     // {text}
-                      "clickSelector", // {selector}
-                      "fill",          // {selector, value}
-                      "press",         // {key}
-                      "waitFor",       // {ms}
-                      "scroll",        // {to|y}
-                      "screenshot",    // {}
-                      "extractHtml"    // {}
-                    ] },
-                    url:      { type: "string" },
-                    text:     { type: "string" },
-                    selector: { type: "string" },
-                    value:    { type: "string" },
-                    key:      { type: "string" },
-                    ms:       { type: "integer", minimum: 0 },
-                    to:       { type: "string", enum: ["top","bottom"] },
-                    y:        { type: "number" }
-                  },
-                  required: ["action"]
-                }
+                description: "List of automation steps to run in the browser bot.",
+                items: BrowserStepSchema, // <-- REQUIRED: array items schema
+                default: []
               },
-              timeout_ms: { type: "integer", minimum: 1000, default: 45000 },
+              timeout_ms: { type: "integer", minimum: 1000, description: "Overall timeout in milliseconds" },
               viewport: {
                 type: "object",
                 properties: {
-                  width:  { type: "integer", minimum: 100, default: 1280 },
-                  height: { type: "integer", minimum: 100, default: 900 }
+                  width: { type: "integer", minimum: 100 },
+                  height:{ type: "integer", minimum: 100 }
                 }
               }
-            },
-            required: ["steps"]
+            }
+            // Intentionally no `required` so the server can apply defaults.
           }
         }
       }
     ];
-    /* ---------- /TOOLS ---------- */
 
     const { text: reply } = await chatWithTools([SYSTEM, ...CONTEXT, USER], tools);
     const localPlan = detectLocalActions(text);
