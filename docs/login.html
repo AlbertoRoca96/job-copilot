@@ -6,7 +6,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="light">
   <link rel="stylesheet" href="style.css" />
-  <script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js" defer></script>
 </head>
 <body>
   <a href="#main" class="skip-link">Skip to main content</a>
@@ -43,12 +42,17 @@
     </div>
   </main>
 
+  <!-- Supabase config + libs -->
+  <script>
+    window.SUPABASE_URL  = "https://imozfqawxpsasjdmgdkh.supabase.co";
+    window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc";
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <!-- Page logic: now uses the globals above -->
   <script>
     window.addEventListener('load', async () => {
-      const supabase = window.supabase.createClient(
-        'https://imozfqawxpsasjdmgdkh.supabase.co',
-        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc'
-      );
+      const supabase = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
       const msg = document.getElementById('msg');
       const emailEl = document.getElementById('email');
       const passEl  = document.getElementById('password');
@@ -121,12 +125,10 @@
     });
   </script>
 
+  <!-- Utilities + assistant -->
   <script defer src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script defer src="js/feedback.js?v=2025-10-12"></script>
-
-  <!-- NEW: page snapshot + DOM action runner + recorder -->
   <script defer src="js/dom-agent.js"></script>
-  <!-- Voice assistant -->
   <script defer src="js/voice-assistant.js"></script>
 </body>
 </html>
