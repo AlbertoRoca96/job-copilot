@@ -65,21 +65,19 @@
     </section>
   </main>
 
-  <!-- Supabase config (used by feedback + assistant) -->
+  <!-- Supabase config + libs (config first so globals exist before DomAgent runs) -->
   <script>
     window.SUPABASE_URL = "https://imozfqawxpsasjdmgdkh.supabase.co";
     window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc";
   </script>
-  <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
   <!-- Utilities used elsewhere on the site -->
   <script defer src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script defer src="js/feedback.js?v=2025-10-12"></script>
 
-  <!-- NEW: page snapshot + DOM action runner + recorder -->
+  <!-- Page snapshot + DOM action runner + voice UI -->
   <script defer src="js/dom-agent.js"></script>
-
-  <!-- Voice assistant (Realtime + uses DomAgent for actions) -->
   <script defer src="js/voice-assistant.js"></script>
 </body>
 </html>
