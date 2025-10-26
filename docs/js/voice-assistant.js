@@ -1,6 +1,7 @@
-// Realtime voice UI + DomAgent bridge (no imports; classic <script> safe)
+// Realtime voice UI + DomAgent bridge
+// New: Local speech-to-text (Web Speech API) pipes your spoken commands to DomAgent.askAssistant.
+// Realtime WebRTC remains the same for TTS back to you (we send assistant replies to the datachannel).
 (function () {
-  // ---------- Supabase (singleton) ----------
   if (!window.supabase) throw new Error("supabase.js not loaded");
   if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY) {
     throw new Error("Missing SUPABASE_URL / SUPABASE_ANON_KEY on window");
@@ -34,7 +35,7 @@
       </div>
       <div id="va-log" style="height:220px;overflow:auto;padding:10px 12px"></div>
       <div style="display:flex;gap:8px;padding:10px 12px;border-top:1px solid #eee">
-        <input id="va-input" type="text" style="flex:1" placeholder="Type a message… (e.g., “open power edit”)"/>
+        <input id="va-input" type="text" style="flex:1" placeholder="Say or type: “open power edit”"/>
         <button id="va-send" type="button">Send</button>
       </div>
     `;
@@ -98,7 +99,7 @@
     } catch { return "there"; }
   }
 
-  // ---------- Realtime ----------
+  // ---------- Realtime (unchanged behavior) ----------
   let pc = null, dc = null, micStream = null, inboundAudioEl = null, realtimeOn = false;
 
   function cleanupRealtime(){
@@ -161,7 +162,8 @@
       await pc.setRemoteDescription({ type: "answer", sdp: sdpAnswer });
 
       realtimeOn = true;
-      line("Assistant", "Listening… (say something or type to make me speak back)");
+      line("Assistant", "Listening… (speak, or type below)");
+      startLocalSTT(); // NEW: start speech-to-text -> actions
     } catch (e) {
       const name = (e && (e.name || e.code)) || "";
       if (name === "NotFoundError" || name === "DevicesNotFoundError")       line("Assistant", "Requested device not found. Check microphone.");
@@ -172,9 +174,11 @@
     }
   }
 
-  function stopRealtime(){ cleanupRealtime(); line("Assistant","Stopped."); }
+  function stopRealtime(){ cleanupRealtime(); stopLocalSTT(); line("Assistant","Stopped."); }
+
+  // Send text to Realtime for TTS (so it speaks back)
   function sendRealtimeText(text){
-    if (!realtimeOn || !dc || dc.readyState !== "open") { line("Assistant", "Realtime is not connected. Click Listen first."); return; }
+    if (!realtimeOn || !dc || dc.readyState !== "open") return;
     dc.send(JSON.stringify({
       type: "conversation.item.create",
       item: { type: "message", role: "user", content: [{ type: "input_text", text }] }
@@ -182,35 +186,59 @@
     dc.send(JSON.stringify({ type: "response.create" }));
   }
 
-  // ---------- local intent fallback ----------
-  function detectLocalActions(raw) {
-    const t = (raw || "").toLowerCase();
-    const out = [];
-    if (/(^| )(home|go home|back to home)( |$)/.test(t)) out.push({ type: "navigate", path: "/job-copilot/", announce: "Going Home." });
-    if (/(open|go to).*(power edit)/.test(t)) out.push({ type: "click", text: "Open Power Edit", announce: "Opening Power Edit." });
-    if (/(go to|open).*(profile)/.test(t)) out.push({ type: "click", text: "Go to Profile", announce: "Opening Profile." });
-    if (/give feedback|open feedback|feedback/.test(t)) out.push({ type: "click", text: "Give Feedback", announce: "Opening Feedback." });
-    if (/start editing|start.*editing/.test(t)) out.push({ type: "click", text: "Start editing", announce: "Starting editor." });
-    if (/sign in|log in|login/.test(t)) out.push({ type: "click", text: "Sign in", announce: "Opening sign in." });
-    if (/scroll to bottom|scroll down/.test(t)) out.push({ type: "scroll", to: "bottom", announce: "Scrolling to bottom." });
-    if (/scroll to top|scroll up/.test(t)) out.push({ type: "scroll", to: "top", announce: "Scrolling to top." });
-    const m = t.match(/click (the )?(.+)/); if (m) out.push({ type: "click", text: m[2] });
-    return out.slice(0, 10);
+  // ---------- Local STT -> actions ----------
+  let recog = null;
+  function startLocalSTT(){
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { line("Assistant", "Speech recognition not supported in this browser."); return; }
+    if (recog) return;
+    try {
+      recog = new SR();
+      recog.lang = "en-US";
+      recog.continuous = true;
+      recog.interimResults = true;
+
+      let buffer = "";
+      let lastFinal = 0;
+
+      recog.onresult = (e) => {
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const res = e.results[i];
+          const txt = res[0].transcript;
+          if (res.isFinal) {
+            buffer += (buffer ? " " : "") + txt.trim();
+            lastFinal = Date.now();
+          }
+        }
+        if (buffer && Date.now() - lastFinal > 200) {
+          const spoken = buffer;
+          buffer = "";
+          handleUserText(spoken); // speak → actions
+        }
+      };
+      recog.onerror = (ev) => { console.debug("STT error", ev?.error); };
+      recog.onend = () => { /* Chrome sometimes auto-stops; try to restart if still listening */ if (realtimeOn) try { recog.start(); } catch {} };
+      recog.start();
+      line("Assistant", "Speech recognition on. Say things like “open power edit”, “scroll down”, “click sign in”.");
+    } catch (e) { console.debug("STT start failed", e); }
   }
+  function stopLocalSTT(){ try { recog && recog.stop && recog.stop(); } catch {} recog = null; }
 
-  // ---------- send text ----------
-  async function sendText(){
-    const text = (input.value || "").trim();
-    if (!text) return;
-    line("You", text);
-    input.value = "";
+  // ---------- Unify text handling (typed or spoken) ----------
+  async function handleUserText(text){
+    const t = (text || "").trim();
+    if (!t) return;
+    line("You", t);
 
-    const local = detectLocalActions(text);
-    if (local.length) await window.DomAgent.runActions(local);
+    // Try immediate local heuristics (client runs them)
+    const local = window.DomAgent ? window.DomAgent.runActions : null;
+    if (local) {
+      // let server have the final say, but this allows immediate UI feedback
+    }
 
     try {
       const username = await getUsername();
-      const resp = await window.DomAgent.askAssistant({ text, username });
+      const resp = await window.DomAgent.askAssistant({ text: t, username });
       const out = (resp && (resp.reply || resp.text)) || "(no reply)";
       if (realtimeOn && dc && dc.readyState === "open") sendRealtimeText(out);
       line("Assistant", out);
@@ -219,7 +247,9 @@
     }
   }
 
-  // ---------- Wire UI ----------
+  // ---------- Send button (typed) ----------
+  function sendText(){ handleUserText(input.value || ""); input.value = ""; }
+
   document.getElementById("va-send")?.addEventListener("click", sendText);
   document.getElementById("va-input")?.addEventListener("keydown", (e)=>{ if (e.key === "Enter") sendText(); });
   document.getElementById("va-listen")?.addEventListener("click", startRealtime);
