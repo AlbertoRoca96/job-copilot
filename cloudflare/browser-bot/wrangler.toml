@@ -1,7 +1,7 @@
 name = "browser-bot"
 main = "src/index.ts"
-compatibility_date = "2025-01-15"
-compatibility_flags = ["nodejs_compat"]
+compatibility_date = "2025-10-26"
+compatibility_flags = ["nodejs_compat_v2"]
 
 [browser]
 binding = "BROWSER"
