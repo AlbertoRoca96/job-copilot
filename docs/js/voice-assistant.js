@@ -1,7 +1,7 @@
-// js/voice-assistant.js — Realtime voice via Supabase Edge
-// • Executes server DOM actions (navigate/click/input/scroll/focus/announce/snapshot)
-// • Client-side intent fallback so “open power edit”, “go to profile”, etc. still work
-// • Hide/Show widget, plus WebRTC Realtime voice
+// js/voice-assistant.js
+// Realtime voice UI + uses DomAgent to:
+//  - send page snapshot + text to the "assistant" Edge Function
+//  - execute returned DOM actions across your whole site
 
 (function () {
   // ---------- Supabase ----------
@@ -35,7 +35,7 @@
       </div>
       <div id="va-log" style="height:220px;overflow:auto;padding:10px 12px"></div>
       <div style="display:flex;gap:8px;padding:10px 12px;border-top:1px solid #eee">
-        <input id="va-input" type="text" style="flex:1" placeholder="Type a message… (/search … or /files)"/>
+        <input id="va-input" type="text" style="flex:1" placeholder="Type a message… (e.g., “open power edit”)"/>
         <button id="va-send" type="button">Send</button>
       </div>
     `;
@@ -98,19 +98,6 @@
     } catch { return "there"; }
   }
 
-  // ---------- Edge calls ----------
-  async function callAssistant(payload){
-    const { data, error } = await supabase.functions.invoke("assistant", { body: payload });
-    if (error) throw new Error(error.message || "assistant failed");
-    return data;
-  }
-  async function getRealtimeSession(options = {}){
-    const { data, error } = await supabase.functions.invoke("realtime-session", { body: options });
-    if (error) throw new Error(error.message || "realtime-session failed");
-    if (!data || !data.ephemeral_key || !data.session_url) throw new Error("Invalid realtime-session response");
-    return data;
-  }
-
   // ---------- Realtime ----------
   let pc = null, dc = null, micStream = null, inboundAudioEl = null, realtimeOn = false;
 
@@ -122,6 +109,7 @@
     if (inboundAudioEl) { try { inboundAudioEl.pause(); inboundAudioEl.srcObject = null; } catch {} inboundAudioEl.remove(); }
     pc = dc = micStream = inboundAudioEl = null;
   }
+
   function waitForICE(pc){
     if (pc.iceGatheringState === "complete") return Promise.resolve();
     return new Promise((resolve) => {
@@ -135,6 +123,7 @@
       setTimeout(resolve, 1500);
     });
   }
+
   async function startRealtime(){
     if (realtimeOn) return;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -144,8 +133,12 @@
     try {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      // Ask backend for OpenAI Realtime session (ephemeral key)
-      const { ephemeral_key, session_url } = await getRealtimeSession(); // POST /v1/realtime/sessions returns client_secret.value (ephemeral) and session url 
+      // get ephemeral session token for OpenAI Realtime
+      const { data, error } = await supabase.functions.invoke("realtime-session", {
+        body: { model: "gpt-4o-realtime-preview", voice: "alloy", modalities: ["audio","text"] }
+      });
+      if (error) throw new Error(error.message || "realtime-session failed");
+      const { ephemeral_key, session_url } = data;
 
       inboundAudioEl = document.createElement("audio");
       inboundAudioEl.autoplay = true; inboundAudioEl.playsInline = true; inboundAudioEl.style.display = "none";
@@ -190,7 +183,9 @@
       cleanupRealtime();
     }
   }
+
   function stopRealtime(){ cleanupRealtime(); line("Assistant","Stopped."); }
+
   function sendRealtimeText(text){
     if (!realtimeOn || !dc || dc.readyState !== "open") { line("Assistant", "Realtime is not connected. Click Listen first."); return; }
     dc.send(JSON.stringify({
@@ -200,112 +195,7 @@
     dc.send(JSON.stringify({ type: "response.create" }));
   }
 
-  // ---------- DOM helpers ----------
-  function norm(s){ return String(s||"").replace(/\s+/g," ").trim().toLowerCase(); }
-  function q(el, sel){ try { return el.querySelector(sel); } catch { return null; } }
-  function findByText(text){
-    const target = norm(text);
-    const tags = ["button","a","summary","div","span"];
-    for (const t of tags){
-      const nodes = Array.from(document.getElementsByTagName(t));
-      for (const n of nodes){
-        const label = n.getAttribute("aria-label") || n.getAttribute("title") || n.textContent || "";
-        if (norm(label).includes(target)) return n;
-      }
-    }
-    const roleBtns = Array.from(document.querySelectorAll('[role="button"]'));
-    for (const n of roleBtns){
-      const label = n.getAttribute("aria-label") || n.getAttribute("title") || n.textContent || "";
-      if (norm(label).includes(target)) return n;
-    }
-    return null;
-  }
-  function safeSameOrigin(url){
-    try { return new URL(url, window.location.href).origin === window.location.origin; }
-    catch { return false; }
-  }
-  function extractVisibleText(limit = 8000){
-    const parts = [];
-    const sel = "h1,h2,h3,h4,main p,section p,button,a";
-    document.querySelectorAll(sel).forEach(n => {
-      const t = (n.textContent || "").replace(/\s+/g," ").trim();
-      if (t && t.length > 2) parts.push(t);
-    });
-    return parts.join("\n").slice(0, limit);
-  }
-
-  async function executeActions(actions){
-    if (!Array.isArray(actions) || actions.length === 0) return;
-    for (const a of actions){
-      try {
-        switch (a.type) {
-          case "announce": { if (a.text) announce(a.text); break; }
-          case "navigate": {
-            const href = a.url || a.path || "";
-            if (!href) break;
-            const u = new URL(href, window.location.href);
-            if (!safeSameOrigin(u.href)) { line("Assistant", "Blocked navigation to different origin."); break; }
-            if (a.announce) announce(a.announce);
-            window.location.href = u.href;
-            return; // reload
-          }
-          case "click": {
-            let el = null;
-            if (a.selector) el = q(document, a.selector);
-            if (!el && a.text) el = findByText(a.text);
-            if (el && typeof el.click === "function") { if (a.announce) announce(a.announce); el.click(); }
-            else line("Assistant", "Could not find element to click (" + (a.text || a.selector || "unknown") + ").");
-            break;
-          }
-          case "input": {
-            let el = null;
-            if (a.selector) el = q(document, a.selector);
-            if (!el && a.placeholder) el = Array.from(document.querySelectorAll("input,textarea"))
-              .find(e => norm(e.getAttribute("placeholder")).includes(norm(a.placeholder)));
-            if (el && "value" in el) {
-              if (typeof el.focus === "function") el.focus();
-              el.value = a.value || "";
-              try { el.dispatchEvent(new Event("input", { bubbles: true })); } catch {}
-              if (a.announce) announce(a.announce);
-            } else line("Assistant", "Could not find input " + (a.selector || a.placeholder || "") + ".");
-            break;
-          }
-          case "scroll": {
-            if (a.to === "top") window.scrollTo({ top: 0, behavior: "smooth" });
-            else if (a.to === "bottom") window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
-            else if (typeof a.y === "number") window.scrollTo({ top: a.y, behavior: "smooth" });
-            else if (a.selector) { const el = q(document, a.selector); if (el) el.scrollIntoView({ behavior: "smooth", block: "center" }); }
-            if (a.announce) announce(a.announce);
-            break;
-          }
-          case "focus": {
-            let el = null;
-            if (a.selector) el = q(document, a.selector);
-            if (!el && a.text) el = findByText(a.text);
-            if (el && typeof el.focus === "function") { el.focus(); if (a.announce) announce(a.announce); }
-            break;
-          }
-          case "snapshot": {
-            const username = await getUsername();
-            const payload = {
-              text: a.prompt || "Summarize this page and guide me to the next step.",
-              username,
-              page_snapshot: { url: window.location.href, title: document.title, text: extractVisibleText() },
-            };
-            const resp = await callAssistant(payload);
-            const out = (resp && resp.reply) || "(no reply)";
-            line("Assistant", out);
-            if (resp && resp.actions) await executeActions(resp.actions);
-            break;
-          }
-          default: break;
-        }
-      } catch (e) {
-        line("Assistant", "Action error (" + a.type + "): " + (e.message || e));
-      }
-    }
-  }
-
+  // ---------- local intent fallback ----------
   function detectLocalActions(raw) {
     const t = (raw || "").toLowerCase();
     const out = [];
@@ -321,35 +211,28 @@
     return out.slice(0, 10);
   }
 
-  // ---------- Text flow ----------
+  // ---------- send text ----------
   async function sendText(){
     const text = (input.value || "").trim();
     if (!text) return;
     line("You", text);
     input.value = "";
 
-    // Local fallback executes immediately
+    // local fallback acts immediately
     const local = detectLocalActions(text);
-    if (local.length) await executeActions(local);
+    if (local.length) await window.DomAgent.runActions(local);
 
     try {
       const username = await getUsername();
-      const resp = await callAssistant({
-        text, username,
-        page_snapshot: { url: window.location.href, title: document.title, text: extractVisibleText() }
-      });
+      const resp = await window.DomAgent.askAssistant({ text, username });
       const out = (resp && resp.reply) || "(no reply)";
 
       if (realtimeOn && dc && dc.readyState === "open") {
-        dc.send(JSON.stringify({
-          type: "conversation.item.create",
-          item: { type: "message", role: "user", content: [{ type: "input_text", text: out }] }
-        }));
-        dc.send(JSON.stringify({ type: "response.create" }));
+        sendRealtimeText(out);
       }
 
       line("Assistant", out);
-      if (resp && resp.actions) await executeActions(resp.actions);
+      // DomAgent already executed resp.actions
     } catch (e) {
       line("Assistant", "Error: " + (e.message || e));
     }
@@ -365,7 +248,7 @@
   window.addEventListener("load", async () => {
     try {
       const username = await getUsername();
-      const resp = await callAssistant({ greet: true, username });
+      const resp = await window.DomAgent.askAssistant({ greet: true, username });
       line("Assistant", (resp && resp.reply) || (`Hello ${username}, how may I assist you today?`));
     } catch (e) {
       const username = await getUsername();
@@ -379,6 +262,9 @@
     start: startRealtime,
     stop: stopRealtime,
     send: (t)=>{ input.value = t; sendText(); },
-    snapshot: async (prompt) => { await executeActions([{ type: "snapshot", prompt }]); }
+    snapshot: async (prompt) => { await window.DomAgent.runActions([{ type: "snapshot", prompt }]); },
+    record: () => window.DomAgent.startRecorder(),
+    stopRecord: () => window.DomAgent.stopRecorder(),
+    cloudRun: (steps, opts) => window.DomAgent.runInCloud(steps, opts),
   };
 })();
