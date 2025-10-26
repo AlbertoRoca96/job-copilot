@@ -1,15 +1,13 @@
-/* js/dom-agent.js
- * DomAgent — page snapshot + DOM action runner + optional recorder + cloud runner.
- * - askAssistant(textOrOptions): sends page snapshot + user text to your Supabase Edge Function "assistant"
+/* DomAgent — page snapshot + DOM action runner + cloud runner bridge
+ * - askAssistant(textOrOptions): sends page snapshot + user text to Supabase Edge Function "assistant"
+ *   RETURNS a normalized { reply, actions? }   (maps { error } -> reply: "Error: …")
  * - runActions(actions): executes navigate/click/input/scroll/focus/announce/snapshot
- * - startRecorder()/stopRecorder(): capture simple steps
- * - runInCloud(steps): executes in your Cloudflare browser-bot via the assistant function
  */
 
 (function (w) {
   const DomAgent = {};
 
-  // Try to use supabase-js if present; otherwise fall back to direct fetch.
+  // Try supabase-js if present; otherwise fall back to direct fetch.
   const hasSB = !!w.supabase;
   const sb = hasSB ? w.supabase.createClient(w.SUPABASE_URL, w.SUPABASE_ANON_KEY) : null;
   const PROJECT_REF = (w.SUPABASE_URL || "").split("https://")[1]?.split(".")[0] || "";
@@ -31,7 +29,6 @@
   function snapshotPage(maxChars = 6000) {
     const url = location.href;
     const title = document.title || "";
-    // innerText ≈ visible text
     let text = (document.body?.innerText || "").replace(/\s+/g, " ").trim();
     if (text.length > maxChars) text = text.slice(0, maxChars);
     return { url, title, text };
@@ -139,10 +136,21 @@
       }
 
       else if (a.type === "snapshot") {
-        // no round-trip; your app can send a fresh call if needed
         console.debug("snapshot:", snapshotPage());
       }
     }
+  }
+
+  // -------- normalization --------
+  function normalizeAssistantResponse(json) {
+    if (!json) return { reply: "(no response)", actions: [] };
+    if (json.error) return { reply: `Error: ${json.error}`, actions: [] };
+    const reply =
+      json.reply ??
+      json.text ??
+      (json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) ??
+      "";
+    return { reply: reply || "(no reply)", actions: Array.isArray(json.actions) ? json.actions : [] };
   }
 
   // -------- ask assistant (with snapshot) --------
@@ -153,11 +161,14 @@
     payload.username = String(opts.username || payload.username || "there");
     payload.page_snapshot = snapshotPage();
 
-    // Prefer supabase-js (handles auth/cors); fallback fetch to functions URL.
     let json = null;
     if (sb) {
+      // Edge Function always returns 200 with JSON; read body and decide client-side.
       const { data, error } = await sb.functions.invoke("assistant", { body: payload });
-      if (error) throw new Error(error.message || "assistant failed");
+      if (error) {
+        // This path is now rare (network/runtime). Surface it.
+        return { reply: `Error: ${error.message || "assistant failed"}`, actions: [] };
+      }
       json = data;
     } else if (ASSISTANT_URL) {
       const r = await fetch(ASSISTANT_URL, {
@@ -167,11 +178,12 @@
       });
       json = await r.json();
     } else {
-      throw new Error("No Supabase client or functions URL available.");
+      return { reply: "Error: No Supabase client or functions URL available.", actions: [] };
     }
 
-    if (json?.actions?.length) await runActions(json.actions);
-    return json; // { reply, actions? }
+    const normalized = normalizeAssistantResponse(json);
+    if (normalized.actions?.length) await runActions(normalized.actions);
+    return normalized; // { reply, actions? }
   }
 
   // -------- recorder (optional) --------
@@ -219,7 +231,7 @@
     let json = null;
     if (sb) {
       const { data, error } = await sb.functions.invoke("assistant", { body: payload });
-      if (error) throw new Error(error.message || "browser_task failed");
+      if (error) return { reply: `Error: ${error.message || "browser_task failed"}`, actions: [] };
       json = data;
     } else if (ASSISTANT_URL) {
       const r = await fetch(ASSISTANT_URL, {
@@ -229,7 +241,7 @@
       });
       json = await r.json();
     }
-    return json; // { ok, finalUrl, results, html, screenshot? }
+    return json; // passthrough of the worker bridge result
   }
 
   // export
