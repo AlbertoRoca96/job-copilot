@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <title>job-copilot — Optimize your resume, faster</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="color-scheme" content="light">
+  <meta name="color-scheme" content="light" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -65,16 +65,21 @@
     </section>
   </main>
 
+  <!-- Supabase config (used by feedback + assistant) -->
   <script>
-    /* Supabase config (for the feedback widget parity on this page) */
     window.SUPABASE_URL = "https://imozfqawxpsasjdmgdkh.supabase.co";
     window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc";
   </script>
   <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+
+  <!-- Utilities used elsewhere on the site -->
   <script defer src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script defer src="js/feedback.js?v=2025-10-12"></script>
 
-  <!-- Voice assistant -->
-  <script defer src="js/voice-assistant.js?v=2025-10-24"></script>
+  <!-- NEW: page snapshot + DOM action runner + recorder -->
+  <script defer src="js/dom-agent.js?v=2025-10-26"></script>
+
+  <!-- Voice assistant (Realtime + uses DomAgent for actions) -->
+  <script defer src="js/voice-assistant.js?v=2025-10-26"></script>
 </body>
 </html>
