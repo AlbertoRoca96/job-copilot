@@ -1,7 +1,7 @@
 // Job Copilot assistant — tools + DOM-action planning + optional Cloudflare browser runner.
-// Robust CORS + "always-200" JSON; FIX: array schemas include `items`.
+// Robust CORS + "always-200" JSON. Tool schemas fixed (arrays always have `items`)
+// and `browser_task` is only registered if BROWSER_BOT_URL is configured.
 
-// deno-lint-ignore-file no-explicit-any
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 /* ---------------- CORS ---------------- */
@@ -11,7 +11,6 @@ const ALLOW_ORIGINS = new Set<string>([
   "http://localhost:3000",
   "http://127.0.0.1:3000",
 ]);
-
 function corsHeaders(req: Request) {
   const origin = req.headers.get("origin") || "";
   const h = new Headers({
@@ -152,7 +151,6 @@ async function chatWithTools(messages: any[], tools: any[], model = "gpt-4o-mini
           else if (name === "repo_tree")    result = await repoTree(args.owner ?? "AlbertoRoca96", args.repo ?? "job-copilot", args.path_prefix ?? "");
           else if (name === "crawl_site")   result = await siteCrawl(args.root ?? "https://albertoroca96.github.io/job-copilot/", args.limit ?? 10);
           else if (name === "propose_dom_actions") {
-            // Just acknowledge; actions are executed client-side
             const a = Array.isArray(args?.actions) ? args.actions : [];
             result = { accepted: true, count: a.length };
           } else if (name === "browser_task") {
@@ -163,7 +161,7 @@ async function chatWithTools(messages: any[], tools: any[], model = "gpt-4o-mini
         }
         messages.push({ role: "tool", tool_call_id: call.id, name, content: JSON.stringify(result) });
       }
-      continue; // let the model incorporate tool results
+      continue; // loop so the model can incorporate tool results
     }
 
     const finalText =
@@ -185,7 +183,7 @@ Deno.serve(async (req) => {
     const username = (body?.username ?? "there").toString();
     const pageSnapshot = body?.page_snapshot;
 
-    // Cloud runner passthrough
+    // Cloud runner passthrough (returns 200 with {error} if misconfigured)
     if (body?.browser_task) {
       if (!BROWSER_BOT_URL) return ok(req, { error: "BROWSER_BOT_URL not set; cannot run browser_task." });
       const h: Record<string, string> = { "Content-Type": "application/json" };
@@ -195,7 +193,7 @@ Deno.serve(async (req) => {
       return ok(req, { status: r.status, ...json });
     }
 
-    // Cheap greet path (no OpenAI)
+    // Cheap greet (no OpenAI)
     if (body?.greet) return ok(req, { reply: `Hello ${username}, how may I assist you today?` });
 
     ensureOpenAI();
@@ -219,62 +217,75 @@ Prefer proposing DOM actions by visible button/link text. Keep plans short and s
       ? [{ role: "system", content: `CURRENT PAGE: ${pageSnapshot.url || ""}\nTITLE: ${pageSnapshot.title || ""}\nTEXT: ${pageSnapshot.text?.slice(0, 2000) || ""}` }]
       : [];
 
-    // --------- FIXED TOOL SCHEMAS (arrays include `items`) ----------
-    const BrowserStepSchema = {
-      type: "object",
-      properties: {
-        action:   { type: "string", description: "clickText|press|navigate|setValue|waitFor|scroll|assert" },
-        selector: { type: "string" },
-        text:     { type: "string" },
-        key:      { type: "string" },
-        value:    { type: "string" },
-        url:      { type: "string" },
-        waitMs:   { type: "integer", minimum: 0 },
-        x:        { type: "integer" },
-        y:        { type: "integer" }
-      },
-      required: ["action"],
-      additionalProperties: true
-    };
-
-    const tools = [
-      { type: "function", function: {
+    // ---------- Tool schemas (arrays always have `items`) ----------
+    const tools: any[] = [
+      {
+        type: "function",
+        function: {
           name: "web_search",
-          description: "High quality web search (Tavily).",
-          parameters: { type: "object", properties: {
+          description: "High quality web search (Tavily). Use for news, docs, tutorials.",
+          parameters: {
+            type: "object",
+            properties: {
               query: { type: "string" },
               top_k: { type: "integer", minimum: 1, maximum: 10 }
-            }, required: ["query"] }
-      }},
-      { type: "function", function: {
+            },
+            required: ["query"]
+          }
+        }
+      },
+      {
+        type: "function",
+        function: {
           name: "fetch_url",
-          description: "Fetch a URL and return plain text.",
-          parameters: { type: "object", properties: {
+          description: "Fetch a URL and return plain text (HTML stripped).",
+          parameters: {
+            type: "object",
+            properties: {
               url: { type: "string" },
               max_chars: { type: "integer", minimum: 500, maximum: 20000 }
-            }, required: ["url"] }
-      }},
-      { type: "function", function: {
+            },
+            required: ["url"]
+          }
+        }
+      },
+      {
+        type: "function",
+        function: {
           name: "repo_tree",
-          description: "List files in the GitHub repo tree (main).",
-          parameters: { type: "object", properties: {
+          description: "List files in the GitHub repo tree (main branch).",
+          parameters: {
+            type: "object",
+            properties: {
               owner: { type: "string" },
               repo: { type: "string" },
               path_prefix: { type: "string" }
-            } }
-      }},
-      { type: "function", function: {
+            }
+          }
+        }
+      },
+      {
+        type: "function",
+        function: {
           name: "crawl_site",
-          description: "Shallow crawl of the site.",
-          parameters: { type: "object", properties: {
+          description: "Shallow crawl of the site (root + same-origin links).",
+          parameters: {
+            type: "object",
+            properties: {
               root: { type: "string" },
               limit: { type: "integer", minimum: 1, maximum: 20 }
-            } }
-      }},
-      { type: "function", function: {
+            }
+          }
+        }
+      },
+      {
+        type: "function",
+        function: {
           name: "propose_dom_actions",
-          description: "Plan SAFE client actions (navigate/click/input/scroll/focus/announce/snapshot).",
-          parameters: { type: "object", properties: {
+          description: "Plan SAFE client actions (navigate/click/input/scroll/focus/announce/snapshot). Prefer clicks by visible text.",
+          parameters: {
+            type: "object",
+            properties: {
               actions: {
                 type: "array",
                 items: {
@@ -294,33 +305,59 @@ Prefer proposing DOM actions by visible button/link text. Keep plans short and s
                   },
                   required: ["type"],
                   additionalProperties: true
-                },
-                default: []
+                }
               }
-            }, required: ["actions"] }
-      }},
-      { type: "function", function: {
+            },
+            required: ["actions"]
+          }
+        }
+      }
+    ];
+
+    // Only register browser_task if the Worker URL is configured
+    if (BROWSER_BOT_URL) {
+      const BrowserStepSchema = {
+        type: "object",
+        properties: {
+          action:   { type: "string", description: "e.g., clickText, press, navigate, setValue, waitFor, scroll" },
+          selector: { type: "string" },
+          text:     { type: "string" },
+          key:      { type: "string" },
+          value:    { type: "string" },
+          url:      { type: "string" },
+          waitMs:   { type: "integer", minimum: 0 },
+          x:        { type: "integer" },
+          y:        { type: "integer" }
+        },
+        required: ["action"],
+        additionalProperties: true
+      };
+      tools.push({
+        type: "function",
+        function: {
           name: "browser_task",
-          description: "Run scripted steps in headless Chromium via a Cloudflare Worker.",
-          parameters: { type: "object", properties: {
-              start_url: { type: "string", description: "Page to open first" },
+          description: "Run scripted steps in remote headless Chromium via your Cloudflare Worker.",
+          parameters: {
+            type: "object",
+            properties: {
+              start_url: { type: "string" },
               steps: {
                 type: "array",
-                description: "Automation steps to run in the browser bot.",
-                items: BrowserStepSchema,       // <-- REQUIRED by OpenAI schema rules
-                default: []
+                items: BrowserStepSchema   // <-- REQUIRED by OpenAI: arrays must declare `items`
               },
               timeout_ms: { type: "integer", minimum: 1000 },
               viewport: {
                 type: "object",
                 properties: {
-                  width:  { type: "integer", minimum: 100 },
-                  height: { type: "integer", minimum: 100 }
+                  width: { type: "integer", minimum: 100 },
+                  height:{ type: "integer", minimum: 100 }
                 }
               }
-            } }                                      // keep all optional; server applies defaults
-      }}
-    ];
+            }
+          }
+        }
+      });
+    }
 
     const { text: reply } = await chatWithTools([SYSTEM, ...CONTEXT, USER], tools);
     const localPlan = detectLocalActions(text);
