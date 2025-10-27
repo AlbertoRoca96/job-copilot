@@ -35,8 +35,8 @@
     <p class="muted">Parsed from your latest resume + saved targets. This page updates after each run.</p>
 
     <div class="row mt-2" role="group" aria-label="Quick links">
-      <a class="btn" href="feedback.html">Give Feedback</a>
-      <a class="btn primary" href="power-edit.html">Open Power Edit</a>
+      <a class="btn" href="feedback.html" data-action="open-feedback">Give Feedback</a>
+      <a id="openPowerEditBtn" class="btn primary" href="power-edit.html" target="_blank" rel="noopener" data-action="open-power-edit">Open Power Edit</a>
     </div>
 
     <p id="signinOnly" class="mt-3"><a href="login.html">Sign in</a> to view your profile.</p>
@@ -107,7 +107,7 @@
       </ol>
     </section>
 
-    <!-- NEW: After (DOCX styles) -->
+    <!-- After (DOCX styles) -->
     <section id="afterDocxCard" class="card hidden mt-4" aria-labelledby="after-docx-title">
       <div class="row" style="justify-content:space-between; align-items:center">
         <div>
@@ -201,14 +201,15 @@
   <!-- 4) Voice UI (uses window.DomAgent) -->
   <script src="js/voice-assistant.js"></script>
 
-  <!-- page scripts -->
+  <!-- page scripts used by THIS page -->
   <script src="https://cdn.jsdelivr.net/npm/docx-preview@0.3.4/dist/docx-preview.min.js"></script>
   <script src="https://unpkg.com/mammoth@1.6.0/mammoth.browser.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
   <script src="js/scoring.js?v=2025-10-07-2"></script>
   <script src="js/after-docx.js?v=2025-10-24-oneeditor"></script>
-  <script src="js/power-edit.js?v=2025-10-24-oneeditor"></script>
+
+  <!-- IMPORTANT: removed js/power-edit.js (it targets elements that do not exist here) -->
 
   <!-- utilities -->
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
