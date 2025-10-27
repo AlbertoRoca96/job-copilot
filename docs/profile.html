@@ -186,25 +186,32 @@
     </section>
   </main>
 
-  <!-- Run overlay (dialog), FAB, and modal (unchanged)... -->
+  <!-- 1) Supabase client **first** -->
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
 
-  <!-- Supabase boot -->
+  <!-- 2) Your Supabase project globals -->
   <script>
     window.SUPABASE_URL  = "https://imozfqawxpsasjdmgdkh.supabase.co";
     window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imltb3pmcWF3eHBzYXNqZG1nZGtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1Njk3NTUsImV4cCI6MjA3NDE0NTc1NX0.fkGObZvEy-oUfLrPcwgTSJbc-n6O5aE31SGIBeXImtc";
   </script>
-  <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
-  <!-- docx-preview for styled rendering -->
-  <script defer src="https://cdn.jsdelivr.net/npm/docx-preview@0.3.4/dist/docx-preview.min.js"></script>
+  <!-- 3) DomAgent must load before the voice UI -->
+  <script src="js/dom-agent.js"></script>
 
-  <!-- Your page JS -->
-  <script defer src="/job-copilot/profile.js?v=2025-10-23-after-docx"></script>
+  <!-- 4) Voice UI (uses window.DomAgent) -->
+  <script src="js/voice-assistant.js"></script>
 
-  <!-- Utilities + assistant -->
-  <script defer src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-  <script defer src="js/feedback.js?v=2025-10-12"></script>
-  <script defer src="js/dom-agent.js"></script>
-  <script defer src="js/voice-assistant.js"></script>
+  <!-- page scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/docx-preview@0.3.4/dist/docx-preview.min.js"></script>
+  <script src="https://unpkg.com/mammoth@1.6.0/mammoth.browser.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
+  <script src="js/scoring.js?v=2025-10-07-2"></script>
+  <script src="js/after-docx.js?v=2025-10-24-oneeditor"></script>
+  <script src="js/power-edit.js?v=2025-10-24-oneeditor"></script>
+
+  <!-- utilities -->
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script src="js/feedback.js?v=2025-10-12"></script>
 </body>
 </html>
