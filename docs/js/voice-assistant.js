@@ -1,12 +1,10 @@
 // Realtime voice UI + DomAgent bridge
-// New: Local speech-to-text (Web Speech API) pipes your spoken commands to DomAgent.askAssistant.
-// Realtime WebRTC remains the same for TTS back to you (we send assistant replies to the datachannel).
+// Local speech-to-text (Web Speech API) -> DomAgent.askAssistant.
+// WebRTC TTS back via OpenAI Realtime (unchanged).
 (function () {
-  if (!window.supabase) throw new Error("supabase.js not loaded");
-  if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY) {
-    throw new Error("Missing SUPABASE_URL / SUPABASE_ANON_KEY on window");
-  }
-  const sb = window.__sbclient || (window.__sbclient = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY));
+  // Make Supabase optional so the UI still works without realtime voice
+  const hasSB = !!window.supabase && !!window.SUPABASE_URL && !!window.SUPABASE_ANON_KEY;
+  const sb = hasSB ? (window.__sbclient || (window.__sbclient = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY))) : null;
 
   // ---------- UI ----------
   let panel = document.getElementById("va-panel");
@@ -58,8 +56,8 @@
   }
   ensureWidget();
 
-  function showPanel(){ panel.style.display = "";  fabBtn.style.display = "none"; }
-  function hidePanel(){ panel.style.display = "none"; fabBtn.style.display = ""; }
+  function showPanel(){ panel.style.display = "";  if (fabBtn) fabBtn.style.display = "none"; }
+  function hidePanel(){ panel.style.display = "none"; if (fabBtn) fabBtn.style.display = ""; }
   hideBtn?.addEventListener("click", hidePanel);
   fabBtn?.addEventListener("click", showPanel);
 
@@ -88,6 +86,7 @@
 
   // ---------- Auth helper ----------
   async function getUsername(){
+    if (!sb) return "there";
     try {
       const { data } = await sb.auth.getUser();
       const u = data && data.user;
@@ -99,7 +98,7 @@
     } catch { return "there"; }
   }
 
-  // ---------- Realtime (unchanged behavior) ----------
+  // ---------- Realtime ----------
   let pc = null, dc = null, micStream = null, inboundAudioEl = null, realtimeOn = false;
 
   function cleanupRealtime(){
@@ -120,6 +119,7 @@
   }
 
   async function startRealtime(){
+    if (!sb) { line("Assistant", "Voice mode requires Supabase client — falling back to text."); return; }
     if (realtimeOn) return;
     if (!navigator.mediaDevices?.getUserMedia) { line("Assistant", "This browser does not support microphone capture."); return; }
     try {
@@ -163,7 +163,7 @@
 
       realtimeOn = true;
       line("Assistant", "Listening… (speak, or type below)");
-      startLocalSTT(); // NEW: start speech-to-text -> actions
+      startLocalSTT(); // local speech-to-text -> actions
     } catch (e) {
       const name = (e && (e.name || e.code)) || "";
       if (name === "NotFoundError" || name === "DevicesNotFoundError")       line("Assistant", "Requested device not found. Check microphone.");
@@ -217,7 +217,7 @@
         }
       };
       recog.onerror = (ev) => { console.debug("STT error", ev?.error); };
-      recog.onend = () => { /* Chrome sometimes auto-stops; try to restart if still listening */ if (realtimeOn) try { recog.start(); } catch {} };
+      recog.onend = () => { if (realtimeOn) { try { recog.start(); } catch {} } };
       recog.start();
       line("Assistant", "Speech recognition on. Say things like “open power edit”, “scroll down”, “click sign in”.");
     } catch (e) { console.debug("STT start failed", e); }
@@ -230,10 +230,9 @@
     if (!t) return;
     line("You", t);
 
-    // Try immediate local heuristics (client runs them)
-    const local = window.DomAgent ? window.DomAgent.runActions : null;
-    if (local) {
-      // let server have the final say, but this allows immediate UI feedback
+    if (!window.DomAgent || !window.DomAgent.askAssistant) {
+      line("Assistant", "DomAgent is not loaded yet.");
+      return;
     }
 
     try {
@@ -259,7 +258,7 @@
   window.addEventListener("load", async () => {
     try {
       const username = await getUsername();
-      const resp = await window.DomAgent.askAssistant({ greet: true, username });
+      const resp = await (window.DomAgent && window.DomAgent.askAssistant ? window.DomAgent.askAssistant({ greet: true, username }) : Promise.resolve(null));
       line("Assistant", (resp && (resp.reply || resp.text)) || (`Hello ${username}, how may I assist you today?`));
     } catch {
       const username = await getUsername();
