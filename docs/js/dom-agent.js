@@ -1,7 +1,6 @@
 /* DomAgent — page snapshot + DOM action runner + cloud runner bridge
- * New: snapshot includes a "targets" inventory (visible links/buttons with text/aria/selector)
- * so the assistant can confidently pick elements to click/type.
- * askAssistant() still runs returned actions automatically.
+ * Snapshot now includes "targets" inventory (visible links/buttons).
+ * askAssistant() runs returned actions automatically.
  */
 (function (w) {
   const DomAgent = {};
@@ -17,33 +16,37 @@
   live.id = "assistant-live";
   live.setAttribute("aria-live", "polite");
   live.setAttribute("aria-atomic", "true");
-  live.style.position = "fixed";
-  live.style.left = "-9999px";
-  live.style.top = "0";
+  Object.assign(live.style, { position: "fixed", left: "-9999px", top: "0" });
   document.body.appendChild(live);
 
   // -------- utilities --------
   const delay = (ms) => new Promise((r) => setTimeout(r, ms));
   function announce(text){ if (text) { live.textContent = text; console.debug("[assistant]", text); } }
   function sameOrigin(u){ try { return new URL(u, location.href).origin === location.origin; } catch { return false; } }
-  function isVisible(el){ const r = el.getClientRects(); return !!r && r.length > 0 && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length); }
+  function isVisible(el){
+    if (!el) return false;
+    const r = el.getClientRects?.();
+    return !!r && r.length > 0 && !!(el.offsetWidth || el.offsetHeight || (r && r.length));
+  }
 
   function bestLabel(el){
-    return (el.getAttribute?.("aria-label") || el.getAttribute?.("title") || el.getAttribute?.("name") ||
-            (el.value && typeof el.value === "string" ? el.value : "") ||
-            (el.innerText || el.textContent || ""))
-      .toString()
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 120);
+    return (
+      el.getAttribute?.("aria-label") || el.getAttribute?.("title") || el.getAttribute?.("name") ||
+      (typeof el.value === "string" ? el.value : "") ||
+      el.innerText || el.textContent || ""
+    ).toString().replace(/\s+/g, " ").trim().slice(0, 120);
+  }
+
+  function cssEscapeSafe(s){
+    const esc = (w.CSS && w.CSS.escape) ? w.CSS.escape : (x => x);
+    return esc(String(s));
   }
 
   function quickSelector(el){
     if (!el) return "";
-    if (el.id) return `#${CSS && CSS.escape ? CSS.escape(el.id) : el.id}`;
-    const da = el.getAttribute?.("data-action"); if (da) return `[data-action="${CSS && CSS.escape ? CSS.escape(da) : da}"]`;
-    const name = el.getAttribute?.("name"); if (name) return `[name="${CSS && CSS.escape ? CSS.escape(name) : name}"]`;
-    // fallback: tag + first class
+    if (el.id) return `#${cssEscapeSafe(el.id)}`;
+    const da = el.getAttribute?.("data-action"); if (da) return `[data-action="${cssEscapeSafe(da)}"]`;
+    const name = el.getAttribute?.("name"); if (name) return `[name="${cssEscapeSafe(name)}"]`;
     const cls = (el.className || "").toString().trim().split(/\s+/)[0] || "";
     return cls ? `${el.tagName.toLowerCase()}.${cls}` : el.tagName.toLowerCase();
   }
@@ -53,7 +56,7 @@
     const out = [];
     for (const el of nodes) {
       if (!isVisible(el)) continue;
-      const role = el.tagName.toLowerCase() === "a" ? "link" : "button";
+      const role = el.tagName && el.tagName.toLowerCase() === "a" ? "link" : "button";
       out.push({
         role,
         text: bestLabel(el),
@@ -126,16 +129,14 @@
       else if (a.type === "click") {
         let el = a.selector ? document.querySelector(a.selector) : null;
         if (!el && a.text) el = findByText(a.text);
-        if (el) { announce(a.announce || `Clicking ${a.text || a.selector || ""}`); (el as HTMLElement).click(); await delay(60); }
+        if (el && el.click) { announce(a.announce || `Clicking ${a.text || a.selector || ""}`); el.click(); await delay(60); }
         else announce(`Couldn't find ${a.text || a.selector || "target"}.`);
       }
 
       else if (a.type === "input" || a.type === "type") {
         const el = findInput(a) || (a.selector ? document.querySelector(a.selector) : null);
         if (el) {
-          if ("value" in el) (el as HTMLInputElement).value = a.value ?? "";
-          // contenteditable
-          // @ts-ignore
+          if ("value" in el) el.value = a.value ?? "";
           else if (el.isContentEditable) el.textContent = a.value ?? "";
           el.dispatchEvent(new Event("input", { bubbles: true }));
           el.dispatchEvent(new Event("change", { bubbles: true }));
@@ -149,14 +150,14 @@
         else if (typeof a.y === "number") window.scrollTo({ top: a.y, behavior: "smooth" });
         else if (a.selector) {
           const el = document.querySelector(a.selector);
-          if (el) (el as HTMLElement).scrollIntoView({ behavior: "smooth", block: "center" });
+          if (el && el.scrollIntoView) el.scrollIntoView({ behavior: "smooth", block: "center" });
         }
         announce(a.announce || "Scrolling."); await delay(100);
       }
 
       else if (a.type === "focus") {
         const el = a.selector ? document.querySelector(a.selector) : (a.text ? findByText(a.text) : null);
-        if (el && (el as HTMLElement).focus) { (el as HTMLElement).focus(); announce(a.announce || "Focused."); await delay(20); }
+        if (el && el.focus) { el.focus(); announce(a.announce || "Focused."); await delay(20); }
       }
 
       else if (a.type === "announce") announce(a.text || a.announce || "");
@@ -197,7 +198,7 @@
     return normalized;
   }
 
-  // Optional recorder (unchanged except tidying)
+  // Optional recorder (tidy, JS only)
   let recording = null;
   function startRecorder() {
     if (recording) return recording;
@@ -215,8 +216,8 @@
   }
   function onClick(e) {
     if (!recording) return;
-    const t = e.target as HTMLElement;
-    const label = (t?.innerText || t?.textContent || "").trim().slice(0, 100);
+    const t = e.target;
+    const label = (t && (t.innerText || t.textContent) || "").trim().slice(0, 100);
     recording.steps.push({ action: "clickText", text: label || "Submit" });
   }
   function onKey(e) {
