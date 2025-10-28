@@ -134,5 +134,12 @@
       });
     });
   </script>
+
+  <!-- in docs/index.html (and profile/power-edit) -->
+  <script type="module">
+    import { startHume, stopHume } from './js/hume-evi.js';
+    // wire these to your existing Voice toggle/buttons
+    window.humeVoice = { start: startHume, stop: stopHume };
+  </script>
 </body>
 </html>
