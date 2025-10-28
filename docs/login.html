@@ -136,5 +136,12 @@
   <!-- utilities -->
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script src="js/feedback.js?v=2025-10-12"></script>
+
+  <!-- in docs/index.html (and profile/power-edit) -->
+  <script type="module">
+    import { startHume, stopHume } from './js/hume-evi.js';
+    // wire these to your existing Voice toggle/buttons
+    window.humeVoice = { start: startHume, stop: stopHume };
+  </script>
 </body>
 </html>
