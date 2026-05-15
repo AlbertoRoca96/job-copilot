@@ -180,14 +180,25 @@
       await pc.setLocalDescription(offer);
       await waitForICE(pc);
 
-      const sdpAnswer = await fetch(sessionUrl, {
+      const callsUrl = "https://api.openai.com/v1/realtime/calls";
+      const sdpAnswer = await fetch(callsUrl, {
         method: "POST",
-        headers: { "Authorization": `Bearer ${ephemeralKey}`, "Content-Type": "application/sdp" },
-        body: pc.localDescription.sdp,
+        headers: { "Authorization": `Bearer ${ephemeralKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: DEFAULT_REALTIME_MODEL,
+          sdp: pc.localDescription.sdp,
+        }),
       }).then(async (r) => {
         const text = await r.text();
-        if (!r.ok) throw new Error(`Realtime SDP failed (${r.status}): ${text.slice(0, 300)}`);
-        return text;
+        if (!r.ok) throw new Error(`Realtime SDP failed (${r.status}): ${text.slice(0, 500)}`);
+        try {
+          const json = JSON.parse(text);
+          const answer = json?.sdp || json?.answer?.sdp || json?.output?.[0]?.sdp || null;
+          if (!answer) throw new Error(`Realtime calls response missing answer SDP. Keys: ${Object.keys(json || {}).join(", ")}`);
+          return answer;
+        } catch (err) {
+          throw new Error(`Realtime calls parse failed: ${text.slice(0, 500)}`);
+        }
       });
       await pc.setRemoteDescription({ type: "answer", sdp: sdpAnswer });
 
