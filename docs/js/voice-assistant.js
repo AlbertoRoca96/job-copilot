@@ -118,6 +118,32 @@
     });
   }
 
+  const DEFAULT_REALTIME_MODEL = "gpt-realtime";
+
+  function normalizeRealtimeSession(data, requestedModel) {
+    if (!data || typeof data !== "object") {
+      throw new Error("Realtime session response was empty.");
+    }
+    if (data.error) {
+      throw new Error(String(data.error));
+    }
+
+    const resolvedModel = data.model || requestedModel || DEFAULT_REALTIME_MODEL;
+    const sessionUrl = data.session_url
+      || data.sessionUrl
+      || `https://api.openai.com/v1/realtime?model=${encodeURIComponent(resolvedModel)}`;
+
+    const ephemeralKey = data.ephemeral_key
+      || data.ephemeralKey
+      || data.client_secret?.value
+      || data.client_secret;
+
+    if (!ephemeralKey || !sessionUrl) {
+      throw new Error(`Realtime session missing credentials. Got keys: ${Object.keys(data).join(", ") || "(none)"}`);
+    }
+    return { ephemeralKey, sessionUrl };
+  }
+
   async function startRealtime(){
     if (!sb) { line("Assistant", "Voice mode requires Supabase client — falling back to text."); return; }
     if (realtimeOn) return;
@@ -125,12 +151,12 @@
     try {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
+      const requestedModel = DEFAULT_REALTIME_MODEL;
       const { data, error } = await sb.functions.invoke("realtime-session", {
-        body: { model: "gpt-4o-realtime-preview", voice: "alloy", modalities: ["audio","text"] }
+        body: { model: requestedModel, voice: "alloy", modalities: ["audio","text"] }
       });
       if (error) throw new Error(error.message || "realtime-session failed");
-      const { ephemeral_key, session_url } = data || {};
-      if (!ephemeral_key || !session_url) throw new Error("Realtime: missing ephemeral key or session URL.");
+      const { ephemeralKey, sessionUrl } = normalizeRealtimeSession(data, requestedModel);
 
       inboundAudioEl = document.createElement("audio");
       inboundAudioEl.autoplay = true; inboundAudioEl.playsInline = true; inboundAudioEl.style.display = "none";
@@ -154,11 +180,15 @@
       await pc.setLocalDescription(offer);
       await waitForICE(pc);
 
-      const sdpAnswer = await fetch(session_url, {
+      const sdpAnswer = await fetch(sessionUrl, {
         method: "POST",
-        headers: { "Authorization": `Bearer ${ephemeral_key}`, "Content-Type": "application/sdp" },
+        headers: { "Authorization": `Bearer ${ephemeralKey}`, "Content-Type": "application/sdp" },
         body: pc.localDescription.sdp,
-      }).then(r => r.text());
+      }).then(async (r) => {
+        const text = await r.text();
+        if (!r.ok) throw new Error(`Realtime SDP failed (${r.status}): ${text.slice(0, 300)}`);
+        return text;
+      });
       await pc.setRemoteDescription({ type: "answer", sdp: sdpAnswer });
 
       realtimeOn = true;
